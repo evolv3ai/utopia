@@ -254,7 +254,7 @@ async fn a_session_editor_gets_todays_duplicates_overview_keep_merge_and_batch_r
             .await?;
         anyhow::ensure!(status == StatusCode::OK, "list: {status} {body}");
         anyhow::ensure!(
-            keys(&body) == ["counts", "items", "queue"],
+            keys(&body) == ["counts", "items", "queue", "total"],
             "list body: {body}"
         );
         anyhow::ensure!(body["queue"] == "duplicates", "{body}");

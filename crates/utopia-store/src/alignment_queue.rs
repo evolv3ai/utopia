@@ -159,11 +159,16 @@ pub async fn list(
     } else {
         crate::type_bindings::signatures(pool, kb_id).await?
     };
-    let mut items: Vec<(DateTime<Utc>, AlignmentItem)> = phrases
+    // 排序的钥匙：先 `decided_at`，再条目自己的标识（0076）——短语与规则是 uuid `id`，
+    // 类别词是 `kind_word`。只按时间排的话，一轮对齐写下的行时间相同，翻页时每一页的
+    // 先后可以不同：有的条目出现两次，有的一次也不出现。末尾的种类序号只在一个类别词
+    // 恰好写成某个 uuid 的样子时才起作用，保证这是一个全序
+    type OrderKey = (DateTime<Utc>, String, u8);
+    let mut items: Vec<(OrderKey, AlignmentItem)> = phrases
         .into_iter()
         .map(|r| {
             (
-                r.decided_at,
+                (r.decided_at, r.id.to_string(), 0),
                 AlignmentItem::Phrase {
                     id: r.id,
                     phrase: r.phrase,
@@ -183,7 +188,7 @@ pub async fn list(
     for w in words {
         let sig = sigs.iter().find(|s| s.kind_word == w.kind_word);
         items.push((
-            w.decided_at,
+            (w.decided_at, w.kind_word.clone(), 1),
             AlignmentItem::KindWord {
                 kind_word: w.kind_word,
                 words: w.words,
@@ -197,7 +202,7 @@ pub async fn list(
     }
     for r in rules {
         items.push((
-            r.decided_at,
+            (r.decided_at, r.id.to_string(), 2),
             AlignmentItem::Rule {
                 id: r.id,
                 trigger: r.trigger,
@@ -215,13 +220,29 @@ pub async fn list(
             },
         ));
     }
-    items.sort_by_key(|(at, _)| *at);
+    items.sort_by(|(a, _), (b, _)| a.cmp(b));
     Ok(items
         .into_iter()
         .map(|(_, item)| item)
         .skip(usize::try_from(offset).unwrap_or(0))
         .take(usize::try_from(limit).unwrap_or(usize::MAX))
         .collect())
+}
+
+/// [`list`] 翻到底一共多少条（0076：列表响应里的 `total`）：短语签名、类别词，**加上**
+/// 提议中的蕴含规则。`counts.alignment`（徽标）不数规则，按它翻页最后几条规则翻不到。
+/// 三段各用列表自己的 FROM / JOIN / WHERE——规则内连接结论属性，照样连
+pub async fn total(pool: &PgPool, kb_id: Uuid) -> AppResult<i64> {
+    Ok(sqlx::query_scalar(&format!(
+        "SELECT (SELECT count(*) FROM phrase_bindings b WHERE b.kb_id = $1 AND {WAITING_PHRASE})
+              + (SELECT count(*) FROM implication_rules r
+                   JOIN relation_types p ON p.id = r.conclude_property_id
+                  WHERE r.kb_id = $1 AND r.status = 'proposed')
+              + (SELECT count(*) FROM type_bindings WHERE kb_id = $1 AND status = 'undecided')"
+    ))
+    .bind(kb_id)
+    .fetch_one(pool)
+    .await?)
 }
 
 /// 等人定的条目数，以及最老的一条从什么时候起在等。

@@ -2783,6 +2783,35 @@ pub async fn open_defects(
     .await?)
 }
 
+/// [`open_defects`] 翻到底一共多少行（0076：列表响应里的 `total`）。列表只有左连接，
+/// 一行缺陷就是一行
+pub async fn open_defects_total(pool: &PgPool, kb_id: Uuid) -> AppResult<i64> {
+    Ok(sqlx::query_scalar(
+        "SELECT count(*) FROM ontology_defects d WHERE d.kb_id = $1 AND d.status = 'open'",
+    )
+    .bind(kb_id)
+    .fetch_one(pool)
+    .await?)
+}
+
+/// [`open_violations`] 翻到底一共多少行（0076：列表响应里的 `total`）。列表把两条事实各连
+/// 一次三元组（事实在这个库里、主语实体还在）再连一次左事实；这里连的是同样的表、同样的
+/// 条件，所以哪一边的事实或主语不在了，列表不列，这里也不数
+pub async fn open_violations_total(pool: &PgPool, kb_id: Uuid) -> AppResult<i64> {
+    Ok(sqlx::query_scalar(
+        "SELECT count(*)
+           FROM axiom_violations v
+           JOIN facts l ON l.id = v.left_fact AND l.kb_id = $1
+           JOIN entities ls ON ls.id = l.subject_id
+           JOIN facts rt ON rt.id = v.right_fact AND rt.kb_id = $1
+           JOIN entities rs ON rs.id = rt.subject_id
+          WHERE v.kb_id = $1 AND v.status = 'open'",
+    )
+    .bind(kb_id)
+    .fetch_one(pool)
+    .await?)
+}
+
 /// 人对一处本体缺陷表态。
 ///
 /// 两个出路而不是三个：本体缺陷没有「数据错了」这一条——它压根没看数据。

@@ -154,6 +154,19 @@ pub async fn proposed(
     .await?)
 }
 
+/// [`proposed`] 翻到底一共多少行（0076：列表响应里的 `total`），内连接概念实体照列表
+pub async fn proposed_total(pool: &PgPool, kb_id: Uuid) -> AppResult<i64> {
+    Ok(sqlx::query_scalar(
+        "SELECT count(*)
+         FROM concept_mappings m
+         JOIN entities e ON e.id = m.concept_id
+         WHERE m.kb_id = $1 AND m.status = 'proposed'",
+    )
+    .bind(kb_id)
+    .fetch_one(pool)
+    .await?)
+}
+
 /// 人确认过的。问数把它们注进 system prompt——**只用确认过的口径**，
 /// 而不是每次从 schema 猜。
 pub async fn confirmed(pool: &PgPool, kb_id: Uuid, limit: i64) -> AppResult<Vec<ConceptMapping>> {

@@ -757,6 +757,18 @@ pub async fn held(pool: &PgPool, kb_id: Uuid, limit: i64, offset: i64) -> AppRes
     .await?)
 }
 
+/// [`held`] 翻到底一共多少行（0076：列表响应里的 `total`），内连接文档照列表
+pub async fn held_total(pool: &PgPool, kb_id: Uuid) -> AppResult<i64> {
+    Ok(sqlx::query_scalar(
+        "SELECT count(*)
+           FROM errata_actions ea JOIN documents d ON d.id = ea.document_id
+          WHERE ea.kb_id = $1 AND ea.status = 'held'",
+    )
+    .bind(kb_id)
+    .fetch_one(pool)
+    .await?)
+}
+
 /// 等人的几笔，最老的从什么时候起等
 pub async fn waiting(pool: &PgPool, kb_id: Uuid) -> AppResult<(i64, Option<DateTime<Utc>>)> {
     Ok(sqlx::query_as(

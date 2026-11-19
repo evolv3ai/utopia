@@ -1467,6 +1467,25 @@ pub async fn list_conflicts(
     Ok(rows)
 }
 
+/// [`list_conflicts`] 翻到底一共多少行（0076：列表响应里的 `total`）。内连接与列表相同——
+/// 两条事实、两个主语、旧事实的谓词——所以旧事实没有谓词的冲突，列表不列，这里也不数；
+/// `counts.conflicts` 只数 `fact_conflicts`，两个数在那种行上不等
+pub async fn list_conflicts_total(pool: &PgPool, kb_id: Uuid) -> AppResult<i64> {
+    Ok(sqlx::query_scalar(
+        "SELECT count(*)
+         FROM fact_conflicts c
+         JOIN facts fo ON fo.id = c.old_fact_id
+         JOIN facts fn_ ON fn_.id = c.new_fact_id
+         JOIN entities os ON os.id = fo.subject_id
+         JOIN entities ns ON ns.id = fn_.subject_id
+         JOIN relation_types r ON r.id = fo.predicate_id
+         WHERE c.kb_id = $1 AND c.status = 'open'",
+    )
+    .bind(kb_id)
+    .fetch_one(pool)
+    .await?)
+}
+
 mod conflicts;
 pub use conflicts::{resolve_conflict, resolve_review_conflict, ConflictDecision};
 

@@ -241,6 +241,15 @@ const BOTH: &str = "(SELECT 'governor' AS src, id, created_at FROM agent_decisio
           UNION ALL
           SELECT 'token' AS src, id, created_at FROM token_agent_actions WHERE kb_id = $1) u";
 
+/// [`agent_history`] 翻到底一共多少行（0076：列表响应里的 `total`）：两种来源的行都数。
+/// 数的是列表分页用的那同一个并集；`counts.agent`（徽标）只数开着的建议，不是这个数
+pub async fn agent_history_total(pool: &PgPool, kb_id: Uuid) -> AppResult<i64> {
+    Ok(sqlx::query_scalar(&format!("SELECT count(*) FROM {BOTH}"))
+        .bind(kb_id)
+        .fetch_one(pool)
+        .await?)
+}
+
 /// Agent 一档的一页：治理 agent 的行加令牌 agent 台账的行，`limit` / `offset` 作用在
 /// 并起来的序列上。
 ///

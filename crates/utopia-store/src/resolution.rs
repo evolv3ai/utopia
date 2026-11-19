@@ -1903,6 +1903,20 @@ pub async fn list_reviews(
     assemble_reviews(pool, kb_id, rows).await
 }
 
+/// [`list_reviews`] 在同一个 `types` 下翻到底一共多少行（0076：列表响应里的 `total`）。
+/// FROM / JOIN / WHERE 与列表逐字相同：两边实体有一边不在的那一对，列表不列，这里也不数
+pub async fn list_reviews_total(pool: &PgPool, kb_id: Uuid, types: TypeFilter) -> AppResult<i64> {
+    let sql = format!(
+        "SELECT count(*)
+         FROM resolution_reviews rr
+         JOIN entities a ON a.id = rr.left_id
+         JOIN entities b ON b.id = rr.right_id
+         WHERE rr.kb_id = $1 AND rr.status = 'pending' AND {}",
+        types.clause()
+    );
+    Ok(sqlx::query_scalar(&sql).bind(kb_id).fetch_one(pool).await?)
+}
+
 /// 这个库里一对还在等的重复项，与列表里那一条同一个形状（0076：令牌读一张卡片的证据）。
 ///
 /// 条件与 `list_reviews` 一致：属于这个库、状态是 pending、两边实体都在。**认不出的 id、
@@ -2674,6 +2688,21 @@ pub async fn list_merges(
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+/// [`list_merges`] 翻到底一共多少行（0076：列表响应里的 `total`）。两个内连接与列表相同：
+/// 源或目标实体已经不在的合并，列表不列，这里也不数
+pub async fn list_merges_total(pool: &PgPool, kb_id: Uuid) -> AppResult<i64> {
+    Ok(sqlx::query_scalar(
+        "SELECT count(*)
+         FROM entity_merges m
+         JOIN entities s ON s.id = m.source_id
+         JOIN entities t ON t.id = m.target_id
+         WHERE m.kb_id = $1",
+    )
+    .bind(kb_id)
+    .fetch_one(pool)
+    .await?)
 }
 
 // ---------------------------------------------------------------------------

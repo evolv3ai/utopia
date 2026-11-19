@@ -3,9 +3,9 @@ id: T001
 title: Carry the true section total on every Review list response, break Alignment ties by identifier, and seed all thirteen sections
 wave: 1
 deps: []
-status: pending
-agent: null
-base: null
+status: done
+agent: build_T001
+base: be4db4d4fd239a1aa875bb2712ac4ee16c8a9b56
 worktree: null
 task_branch: null
 files:
@@ -89,3 +89,66 @@ Heavy: yes
 ## Log
 
 - 2026-11-19 — created by planner
+- 2026-11-19 — coder build_T001: implemented. Preflight clean (every named path and symbol exists or is declared; SC7 is item 7 of INTENT; no sibling task file exchanges this contract yet).
+  - Server: `review_routes::queue_page` (signature as in the Interface contract, no authorization) now holds the twelve-queue `match`, the clamp and the `unknown_queue` error, and returns `{counts, queue, items, total}`. The session branch of `review_routes::list` keeps `require_kb(.., Role::Viewer)` and returns it; `review_ops::list` keeps `authorize_read` and its refusal of every section but `duplicates`, then returns it. `REVIEW_PAGE` is now private to `review_routes` (its only user). No write handler, extractor or token branch changed.
+  - Store: one count function beside each list, written with that list's own FROM / inner JOIN / WHERE: `pending::total`, `resolution::list_reviews_total` (follows `types`), `resolution::list_merges_total`, `temporal::list_conflicts_total`, `graph::stale_facts_total`, `graph::low_confidence_facts_total` (no `derived_by_rule` condition), `mappings::proposed_total`, `alignment_queue::total` (phrases + kind words + proposed rules), `errata::held_total`, `reasoning::open_violations_total`, `reasoning::open_defects_total`, `token_agent_actions::agent_history_total` (both sources). `review::counts` untouched. `review.rs` and `temporal/conflicts.rs` are unchanged.
+  - Alignment order: `alignment_queue::list` sorts by `(decided_at, identifier, kind rank)`; identifier is the uuid `id` as text for a phrase or rule and `kind_word` for a kind word. Decision: the trailing kind rank only separates a kind word spelled exactly like some uuid, so the order is total. `waiting` untouched.
+  - Seed: `scripts/seed-review-sections.sql` — inserts only (no DDL, update or delete), base read from `current_setting('seed.kb')`, ids are md5 of `<kb>:<tag>`, every insert `ON CONFLICT DO NOTHING`, so a second run adds nothing. `seed_every_section` runs it with `include_str!` on one connection after `SET seed.kb`, then keeps the pair marked `seed: token keep` through `keep_duplicate_pair` with a write token of `f.editor` named `seed-agent`. Seeded numbers: pending 2, duplicates 3 waiting after the keep (2 same type, 1 conflict), conflicts 2, unconfirmed 2, lowconf 3 (1 derived), mappings 1, alignment 5 (2 phrases, 1 kind word, 2 rules, a rule last), errata 2, violations 2 (1 `derived_contradiction` with a two-step proof, 1 `asymmetry`), defects 2, merges 2, agent 3 rows (2 governor, 1 token), decisions 3 events.
+  - Web: `web/src/api.ts` list response type gains `total: number`; nothing else.
+  - `review_session_unchanged_tests.rs`: the one permitted line (`["counts", "items", "queue", "total"]`), numstat `1 1` against `904b2a2`.
+  - Tests added in `review_totals_tests.rs` (7): the six named in AC1–AC6 and `the_seed_puts_items_in_every_one_of_the_thirteen_sections`. Beyond the criteria, the paging test also inserts one open conflict whose old fact has no predicate and shows `total` and the pages unchanged while `counts.conflicts` rises by one (the INTENT join risk), and the seed test shows a second run of the script changes no total.
+  - Verify, run in parts with `CARGO_TARGET_DIR` outside the worktree, on freshly dropped, created and migrated `m002_t001` and `m002_t001_store`:
+    - static part (`test -s` ×2, `git diff --quiet 904b2a2…` over the frozen paths, numstat `1 1`): pass.
+    - `UTOPIA_TEST_REQUIRE_DB=1 cargo test -p utopia-server -- <the 16 named tests>`: `16 passed; 0 failed`, each named test reported `ok`. Not run through the Verify's `tee | grep -c | grep -qx 16` pipe; the 16 `ok` lines were read from the output.
+    - also `cargo test -p utopia-server -- review`: `50 passed; 0 failed` (rerun after the last source edit).
+    - `UTOPIA_TEST_REQUIRE_DB=1 cargo test -p utopia-store --test store -- <the 3 named tests>`: `3 passed; 0 failed` (rerun after the last source edit).
+    - `pnpm --dir web install --frozen-lockfile`, `vitest run` on the two named files (`9 passed`), `pnpm --dir web build` (built): pass.
+    - `cargo fmt --all --check`: reports only `review_attribution_tests.rs` (the known two spots, not this task's). `cargo clippy -p utopia-store -p utopia-server --all-targets`: no warnings.
+  - Guard: nothing refused. `git status --short` shows only paths in `files` and this task file.
+  - Open items for the reviewer: (1) the E14 / C1 line above; (2) `open_violations_total` restates the list's `triple` joins as joins on `facts` and `entities` rather than reusing the CTE text — same tables and conditions, checked by the paging test on seeded data only; (3) first failure during the work: the seed used `asymmetric` / `symmetric` as column aliases (reserved words), fixed by renaming the aliases.
+- 2026-11-19 — orchestrator Verify (sidecar gsd-path-verify/task-t001-verify): fail, exit 1; output tail:
+  ```
+     Compiling base64 v0.23.1
+     Compiling sha2 v0.11.0
+     Compiling utopia-reason v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t001-verify\crates\utopia-reason)
+     Compiling strum v0.27.2
+     Compiling cron v0.12.1
+     Compiling pdf-extract v0.12.0
+     Compiling utopia-ingest v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t001-verify\crates\utopia-ingest)
+     Compiling tokio-rustls v0.26.5
+     Compiling rustls-platform-verifier v0.6.2
+     Compiling hyper-rustls v0.27.9
+     Compiling reqwest v0.13.1
+     Compiling utopia-llm v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t001-verify\crates\utopia-llm)
+     Compiling utopia-extract v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t001-verify\crates\utopia-extract)
+     Compiling sqlx v0.8.6
+     Compiling pgvector v0.4.2
+     Compiling utopia-core v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t001-verify\crates\utopia-core)
+     Compiling utopia-store v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t001-verify\crates\utopia-store)
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 48s
+       Running `C:/Users/Owner/.gsd-path/cargo-target/finish-m002-T001\debug\examples\migrate.exe`
+  tee: /dev/stderr: No such file or directory
+  ```
+- 2026-11-19 — orchestrator Verify (sidecar gsd-path-verify/task-t001-verify): pass, exit 0; output tail:
+  ```
+     Compiling utopia-store v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t001-verify\crates\utopia-store)
+      Finished `test` profile [unoptimized + debuginfo] target(s) in 18.34s
+       Running tests\store\main.rs (C:/Users/Owner/.gsd-path/cargo-target/finish-m002-T001b\debug\deps\store-97773e81a9073f97.exe)
+  
+  running 3 tests
+  test a_review_has_a_summary::the_summary_reads_the_three_ledgers_with_one_yardstick ... ok
+  test a_review_page_is_assembled_in_batches::shared_sides_keep_their_summaries_and_the_page_keeps_its_order ... ok
+  test a_page_never_skips_a_row::paging_through_a_batch_sees_every_row_exactly_once ... ok
+  
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 358 filtered out; finished in 5.61s
+  
+  (node:33188) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:37980) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  [33m
+  (!) Some chunks are larger than 500 kB after minification. Consider:
+  - Using dynamic import() to code-split the application
+  - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+  - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+  ```

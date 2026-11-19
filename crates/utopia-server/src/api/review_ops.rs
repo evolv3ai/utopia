@@ -16,7 +16,6 @@ use utopia_core::AppError;
 use utopia_store::execution_gate::{agent_policy, AgentOperation, AgentOutcome};
 use uuid::Uuid;
 
-use super::review_routes::REVIEW_PAGE;
 use crate::state::AppState;
 
 /// 经令牌进来的调用方：令牌以发它的人的身份行事（0014 决定 1），所以角色问的是这个人，
@@ -73,8 +72,9 @@ pub(crate) async fn authorize_write(
     }
 }
 
-/// 一档的一页。这一刀只有 `duplicates`：回的东西与会话拿到的一样——同一组 store 函数、
-/// 同一个 clamp（缺省 10，1 到 200；offset 不为负）。别的档答 `unknown_queue`，不回空列表
+/// 一档的一页。这一刀只有 `duplicates`：回的东西就是会话拿到的那一页——两边调的是同一个
+/// `review_routes::queue_page`（同一组 store 函数、同一个 clamp、同一个 `total`），这里
+/// 只管授权和「哪些档开给令牌」。别的档答 `unknown_queue`，不回空列表
 pub(crate) async fn list(
     state: &AppState,
     caller: &ReviewCaller,
@@ -90,23 +90,7 @@ pub(crate) async fn list(
             format!("no review queue named {section}"),
         ));
     }
-    let kb_id = caller.kb_id;
-    let counts = utopia_store::review::counts(&state.pool, kb_id).await?;
-    let limit = limit.unwrap_or(REVIEW_PAGE).clamp(1, 200);
-    let offset = offset.unwrap_or(0).max(0);
-    let items = utopia_store::resolution::list_reviews(
-        &state.pool,
-        kb_id,
-        utopia_store::resolution::TypeFilter::parse(types)?,
-        limit,
-        offset,
-    )
-    .await?;
-    Ok(json!({
-        "counts": counts,
-        "queue": section,
-        "items": items,
-    }))
+    super::review_routes::queue_page(state, caller.kb_id, section, types, limit, offset).await
 }
 
 /// 一对重复项的卡片：与列表里那一条同一个对象（两边的名字、类型、区分语、度数、
