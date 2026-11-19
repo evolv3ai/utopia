@@ -1903,6 +1903,29 @@ pub async fn list_reviews(
     assemble_reviews(pool, kb_id, rows).await
 }
 
+/// 这个库里一对还在等的重复项，与列表里那一条同一个形状（0076：令牌读一张卡片的证据）。
+///
+/// 条件与 `list_reviews` 一致：属于这个库、状态是 pending、两边实体都在。**认不出的 id、
+/// 已经裁过的、别的库的，全都回 `None`**——调用方答同一个「没有」，不告诉对面是哪一种
+pub async fn pending_review(
+    pool: &PgPool,
+    kb_id: Uuid,
+    review_id: Uuid,
+) -> AppResult<Option<ReviewItem>> {
+    let rows: Vec<ReviewRow> = sqlx::query_as(
+        "SELECT rr.id, rr.left_id, rr.right_id, rr.score, rr.reason, rr.stage, rr.created_at
+         FROM resolution_reviews rr
+         JOIN entities a ON a.id = rr.left_id
+         JOIN entities b ON b.id = rr.right_id
+         WHERE rr.id = $1 AND rr.kb_id = $2 AND rr.status = 'pending'",
+    )
+    .bind(review_id)
+    .bind(kb_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(assemble_reviews(pool, kb_id, rows).await?.pop())
+}
+
 /// 批量裁决 = 逐条的人工裁决（#428）：每一条走 `decide_review`，合并方向、状态、
 /// decided_by 与单条一模一样。一条失败（不存在、已经裁过、并到一半出错）不拖累
 /// 其余的，结果逐条带回；动作不认识整批拒绝——那不是某一条的问题。

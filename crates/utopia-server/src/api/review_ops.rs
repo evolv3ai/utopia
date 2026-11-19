@@ -7,8 +7,8 @@
 //!
 //! 会话不走这里：`review_routes` 里会话分支原样跑从前的代码（0076 决定 2）。
 //!
-//! 这一刀开给令牌的只有三样：读重复项、读总览、把一对重复项分开。别的档、合并、撤销、
-//! 批量都还关着。
+//! 这一刀开给令牌的只有四样：读重复项、读其中一对的卡片、读总览、把一对重复项分开。
+//! 别的档、合并、撤销、批量都还关着。
 
 use serde_json::json;
 use utopia_core::models::{ReviewSummary, Role, User};
@@ -107,6 +107,22 @@ pub(crate) async fn list(
         "queue": section,
         "items": items,
     }))
+}
+
+/// 一对重复项的卡片：与列表里那一条同一个对象（两边的名字、类型、区分语、度数、
+/// 事实摘要，以及开着的建议）。读的检查与 `list` 同一个。
+///
+/// 不是这个库里一对还在等的重复项——认不出的 id、裁过的、别的库的——都是同一个
+/// `NotFound`，不带任何证据
+pub(crate) async fn item(
+    state: &AppState,
+    caller: &ReviewCaller,
+    review_id: Uuid,
+) -> Result<utopia_core::models::ReviewItem, AppError> {
+    authorize_read(state, caller).await?;
+    utopia_store::resolution::pending_review(&state.pool, caller.kb_id, review_id)
+        .await?
+        .ok_or(AppError::NotFound)
 }
 
 /// 审核台的总览，与会话读到的同一个聚合

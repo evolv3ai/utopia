@@ -3,9 +3,9 @@ id: T005
 title: Serve review_list, review_item and review_keep over MCP through the shared operation layer
 wave: 2
 deps: [T004]
-status: pending
-agent: null
-base: null
+status: done
+agent: build_T005
+base: 2557a1bba93a94acf119957037c1784cb484fa1a
 worktree: null
 task_branch: null
 files:
@@ -81,3 +81,30 @@ Heavy: yes
 ## Log
 
 - 2026-11-18 — created by planner
+- 2026-11-19 — build_T005 preflight at base 2557a1b: every path named in Context, Approach, Interface contract and Verify exists or is declared in `files`; SC3, SC4, SC5 and SC10 are items 3, 4, 5 and 10 of INTENT `## Success criteria`; the `review_ops` contract line and the session-test line appear in T004 (and the session-test line in T006); commit `3d307f6` and the six store test files exist. Clean.
+- 2026-11-19 — build_T005 implementation. New `api/review_tools.rs` (declared in `api/mod.rs`): the three tool definitions with annotations, `listed(can_write)` for `tools/list` (`review_keep` only when `can_write`), and `call`, which guards arguments with `chat::check_call` and maps to `review_ops::list` / `summary` / `item` / `keep`. Nothing was added to `chat::tools_schema` or `tools::dispatch`. `mcp.rs`: `tools/list` appends the review tools; `tools/call` routes a review tool name to `review_tools::call` with a `ReviewCaller` built from what `authorize` returns, before the `is_exposed` check, and writes the same single `mcp.tool_called` row; the `remember` branch, its `-32601` answer and its listing are untouched. `review_ops::item` added (same reader check as `list`); store lookup `resolution::pending_review` added, reusing `assemble_reviews`; `list_reviews`, `decide_review`, `decide_reviews` unchanged. `web/src/docs/mcp.md`: tools table rows and a "Review over MCP" section. Tests in `api/review_mcp_tests.rs` (declared in `mod.rs`), all through the router. Not edited: `mcp_tests.rs`, `review_session_unchanged_tests.rs`, anything under `crates/utopia-store/tests/store/`.
+- 2026-11-19 — build_T005 decisions inside the contract, for the reviewer: (1) a tool error's `code` and `message` are read from the REST error response itself (`ApiErr::into_response`), so the two surfaces cannot drift; a 404 gets `not_found`; an error for which REST has no code (governor busy 409, internal 500) has `message` and no `code` key, and an internal error's text is "Internal server error" as on REST. (2) A missing or malformed argument (no `section`, non-uuid `id`, non-integer `limit`/`offset`, non-string `rationale`) is a text-only tool error like the existing tools give, with no code: ADR 0076 defines none. (3) `review_list` exposes `section`, `limit`, `offset` only; the REST `types` filter is not exposed (the task names only those three). (4) A token whose `kb_ids` exclude the base never reaches a tool over MCP: the unchanged `authorize` answers HTTP 403 first, so `token_kb_out_of_scope` cannot occur on this surface; the N3 test asserts no result, item, count or evidence in that response. (5) Success `content` text is the serialized `structuredContent`. (6) E11 injection: a `BEFORE INSERT` trigger on `audit_events` named with the test base's id, `WHEN (NEW.kb_id = '<base>' AND NEW.action = 'review.keep')`, dropped at the end of the test on success and failure; the failure happens inside `keep_duplicate_pair`'s transaction.
+- 2026-11-19 — build_T005 Verify: ran the Verify command exactly as written, from the worktree root in Git Bash, with `CARGO_TARGET_DIR=C:/Users/Owner/.gsd-path/cargo-target/utopia-T005`; no part was refused by the guard. Exit 0. `utopia-server`: 18 passed, 0 failed (829 filtered out). `utopia-store --test store`: 6 passed, 0 failed (355 filtered out). No `MISSING` line; `git diff --quiet 3d307f6` on the seven unchanged files passed. Database `m001_t005` only. Before that, `cargo clippy -p utopia-server -p utopia-store --tests` gave no warning and the 13 new tests passed in a targeted run. The heavy-run lock was not taken: the orchestrator withdrew the lock rule mid-task (stale lock left by T006).
+- 2026-11-19 — orchestrator Verify (isolate gsd-path-task/T005): pass, exit 0; output tail:
+  ```
+      Finished `test` profile [unoptimized + debuginfo] target(s) in 14.89s
+       Running tests\store\main.rs (C:/Users/Owner/.gsd-path/cargo-target/utopia\debug\deps\store-97773e81a9073f97.exe)
+  
+  running 6 tests
+  test an_agent_can_record::a_pending_fact_names_the_agent_that_proposed_it ... ok
+  test a_decision_records_why::a_decision_keeps_its_reason_and_the_precedent_carries_it ... ok
+  test a_review_has_a_summary::the_summary_reads_the_three_ledgers_with_one_yardstick ... ok
+  test a_fact_awaits_a_nod::a_remembered_fact_waits_for_a_nod ... ok
+  test a_batch_decides_like_a_person::a_batch_decides_like_a_person ... ok
+  test a_review_page_is_assembled_in_batches::shared_sides_keep_their_summaries_and_the_page_keeps_its_order ... ok
+  
+  test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 355 filtered out; finished in 1.21s
+     Compiling utopia-llm v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\task\T005\crates\utopia-llm)
+     Compiling utopia-reason v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\task\T005\crates\utopia-reason)
+     Compiling utopia-core v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\task\T005\crates\utopia-core)
+     Compiling utopia-ingest v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\task\T005\crates\utopia-ingest)
+     Compiling utopia-extract v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\task\T005\crates\utopia-extract)
+     Compiling utopia-store v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\task\T005\crates\utopia-store)
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 13.39s
+       Running `C:/Users/Owner/.gsd-path/cargo-target/utopia\debug\examples\migrate.exe`
+  ```
