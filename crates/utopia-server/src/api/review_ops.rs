@@ -7,8 +7,9 @@
 //!
 //! 会话不走这里：`review_routes` 里会话分支原样跑从前的代码（0076 决定 2）。
 //!
-//! 这一刀开给令牌的只有四样：读重复项、读其中一对的卡片、读总览、把一对重复项分开。
-//! 别的档、合并、撤销、批量都还关着。
+//! 读的一侧整个开给令牌：十一个列表档、总览、决策台账，以及违规与派生事实的两条证明。
+//! 写的一侧只有「把一对重复项分开」这一样；别的裁决、合并、撤销、批量都还关着——
+//! 读得到「等你点头」不等于能替人点头。
 
 use serde_json::json;
 use utopia_core::models::{ReviewSummary, Role, User};
@@ -72,9 +73,27 @@ pub(crate) async fn authorize_write(
     }
 }
 
-/// 一档的一页。这一刀只有 `duplicates`：回的东西就是会话拿到的那一页——两边调的是同一个
+/// 开给令牌的十一个列表档，就是 Review 页左栏的那十一档。`mappings` 是列表路由认的
+/// 第十二个档名，但它不是 Review 的分档，不在这里；`overview` 与 `decisions` 不是列表档，
+/// 各走 [`summary`] 与 [`history`]
+const TOKEN_SECTIONS: [&str; 11] = [
+    "pending",
+    "duplicates",
+    "conflicts",
+    "unconfirmed",
+    "lowconf",
+    "violations",
+    "defects",
+    "alignment",
+    "errata",
+    "agent",
+    "merges",
+];
+
+/// 一档的一页。回的东西就是会话拿到的那一页——两边调的是同一个
 /// `review_routes::queue_page`（同一组 store 函数、同一个 clamp、同一个 `total`），这里
-/// 只管授权和「哪些档开给令牌」。别的档答 `unknown_queue`，不回空列表
+/// 只管授权和「哪些档开给令牌」，档的 `match` 不在这里再写一遍。不在那十一档里的名字
+/// （`mappings` 也算）答 `unknown_queue`，不回空列表
 pub(crate) async fn list(
     state: &AppState,
     caller: &ReviewCaller,
@@ -84,13 +103,56 @@ pub(crate) async fn list(
     offset: Option<i64>,
 ) -> Result<serde_json::Value, AppError> {
     authorize_read(state, caller).await?;
-    if section != "duplicates" {
+    if !TOKEN_SECTIONS.contains(&section) {
         return Err(AppError::invalid(
             "unknown_queue",
             format!("no review queue named {section}"),
         ));
     }
     super::review_routes::queue_page(state, caller.kb_id, section, types, limit, offset).await
+}
+
+/// 决策台账的一页，与会话从 `GET /review/history` 读到的同一个 `{events, total}`：
+/// 同一个 `audit::review_history`、同一个翻页口径（`page` 缺省 0、不小于 0；`per` 缺省 20、
+/// 夹到 1 到 100）。台账有自己的 `page`/`per`，不借列表档的 `limit`/`offset`
+pub(crate) async fn history(
+    state: &AppState,
+    caller: &ReviewCaller,
+    page: Option<i64>,
+    per: Option<i64>,
+) -> Result<serde_json::Value, AppError> {
+    authorize_read(state, caller).await?;
+    let per = per.unwrap_or(20).clamp(1, 100);
+    let page = page.unwrap_or(0).max(0);
+    let (events, total) =
+        utopia_store::audit::review_history(&state.pool, caller.kb_id, per, page * per).await?;
+    Ok(json!({ "events": events, "total": total }))
+}
+
+/// 一处违规的证明链，与会话从 `GET /violations/{id}/proof` 读到的同一个 `{steps}`：
+/// 只有 `derived_contradiction` 展得开，别的种类和认不出的 id 是 `steps: null`，不是错误。
+/// 读的检查在取任何一行之前（N3）：够不着的库答 404，不带证据
+pub(crate) async fn violation_proof(
+    state: &AppState,
+    caller: &ReviewCaller,
+    violation_id: Uuid,
+) -> Result<serde_json::Value, AppError> {
+    authorize_read(state, caller).await?;
+    let steps =
+        utopia_store::reasoning::blocked_proof(&state.pool, caller.kb_id, violation_id).await?;
+    Ok(json!({ "steps": steps }))
+}
+
+/// 一条派生事实的证明，与会话从 `GET /derived/{id}/proof` 读到的同一个 `{proof}`；
+/// 派生已失效或不存在时是 `proof: null`。读的检查与上面同一个，同样在取数之前
+pub(crate) async fn derived_proof(
+    state: &AppState,
+    caller: &ReviewCaller,
+    derived_id: Uuid,
+) -> Result<serde_json::Value, AppError> {
+    authorize_read(state, caller).await?;
+    let proof = utopia_store::reasoning::proof(&state.pool, caller.kb_id, derived_id).await?;
+    Ok(json!({ "proof": proof }))
 }
 
 /// 一对重复项的卡片：与列表里那一条同一个对象（两边的名字、类型、区分语、度数、

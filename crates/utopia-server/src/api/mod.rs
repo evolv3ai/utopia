@@ -701,4 +701,7 @@ mod review_token_api_tests;
 mod review_totals_tests;
 
 #[cfg(test)]
+mod review_token_reads_tests;
+
+#[cfg(test)]
 mod review_mcp_tests;

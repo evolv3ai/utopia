@@ -79,8 +79,9 @@ pub struct ReviewQuery {
 /// 内容只回当前那一档的一页。切换分档或翻页各发一次请求，代价是多几次往返，
 /// 换来的是**数字不再骗人**，而且一个有十万条待办的库也翻得到底。
 ///
-/// 个人令牌也能读（0076）：令牌走 `review_ops::list`，这一刀只开 `duplicates` 一档；
-/// 会话照旧过下面的 `require_kb`。两边过了检查拿的都是 [`queue_page`] 的那一页
+/// 个人令牌也能读（0076）：令牌走 `review_ops::list`，Review 的十一个分档都开，`mappings`
+/// 不是分档、仍只给会话；会话照旧过下面的 `require_kb`。两边过了检查拿的都是
+/// [`queue_page`] 的那一页
 pub async fn list(
     State(state): State<AppState>,
     caller: SessionOrToken,
@@ -794,12 +795,22 @@ fn default_history_per() -> i64 {
 }
 
 /// 决策台账：review 域的审计事件，服务端分页。
+///
+/// 个人令牌也能读（0076），走 `review_ops::history`，拿到的是同一个 `{events, total}`；
+/// 会话照旧跑下面这一段
 pub async fn history(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    caller: SessionOrToken,
     Path(kb_id): Path<Uuid>,
     Query(q): Query<HistoryQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    let user = caller.user;
+    if let Some(token) = caller.pat {
+        let caller = ReviewCaller { user, token, kb_id };
+        return Ok(Json(
+            review_ops::history(&state, &caller, Some(q.page), Some(q.per)).await?,
+        ));
+    }
     require_kb(&state, &user, kb_id, Role::Viewer).await?;
     let per = q.per.clamp(1, 100);
     let page = q.page.max(0);

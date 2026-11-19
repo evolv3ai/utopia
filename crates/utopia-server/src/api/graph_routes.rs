@@ -7,6 +7,7 @@ use utopia_core::AppError;
 use uuid::Uuid;
 
 use super::documents_routes::require_reader_kb;
+use super::review_ops::{self, ReviewCaller};
 use crate::auth::{AuthUser, SessionOrToken};
 use crate::error::ApiResult;
 use crate::state::AppState;
@@ -532,24 +533,44 @@ pub async fn fact_evidence(
 }
 
 /// 一条派生事实的证明（0002 R2）：前提按推导顺序，每条带证据，一路到原句。
-/// 派生已失效或不存在时 `proof` 为 null——不是错误，界面据此退回文本前提
+/// 派生已失效或不存在时 `proof` 为 null——不是错误，界面据此退回文本前提。
+///
+/// 个人令牌也能读（0076）：令牌走 `review_ops::derived_proof`，先过与 Review 列表同一个
+/// 读检查（够不着的库是 404），拿到的是同一个 `{proof}`；会话照旧跑下面这一段
 pub async fn derived_proof(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    caller: SessionOrToken,
     Path((kb_id, derived_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    let user = caller.user;
+    if let Some(token) = caller.pat {
+        let caller = ReviewCaller { user, token, kb_id };
+        return Ok(Json(
+            review_ops::derived_proof(&state, &caller, derived_id).await?,
+        ));
+    }
     require_kb(&state, &user, kb_id, Role::Viewer).await?;
     let proof = utopia_store::reasoning::proof(&state.pool, kb_id, derived_id).await?;
     Ok(Json(json!({ "proof": proof })))
 }
 
 /// 没落地的派生的证明链（0017 §3）：前提在那条 `derived_contradiction` 违规的
-/// `path` 里，展开方式与落了地的一样。违规不存在时 `steps` 为 null
+/// `path` 里，展开方式与落了地的一样。违规不存在时 `steps` 为 null。
+///
+/// 个人令牌也能读（0076）：令牌走 `review_ops::violation_proof`（MCP 的工具调的也是它），
+/// 读检查与 Review 列表同一个，拿到的是同一个 `{steps}`；会话照旧跑下面这一段
 pub async fn blocked_proof(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    caller: SessionOrToken,
     Path((kb_id, violation_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    let user = caller.user;
+    if let Some(token) = caller.pat {
+        let caller = ReviewCaller { user, token, kb_id };
+        return Ok(Json(
+            review_ops::violation_proof(&state, &caller, violation_id).await?,
+        ));
+    }
     require_kb(&state, &user, kb_id, Role::Viewer).await?;
     let steps = utopia_store::reasoning::blocked_proof(&state.pool, kb_id, violation_id).await?;
     Ok(Json(json!({ "steps": steps })))

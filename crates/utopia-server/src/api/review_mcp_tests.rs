@@ -416,7 +416,8 @@ async fn review_list_serves_a_page_size_below_1_as_1_and_above_200_as_200() -> a
 }
 
 #[tokio::test]
-async fn review_list_refuses_another_section_with_unknown_queue() -> anyhow::Result<()> {
+async fn review_list_refuses_mappings_and_an_unknown_section_with_unknown_queue(
+) -> anyhow::Result<()> {
     let Some(f) = Fx::new(false).await? else {
         return Ok(());
     };
@@ -425,7 +426,7 @@ async fn review_list_refuses_another_section_with_unknown_queue() -> anyhow::Res
         f.pair("Zhang Wei", "Zhang Wei").await?;
         let (_, read_token) = f.token(f.viewer, "reader", "read", None).await?;
         let (_, write_token) = f.token(f.editor, "writer", "write", None).await?;
-        for section in ["pending", "agent", "merges"] {
+        for section in ["mappings", "no-such-section"] {
             for token in [&read_token, &write_token] {
                 let result = tool(&f, token, "review_list", json!({ "section": section })).await?;
                 ensure_refused(&result, "unknown_queue")?;

@@ -3,9 +3,9 @@ id: T002
 title: Open the eleven queue sections, the Decisions history and both proof reads to personal tokens over the HTTP API
 wave: 2
 deps: [T001]
-status: pending
-agent: null
-base: null
+status: done
+agent: build_T002
+base: a30b7463819caf8e2d9e364143488314c52dd953
 worktree: null
 task_branch: null
 files:
@@ -112,3 +112,35 @@ Heavy: yes
   - NEEDS-ORCHESTRATOR: `agent_history_shows_a_token_keep_beside_unchanged_governor_rows` (frozen `review_attribution_tests.rs`, named in T001's Verify) asserts a token is refused on `queue=agent`, which AC11/SC6 open — how is T001's regression Verify to pass at this landing? — readings: (a) add `review_attribution_tests.rs` to `files` with a permitted edit limited to that one assertion block (lines 250–262: drop it, or assert the refusal for `queue=mappings`), and drop that file from the `git diff --quiet 904b2a2…` lists of this task's Verify and of T001's Verify (and from AC15), test name unchanged so T001's count of 16 holds; (b) T002 supersedes T001 for that one test (amended T001 Verify without it, count 15), file untouched and the test left failing — the whole-crate suite then stays red; (c) keep `agent` refused for a token — contradicts AC11, AC12, SC6 and INTENT Scope in, listed only for completeness. The rest of the server suite is green, so no further conflict of this kind is hidden behind this one.
 - 2026-11-19 — Orchestrator answer: reading (a), with T001's Verify superseded. `crates/utopia-server/src/api/review_attribution_tests.rs` is added to this task's `files`; change only the one assertion block of `agent_history_shows_a_token_keep_beside_unchanged_governor_rows` that expects a token to be refused on `queue=agent`, so that it asserts the token reads the same Agent History rows as the session; keep the test name; `cargo fmt` may format that file. The file leaves this task's frozen-path check — INTENT.md success criterion 6 (Agent History read by a token); Delegated (driver D092).
 - 2026-11-19 — orchestrator plan-defect repair: `files` gained `review_attribution_tests.rs`; `supersedes: [T001]` retires T001's Verify, whose frozen-path check names that file; this task's Verify now ends with T001's whole Verify minus that one frozen path, so T001's 16 server tests, 3 store tests, its other frozen-path and numstat checks and its web checks keep running here and at later landings. Approach and acceptance criterion 15 carve out the one assertion. Task returned to `pending`; the blocked attempt's product changes are kept unchanged for the redispatch.
+- 2026-11-19 — coder build_T002 (second redispatch): ready. The earlier attempt's implementation was reviewed against the Acceptance criteria and kept as it was; no product path changed in this pass.
+  - Change in this pass: `review_attribution_tests.rs` only — the one assertion block of `agent_history_shows_a_token_keep_beside_unchanged_governor_rows` now asserts that the write token gets 200 on `queue=agent` with the same items and `total` as the session (SC6), test name unchanged; plus `rustfmt` output in two other places of that file (a collapsed iterator chain, a wrapped `ensure!`), no behaviour change. The stale module comments in `review_token_api_tests.rs` and `review_mcp_tests.rs` that still say other sections are refused were left: the Approach says "Change nothing else in those two files".
+  - Verify, run in parts with the commands as written (results read from the test output, not through the `tee | grep -c` pipe), `CARGO_TARGET_DIR` outside the worktree:
+    - `git diff --quiet 904b2a2… -- mcp.rs migrations`: exit 0. Fresh migrated `m002_t002`: the 19 named tests — 19 passed, 0 failed.
+    - T001 part: the frozen-path `git diff --quiet` exit 0; numstat of `review_session_unchanged_tests.rs` is `1 1`. Fresh migrated `m002_t001`: 16 named server tests — 16 passed, 0 failed. Fresh migrated `m002_t001_store`: 3 named store tests — 3 passed, 0 failed.
+    - `pnpm --dir web install --frozen-lockfile`: done; vitest on the two named files: 2 files, 9 tests passed; `pnpm --dir web build`: built.
+    - `cargo fmt --all --check`: exit 0, nothing reported.
+  - Guard: nothing refused. `git status --short`: only paths in `files` and this task file.
+- 2026-11-19 — orchestrator Verify (sidecar gsd-path-verify/task-t002-verify): pass, exit 0; output tail:
+  ```
+     Compiling utopia-store v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t002-verify\crates\utopia-store)
+      Finished `test` profile [unoptimized + debuginfo] target(s) in 14.61s
+       Running tests\store\main.rs (C:/Users/Owner/.gsd-path/cargo-target/finish-m002-T002\debug\deps\store-97773e81a9073f97.exe)
+  
+  running 3 tests
+  test a_review_has_a_summary::the_summary_reads_the_three_ledgers_with_one_yardstick ... ok
+  test a_review_page_is_assembled_in_batches::shared_sides_keep_their_summaries_and_the_page_keeps_its_order ... ok
+  test a_page_never_skips_a_row::paging_through_a_batch_sees_every_row_exactly_once ... ok
+  
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 358 filtered out; finished in 6.71s
+  
+  (node:35648) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:40212) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  [33m
+  (!) Some chunks are larger than 500 kB after minification. Consider:
+  - Using dynamic import() to code-split the application
+  - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+  - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+  ```
+- 2026-11-19 — orchestrator regression Verify of T001 retired: superseded by T002

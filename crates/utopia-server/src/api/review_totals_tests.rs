@@ -644,14 +644,14 @@ async fn a_token_reading_duplicates_receives_the_same_total_as_a_session() -> an
         }
         let all = page(&f, "queue=duplicates").await?;
         anyhow::ensure!(all["total"] == 3, "three pairs still wait: {all}");
-        // 别的档这一刀没开给令牌：还是 unknown_queue，不带条目和 total
-        let (status, body) = get_list(&f, &token, kb, "queue=pending").await?;
+        // `mappings` 不是 Review 的分档，不开给令牌（E4）：还是 unknown_queue，不带条目和 total
+        let (status, body) = get_list(&f, &token, kb, "queue=mappings").await?;
         anyhow::ensure!(
             status == StatusCode::UNPROCESSABLE_ENTITY
                 && body["code"] == "unknown_queue"
                 && body.get("items").is_none()
                 && body.get("total").is_none(),
-            "token pending: {status} {body}"
+            "token mappings: {status} {body}"
         );
         Ok(())
     }

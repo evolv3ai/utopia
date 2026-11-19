@@ -247,7 +247,7 @@ async fn agent_history_shows_a_token_keep_beside_unchanged_governor_rows() -> an
             "{after}"
         );
         anyhow::ensure!(rows.len() == 3, "{after}");
-        // 令牌自己这一刀还读不了这一档
+        // 令牌自己也读得到这一档（SC6）：与会话是同一组行，台账行和治理 agent 的行都在
         let (status, body) = f
             .call(
                 &token,
@@ -257,8 +257,8 @@ async fn agent_history_shows_a_token_keep_beside_unchanged_governor_rows() -> an
             )
             .await?;
         anyhow::ensure!(
-            status == StatusCode::UNPROCESSABLE_ENTITY && body.get("items").is_none(),
-            "a token must not read queue=agent: {status} {body}"
+            status == StatusCode::OK && items(&body) == rows && body["total"] == after["total"],
+            "a token reads the same Agent History rows as the session: {status} {body}"
         );
         Ok(())
     }
@@ -411,11 +411,7 @@ async fn agent_history_merges_ledger_rows_by_action_time_and_keeps_governor_orde
             // 这一页里治理 agent 的行，是 `governance::list` 里连续的一段，先后不变
             let page_governors: Vec<Value> =
                 page_rows.iter().filter(|r| !is_token(r)).cloned().collect();
-            let start = rows
-                .iter()
-                .take(offset)
-                .filter(|r| !is_token(r))
-                .count();
+            let start = rows.iter().take(offset).filter(|r| !is_token(r)).count();
             let run: Vec<Value> = governors
                 .iter()
                 .skip(start)
@@ -488,7 +484,10 @@ async fn activity_returns_token_id_token_name_and_declared_client_for_a_token_ke
         let event = keep_event(&f, by_person).await?;
         anyhow::ensure!(event["actor_name"] == "Editor", "{event}");
         for key in ["token_id", "token_name", "declared_client"] {
-            anyhow::ensure!(event.get(key).is_none(), "{key} on a person's event: {event}");
+            anyhow::ensure!(
+                event.get(key).is_none(),
+                "{key} on a person's event: {event}"
+            );
         }
 
         // 共用同一个结构的决策台账：形状原样，令牌那一笔上也没有这三个键
