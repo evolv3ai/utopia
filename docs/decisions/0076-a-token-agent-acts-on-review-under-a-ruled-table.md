@@ -1,6 +1,6 @@
 # 0076 · A token agent acts on Review under a ruled table
 
-- **Status**: In progress · accepted 2026-11-18 · the keep slice built 2026-11-19 (migration 0128): a personal token reads Duplicates and Overview and keeps one duplicate pair through the policy function, over the token API and the MCP tools `review_list`, `review_item` and `review_keep`, with the `token_agent_actions` ledger, the precedent exclusion, and "owner via token name" in Agent History and Activity · open: every row of the table except Keep stays closed to tokens (merge, manual merge, revert, batch, every propose-only operation and the proposal store); the per-token rate limit and breaker; token reads of the other eleven sections and of Agent History; a token keep is counted under its owner in Decisions and Overview (ruled "unchanged for now")
+- **Status**: In progress · accepted 2026-11-18 · the keep slice built 2026-11-19 (migration 0128): a personal token reads Duplicates and Overview and keeps one duplicate pair through the policy function, over the token API and the MCP tools `review_list`, `review_item` and `review_keep`, with the `token_agent_actions` ledger, the precedent exclusion, and "owner via token name" in Agent History and Activity · the read slice built 2026-11-19 (no migration): a personal token lists all thirteen Review sections with a `total`, reads one listed item of any section and both proof routes · open: this record has opened only the Keep row of the table to tokens, and the alignment kind-word decision was already open to write tokens under ADR 0014 decision 6; every other row stays closed to tokens (merge, manual merge, revert, batch, mapping decision, the consistency check, every propose-only operation and the proposal store); the per-token rate limit and breaker; a token keep is counted under its owner in Decisions and Overview (ruled "unchanged for now")
 - **Written**: 2026-11-18
 - **Related**: [0014](0014-identity-from-the-person-scope-from-the-token.md) (a token acts as its owner; decisions 6 and 7 opened the first token write and the token reads); [0027](0027-an-automatic-merge-is-gated-by-what-it-can-undo.md) (the execution gate; decision 3 names an agent's calls as its next caller); [0025](0025-governance-reads-the-ledger-before-it-decides.md) (the governor and its precedent); [0015](0015-recording-a-sentence-is-not-asserting-a-fact.md) (the nod); [0043](0043-every-review-queue-is-governed.md) (a gate before an agent applies changes); [0046](0046-the-app-surface-is-mcp.md) (the MCP surface)
 
@@ -36,6 +36,16 @@ is written before the first route or schema change.
    requests and responses are unchanged: the session branch of every handler runs
    the code it runs today.
 
+   **Revision 2026-11-19 (the read slice).** The paragraph above named three
+   handlers, and the list handler served a token `queue=duplicates` only. The same
+   extractor change now also covers the Decisions history
+   (`GET /api/v1/kbs/{kb_id}/review/history`) and the two proof routes
+   (`GET /api/v1/kbs/{kb_id}/violations/{violation_id}/proof` and
+   `GET /api/v1/kbs/{kb_id}/derived/{derived_id}/proof`), and the list handler
+   serves a token all eleven queue sections. What changed it: an agent has to find
+   an item before it can act on it, and the read side carries none of the risk the
+   table rules on. No write handler changed; decision 13 records the read shapes.
+
 2. **MCP gains three tools over the same implementation.** `review_list` takes a
    `section` parameter and applies the existing 1 to 200 page clamp; `review_item`
    returns one item's evidence; `review_keep` keeps one duplicate pair. The read
@@ -44,6 +54,16 @@ is written before the first route or schema change.
    owner at least Editor, the rule `remember` already follows. In this cut
    `review_list` serves Duplicates and Overview; any other section answers the
    existing `unknown_queue`.
+
+   **Revision 2026-11-19 (the read slice).** The last sentence above said
+   `review_list` served Duplicates and Overview and refused every other section,
+   and `review_item` read duplicate pairs by id alone. `review_list` now serves
+   all thirteen sections: the eleven queue sections with `limit` and `offset`,
+   `decisions` with the history route's own `page` and `per`, and `overview` with
+   no paging argument. `review_item` takes `section` and `id`; `section` left out
+   means `duplicates`, so a call written for the first cut reads as before. A
+   name outside the thirteen still answers `unknown_queue`. Still three tools:
+   no tool was added, and `review_keep` is unchanged.
 
 3. **The server enforces the authority table. Nothing else does.** Not the MCP
    client, not `ToolAnnotations` (`readOnlyHint`, `destructiveHint`,
@@ -108,6 +128,15 @@ is written before the first route or schema change.
    A token that is both read-scope and owned by someone below Editor gets
    `token_read_only`, because scope is checked first.
 
+   **Revision 2026-11-19 (checked against the code).** The first sentence above
+   said of every read that a token whose `kb_ids` exclude the base gets 404. That
+   is the token API's answer only. The MCP endpoint checks the token's base list
+   itself, before any tool runs, and answers such a token with HTTP 403; the
+   answer carries no tool list, item, count or evidence. The endpoint's answer is
+   older than this record and is left unchanged: both answers give the token
+   nothing from the base, and changing the endpoint's would change it for every
+   MCP tool, not only the Review ones. A dead or revoked token gets 401 on both.
+
 7. **The ledger is `token_agent_actions`.** One row per token-agent Review action.
    This cut creates the columns it writes: base, operation, target kind and id,
    owner, token, token name snapshot, outcome, request payload, time. The settled
@@ -146,13 +175,68 @@ is written before the first route or schema change.
     revert is verified on graph state and nothing else.
 
 12. **What this cut leaves closed.** To a token: merge, manual merge, revert and
-    batch (answered `token_operation_not_open`); every propose-only row and the
+    batch (how each is answered: first revision below); every propose-only row and the
     proposal store that would hold them; listing of the other eleven sections,
     evidence for their items, the proof routes and true section totals; the
     per-token rate limit and breaker. Unchanged for everyone: the nod on `remember`
     and every `pending_facts` decision, which no token finalizes in any option of
     the ruling; the person's ungated merge and 500-id batch; the labels of existing
     machine actors in Activity.
+
+    **Revision 2026-11-19 (checked against the code).** The first clause above
+    said, in a parenthesis after the four names, that merge, manual merge, revert
+    and batch were all answered with the code `token_operation_not_open`; the
+    parenthesis now points here. Only `merge` sent to the decision route is.
+    Manual merge, revert and batch are session-only routes: their handlers take
+    a signed-in session and nothing else, so they answer a token with 401 until
+    M003 opens them.
+
+    **Revision 2026-11-19 (the read slice).** The list above also named, as
+    closed, the listing of the other eleven sections, evidence for their items,
+    the proof routes and true section totals. The read slice opened all four
+    (decisions 1, 2 and 13). Still closed to a token: merge, manual merge, revert
+    and batch; every propose-only row and the proposal store; the per-token rate
+    limit and breaker. The "unchanged for everyone" part stands as written.
+
+13. **The read shapes of the read slice.** Added 2026-11-19. The reads go through
+    the handlers and the operation layer of decisions 1 and 5; these are the
+    points where a shape had to be ruled.
+
+    - **`total` is a new field; `counts` is unchanged.** Every list response
+      carries `total`, the number of rows that section's list returns over all
+      pages, for a session and a token alike. It is the only key a session's
+      list response gained. `counts` keeps its keys and values because the
+      Review tab's badges read it, and for Alignment (the badge omits proposed
+      implication rules), Low confidence and Agent History the badge named
+      after the section is not the number of listed rows, so a client pages by
+      `total`.
+    - **The Low confidence list is unchanged, and its total counts the listed
+      rows**, derived facts included, although the badge leaves them out.
+    - **Decisions keeps `page` and `per`** and its `{events, total}`. It is not
+      folded into the list route, and `review_list` passes the two arguments
+      through for section `decisions`.
+    - **The Alignment list has an identifier tie-break.** It is ordered by
+      `decided_at` and then by the item's own identifier (the id of a phrase or
+      rule, the word of a kind word). Rows written by one aligner run share a
+      time, and without the tie-break a client paging by `limit` and `offset`
+      could see an item twice or not at all.
+    - **`review_item` identifies an item by `section` and `id`.** The id is the
+      item's `id` from the list; an Alignment kind word has none and is named by
+      its word, compared exactly as stored; an Agent History row is named by its
+      row id whichever source it has. The item is found in the section's own
+      list, so what comes back is the list's object and passes the list's reader
+      check. There is one not-found answer, with no evidence in it, for an
+      unknown id, an id of another base and an item no longer waiting in that
+      section; `overview` lists no items and gives the same answer.
+    - **An Axioms item carries a `proof` key**: the proof steps for kind
+      `derived_contradiction`, null for any other kind, which is not an error.
+      No other section gains a key.
+    - **`mappings` is refused for a token** with `unknown_queue`. The list route
+      serves it to a session, but it is not a Review section.
+    - **The MCP endpoint's 403 is unchanged** (decision 6).
+    - **No Review write is added.** No write handler gained a token branch and
+      no MCP write tool was added; reading "Awaiting your nod" gives a token no
+      way to nod.
 
 ## Ontology adoption finding
 
@@ -267,3 +351,20 @@ database that ran the old number.
 - **The precedent exclusion has not been exercised end to end.** If a token row
   still steers the governor, no agent finalize is safe and the gated rows change
   shape.
+
+## Status history
+
+**Revision 2026-11-19 (the read slice; checked against the code).** Until that
+date the `open:` part of the status line read:
+
+> every row of the table except Keep stays closed to tokens (merge, manual merge,
+> revert, batch, every propose-only operation and the proposal store); the
+> per-token rate limit and breaker; token reads of the other eleven sections and
+> of Agent History; a token keep is counted under its owner in Decisions and
+> Overview (ruled "unchanged for now")
+
+Two things in it no longer held. "Every row except Keep" was wrong when written:
+the table's own row for the alignment kind-word decision says it is already open
+to write tokens under ADR 0014 decision 6, and `decide_alignment_kind_word`
+takes a write token. And the token reads of the other eleven sections and of
+Agent History were built by the read slice, so they left the open list.

@@ -3,9 +3,9 @@ id: T004
 title: Document the full Review read surface for tokens and amend ADR 0076 with it and with the three docs-audit corrections
 wave: 2
 deps: [T002, T003]
-status: pending
-agent: null
-base: null
+status: done
+agent: build_T004
+base: 3a8c696d5e7b86959c0be69b4fbb172e41698d5d
 worktree: null
 task_branch: null
 files:
@@ -72,3 +72,32 @@ Heavy: yes
 ## Log
 
 - 2026-11-19 — created by planner
+- 2026-11-19 — coder build_T004: ready for orchestrator Verify.
+  - Preflight clean: both `files` paths, the four code paths of the Approach and `mcp.rs` exist at base `3a8c696`; this task owns no SC; the Interface contract matches the landed `review_ops.rs`, `review_tools.rs`, `review_routes.rs` and `graph_routes.rs`.
+  - `web/src/docs/mcp.md`: intro sentence and the two tool-table rows updated; sections "Review over MCP" and "Review over the token API" rewritten in place. Added: the thirteen-section table (name, key, token route, `review_list` arguments); `total` versus `counts` and paging by `total` for Alignment, Low confidence and Agent History; the 1 to 200 clamp and an offset at or past `total`; the Alignment order; Decisions' `page`/`per` and `{events, total}`; Agent History rows of both sources with `owner_id`/`owner_name`/`token_id`/`token_name`; `review_item` with `section` and `id`, the kind word by its exact word, the `proof` key, the single `not_found`; the history route and both proof routes in the token-route table; 401, 404 versus the MCP endpoint's HTTP 403, `unknown_queue` for `mappings`. The `remember` section is untouched.
+  - ADR 0076: status line updated (one line; kind-word decision named as already open; read slice recorded; token reads removed from `open:`); dated revision notes in place under decisions 1, 2, 6 and 12; new decision 13 (read shapes); new `## Status history` section quoting the previous `open:` text. Decision 4's table is untouched (no table line in the diff; counts 12 / 3 / 4).
+  - Decision 12's original clause had to change, not only gain a note: the Verify requires the literal "batch (answered" to be absent, so the parenthesis now reads "(how each is answered: first revision below)" and the revision note states what it said.
+  - Plan-versus-code, documented from the code: (1) the "Not open to tokens" paragraph now names the one Review write that the code does accept from a write token and that predates this program, `decide_alignment_kind_word` (ADR 0014 decision 6); the old sentence "every other Review route is session only" was not true of it. No write is described as open that is not. (2) `counts.agent` is the governor's open proposals (the plan's Context names `agent_rows` as the pager's key); the doc says only that the badge named after the section is not the row count. (3) `review_list` does not pass the route's `types` filter; the doc says the tool reads Duplicates unfiltered. (4) For `review_item` a non-uuid `id` is not a malformed argument: outside Alignment it is `not_found`; only `review_keep` still rejects a non-uuid `id` before running. None contradicts the Interface contract.
+  - Commands run in `D:\utopia`: every grep clause of the Verify, as written, in one chain: pass. `docker exec utopia-db-1 psql … DROP DATABASE IF EXISTS m002_t004 … CREATE DATABASE m002_t004`: ok. `cargo run -p utopia-store --example migrate` against `m002_t004`: ok. `UTOPIA_TEST_REQUIRE_DB=1 cargo test -p utopia-server -- every_corpus_md_file_is_indexed`: server recompiled, `docs_corpus::tests::every_corpus_md_file_is_indexed ... ok`, 1 passed, 0 failed. Run with the warm `CARGO_TARGET_DIR` named in the brief, not an empty one; the `tee`/count tail of the Verify was not run as written. Nothing refused by the guard. `git status --short` shows only the two `files` paths and this task file.
+- 2026-11-19 — orchestrator Verify (sidecar gsd-path-verify/task-t004-verify): pass, exit 0; output tail:
+  ```
+     Compiling wiremock v0.6.5
+     Compiling oxrdfio v0.2.5
+     Compiling sqlparser v0.62.0
+     Compiling pgvector v0.4.2
+     Compiling utopia-extract v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t004-verify\crates\utopia-extract)
+     Compiling object_store v0.14.1
+     Compiling utopia-core v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t004-verify\crates\utopia-core)
+     Compiling axum-extra v0.10.3
+     Compiling utopia-store v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t004-verify\crates\utopia-store)
+     Compiling utopia-search v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t004-verify\crates\utopia-search)
+     Compiling rig-agent v0.42.0
+     Compiling utopia-server v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t004-verify\crates\utopia-server)
+      Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 34s
+       Running unittests src\main.rs (C:/Users/Owner/.gsd-path/cargo-target/finish-m002-T004\debug\deps\utopia_server-0a73fc6c26d41d5f.exe)
+  
+  running 1 test
+  test docs_corpus::tests::every_corpus_md_file_is_indexed ... ok
+  
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 879 filtered out; finished in 0.00s
+  ```
