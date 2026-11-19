@@ -2,14 +2,14 @@
 pipeline: gsd-path/v2
 project: utopia
 milestone: token-review-reads
-phase: ship
+phase: shipped
                     # inspect only for brownfield; greenfield starts at define
                     # roadmap only in program flow (CHARTER.md exists)
-status: active
+status: done
 branch: gsd-path/M002
                     # the router rebinds before any next-milestone file change
                     # the bound branch is never main; ship integrates it there
-archive: null
+archive: .project/archive/002-token-review-reads
 integration_default: direct
 integration: direct
 integration_source: default
@@ -61,3 +61,5 @@ it on completion. If this file and the artifacts disagree, the artifacts win
 - 2026-11-19 — build — plan defect repaired: T002 files gain review_attribution_tests.rs, T002 supersedes T001 Verify and carries its checks (orchestrator answer, driver D092)
 - 2026-11-19 — build — plan defect repaired: T003 Verify no longer freezes review_attribution_tests.rs, which T002 changed under driver D092
 - 2026-11-19 — ship — build done; final review pending
+- 2026-11-19 — ship — final gate passed; shipping approval pending
+- 2026-11-19 — shipped — archive preflight passed; shipment recorded

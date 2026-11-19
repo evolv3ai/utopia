@@ -73,8 +73,8 @@ Open questions
 Goal: An agent holding a personal token lists every one of the thirteen Review sections and reads any listed item's evidence over the token API and MCP, seeing the same items a signed-in editor sees.
 Depends on: [M001]
 Surfaces: token-authenticated HTTP API, MCP endpoint
-Status: active
-Archive: null
+Status: shipped
+Archive: .project/archive/002-token-review-reads
 Integrated: null
 
 Scope: in
