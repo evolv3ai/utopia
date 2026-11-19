@@ -16,7 +16,7 @@ Depends on: []
 Surfaces: token-authenticated HTTP API, MCP endpoint, Review tab in the web app (Agent History section), Activity view in the base settings of the web app
 Status: shipped
 Archive: .project/archive/001-token-review-skeleton
-Integrated: null
+Integrated: 904b2a20380719553896160aa05d0af4f3a561ce
 
 Scope: in
 - Decision record ADR 0076, written before the first route or schema change: the opened Review routes and MCP tools, the owner's ruled per-operation authority table with its reasons, the `token_agent_actions` ledger, attribution as owner plus token, the named constants (batch cap 50, 200 finalized writes per rolling hour), and the statement that a merge revert restores graph state only. The low-confidence "ontology adoption has no undo" reason is confirmed or corrected against the store before the record is final. ADR and migration numbers start at 0076 and 0128, re-checked against upstream before each landing; migration SQL is idempotent.
@@ -73,7 +73,7 @@ Open questions
 Goal: An agent holding a personal token lists every one of the thirteen Review sections and reads any listed item's evidence over the token API and MCP, seeing the same items a signed-in editor sees.
 Depends on: [M001]
 Surfaces: token-authenticated HTTP API, MCP endpoint
-Status: pending
+Status: active
 Archive: null
 Integrated: null
 

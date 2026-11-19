@@ -1,29 +1,29 @@
 # Docs Audit
 
 Repo root: D:\utopia
-Audited: 2026-11-18
-Audited HEAD: 3d307f6236904a12ae50e2f31f0d1d1f02f3bc25
+Audited: 2026-11-19
+Audited HEAD: 904b2a20380719553896160aa05d0af4f3a561ce
 Alignment mode: no
 
 ## Summary
 
 | Verdict | Count |
 |---------|-------|
-| verified | 177 |
-| stale | 27 |
-| aspirational | 3 |
-| unverifiable | 4 |
+| verified | 204 |
+| stale | 29 |
+| aspirational | 4 |
+| unverifiable | 3 |
 | descriptive docs (no testable claims) | 3 |
 
-Worst drift: README.md's Roadmap still lists business rules, OIDC SSO and backup/restore commands as unbuilt (and two design files repeat "proposed and not built") while `attribute_rules`, `oidc_routes.rs` and the `utopia-cli` backup/restore crate are in the code; README.md also says derivation is off by default while migration 0050 turned it on, and links a `docs/walkthrough.md` that is not in the repository.
+Worst drift: README.md's Roadmap still lists business rules, OIDC SSO and backup/restore commands as unbuilt (and two design files repeat "proposed and not built") while `attribute_rules`, `oidc_routes.rs` and the `utopia-cli` backup/restore crate are in the code; the newest record, ADR 0076 decision 12, says batch, merge revert and manual merge answer a token with `token_operation_not_open` while those routes are session-only and answer 401.
 
-Method note: all checks ran in the disposable verify sidecar at the audited HEAD. Two commands were executed (`node --test scripts/bench/lib.test.mjs`, `cargo fmt --all --check`); every other verdict rests on static evidence (file, symbol, migration, workflow or git-history lookups). `cargo test`, `cargo clippy`, `pnpm build`, Docker and live-model bench runs were not executed. For decision records the audited claim is the record's own status line; "open:" remainders and measured numbers inside records were not individually reproduced.
+Method note: delta re-audit against the prior audit (Audited HEAD 3d307f6). All checks ran in the disposable verify sidecar at the audited HEAD. Rows marked `unchanged: ` are carried under the delta rule; every other row was re-verified now (file, symbol, line, migration, workflow and git-history lookups repeated at 904b2a2, with line numbers updated where the code moved). Two commands were executed: `node --test scripts/bench/lib.test.mjs` (15 pass) and `cargo fmt --all --check`, which now exits 1 on crates/utopia-server/src/api/review_attribution_tests.rs. `cargo test`, `cargo clippy`, `pnpm build`, Docker, the DB-backed review tests and live-model bench runs were not executed; no remote was contacted. For decision records the audited claim is the record's own status line, except 0076, whose decisions were checked individually. The two branch-protection claims in CONTRIBUTING.md and CONTRIBUTING.zh-CN.md are suppressed by the accept-drift rulings on queue items 13 and 14, so those claim rows and queue rows are retired.
 
 ## Doc: .github/PULL_REQUEST_TEMPLATE.md
 
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
-| "`CURRENT_SCHEMA_VERSION` in `crates/utopia-cli/src/main.rs` equals the number of files in `migrations/`" | structure | verified | crates/utopia-cli/src/main.rs:85 `CURRENT_SCHEMA_VERSION: u32 = 113`; `ls migrations` → 113 files |
+| "`CURRENT_SCHEMA_VERSION` in `crates/utopia-cli/src/main.rs` equals the number of files in `migrations/`" | structure | verified | crates/utopia-cli/src/main.rs:85 `CURRENT_SCHEMA_VERSION: u32 = 114`; `ls migrations` → 114 files (0128 added, constant bumped by commit aab411c) |
 | "For changes under `web/`: `pnpm build` and `pnpm test` pass" | command | verified | web/package.json scripts `build`, `test` exist; .github/workflows/checks.yml `web` job runs both (static; not executed) |
 | "UI strings are in both `web/src/i18n/en.ts` and `zh.ts`" | structure | verified | web/src/i18n/ contains en.ts, zh.ts, index.ts |
 
@@ -36,30 +36,28 @@ Method note: all checks ran in the disposable verify sidecar at the audited HEAD
 | "The sealing key is left out of the archive by default" | feature | verified | crates/utopia-cli/src/main.rs:26-29 `--include-secret-key` doc comment "Off by default"; :432-434 |
 | "`schema_version`: pulled from the running migrations" | feature | stale | crates/utopia-cli/src/main.rs:79-85: a hand-maintained constant `CURRENT_SCHEMA_VERSION`, "Kept as a constant — bumping is a deliberate decision" |
 | "the operator can pipe `utopia backup --output -` to `aws s3 cp - s3://…` today" | command | aspirational | No `"-"`/stdout output handling in crates/utopia-cli/src/main.rs (grep for `"-"` and stdout finds only `Stdio::null()` at :329); same doc says backup writes a single `*.tar.gz` file and refuses to overwrite |
-| "CI provides PostgreSQL 16 clients" | config | verified | .github/workflows/checks.yml `test` job installs `postgresql-client-16` |
+| "CI provides PostgreSQL 16 clients" | config | verified | unchanged: .github/workflows/checks.yml `test` job installs `postgresql-client-16` |
 
 ## Doc: CONTRIBUTING.md
 
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
-| "CI runs exactly this" (`cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `pnpm install --frozen-lockfile && pnpm build`) | command | verified | .github/workflows/checks.yml lint/test/web jobs run these exact commands; `cargo fmt --all --check` executed in sidecar → exit 0 (clippy, test, pnpm build not executed) |
+| "CI runs exactly this" (`cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `pnpm install --frozen-lockfile && pnpm build`) | command | verified | .github/workflows/checks.yml:41,43,84,182 run these exact commands (lint/test/web jobs). `cargo fmt --all --check` executed in sidecar with rustfmt 1.10.0-stable → exit 1: it reports two diffs in crates/utopia-server/src/api/review_attribution_tests.rs (:411, :488), so the CI `lint` job would be red at this HEAD; the doc's statement about what CI runs still holds (clippy, test, pnpm build not executed) |
 | "that is how the `migrations` job in CI runs the whole `utopia-store` suite" | config | stale | .github/workflows/checks.yml: `UTOPIA_TEST_REQUIRE_DB` is set on the `test` job; the `migrations` job only runs `sqlx migrate run` twice and its comment says the DB-backed tests no longer run there |
 | "`test_db::url()` reads `UTOPIA_DATABASE_URL`. With `UTOPIA_TEST_REQUIRE_DB=1` also set, a missing database is a failure" | config | verified | crates/utopia-store/src/test_db.rs references both variables |
-| "export UTOPIA_DATABASE_URL=postgres://utopia:utopia@localhost:1517/utopia" (1517 is the host-side port) | config | verified | docker-compose.yml:27 `${UTOPIA_DB_BIND:-127.0.0.1:1517}:5432`; .env.example same URL |
+| "export UTOPIA_DATABASE_URL=postgres://utopia:utopia@localhost:1517/utopia" (1517 is the host-side port) | config | verified | unchanged: docker-compose.yml:27 `${UTOPIA_DB_BIND:-127.0.0.1:1517}:5432`; .env.example same URL |
 | "`cargo test --locked -p utopia-store --test human_phrase_materialization_delivery -- --ignored --skip crash_child ...`" and the `busy_defers_without_retaining_connections` lib test | command | verified | crates/utopia-store/tests/human_phrase_materialization_delivery.rs (contains `crash_child`); crates/utopia-store/src/materialize_delivery_tests.rs `busy_defers_without_retaining_connections` (static; not executed) |
 | "CI runs `cargo test --workspace`, `pnpm test` and `scripts/bench/lib.test.mjs`, and nothing else" | config | verified | .github/workflows/checks.yml test + web jobs; `node --test scripts/bench/lib.test.mjs` executed in sidecar → 15 pass, 0 fail |
-| "`docker-compose.yml` defaults `UTOPIA_IMAGE` to a fixed tag ... the pin has been on one of them since rc8" | config | verified | docker-compose.yml:49 `${UTOPIA_IMAGE:-ghcr.io/deeplethe/utopia:0.1.0-rc9}` |
-| "Both branches are protected: pull request required, CI (`backend` and `web`) must pass, no force pushes, no deletions" | config | unverifiable | Branch protection lives in GitHub repository settings, not in the repo; needs forge access. checks.yml does define the `backend` and `web` job names |
-| "Every workflow declares its own `permissions:`" | config | verified | grep `permissions:` → checks.yml, release.yml, star-history.yml each have one block |
+| "`docker-compose.yml` defaults `UTOPIA_IMAGE` to a fixed tag ... the pin has been on one of them since rc8" | config | verified | unchanged: docker-compose.yml:49 `${UTOPIA_IMAGE:-ghcr.io/deeplethe/utopia:0.1.0-rc9}` |
+| "Every workflow declares its own `permissions:`" | config | verified | unchanged: grep `permissions:` → checks.yml, release.yml, star-history.yml each have one block |
 | "Source installs need Poppler ... the Docker image includes both" (`poppler-utils poppler-data`) | config | verified | docker/Dockerfile:27 installs `poppler-utils poppler-data`; crates/utopia-ingest/src/parsers.rs uses `pdftotext` |
 
 ## Doc: CONTRIBUTING.zh-CN.md
 
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
-| "`cargo fmt --all --check` / `cargo clippy --workspace --all-targets -- -D warnings` / `cargo test --workspace` / `pnpm install --frozen-lockfile && pnpm build`" (CI 跑的就是这些) | command | verified | .github/workflows/checks.yml; `cargo fmt --all --check` executed in sidecar → exit 0 (others static) |
+| "`cargo fmt --all --check` / `cargo clippy --workspace --all-targets -- -D warnings` / `cargo test --workspace` / `pnpm install --frozen-lockfile && pnpm build`" (CI 跑的就是这些) | command | verified | .github/workflows/checks.yml:41,43,84,182; `cargo fmt --all --check` executed in sidecar → exit 1 (two diffs in crates/utopia-server/src/api/review_attribution_tests.rs:411,488); the listed commands are the ones CI runs (others static) |
 | "`cargo run -p utopia-store --example migrate` # 空库先迁移；CI 的 backend job 也是这么做的" | command | verified | crates/utopia-store/examples/migrate.rs; checks.yml `test` job step runs the same command (static; not executed) |
-| "两个分支都开了保护：必须走 PR，CI（`backend` 与 `web`）必须通过，禁止强推与删除" | config | unverifiable | GitHub branch-protection settings are not in the repo; needs forge access |
 
 ## Doc: README.md
 
@@ -69,23 +67,23 @@ Method note: all checks ran in the disposable verify sidecar at the audited HEAD
 | "One Rust binary and one Postgres. Full-text search is embedded in the binary, vectors go in pgvector, and the job queue is a table" | structure | verified | Cargo.toml deps `tantivy`, `pgvector`; docker-compose.yml has only `db` (pgvector/pgvector:pg16) and `app`; crates/utopia-store/src/jobs.rs |
 | "Upload PDF, DOCX, PPTX, XLSX, XLS, ODS, CSV, TSV, Markdown, HTML or plain text" | feature | verified | crates/utopia-ingest/src/lib.rs:347-350 dispatch on xlsx/xls/ods/pptx/csv/tsv; Cargo.toml `pdf-extract`, `calamine`, `htmd`, `chardetng` |
 | "Web pages, RSS, GitHub, Jira, Notion, WebDAV and S3-compatible buckets sync on a schedule" | integration | verified | crates/utopia-core/src/models.rs:306 `SourceKind` has Url, Rss, GithubIssues, GithubRepo, JiraIssues, Notion, Webdav, S3 (and also Gitlab*, AzureBlob, Gcs, GoogleDrive, which the README does not list) |
-| "Scans and images are read by a MinerU service or a Volcengine Ark vision model" | integration | verified | crates/utopia-core/src/models.rs:522 (MinerU layout service setting); crates/utopia-server/src/readers/ark_ocr.rs |
+| "Scans and images are read by a MinerU service or a Volcengine Ark vision model" | integration | verified | crates/utopia-core/src/models.rs:537-542 (MinerU layout service setting); crates/utopia-server/src/readers/ark_ocr.rs |
 | "Full-text on Tantivy, vectors on pgvector, fused with RRF" | feature | verified | crates/utopia-search/src/lib.rs and crates/utopia-server/src/retrieval.rs reference RRF; Cargo.toml `tantivy`, `pgvector` |
-| "An MCP server for every knowledge base" | feature | verified | crates/utopia-server/src/api/mod.rs:238 `.route("/kbs/{id}/mcp", post(mcp::handle))` |
+| "An MCP server for every knowledge base" | feature | verified | crates/utopia-server/src/api/mod.rs:240 `.route("/kbs/{id}/mcp", post(mcp::handle))` |
 | "Five ship inside the binary: schema.org, W3C Org, PROV-O, FOAF and IOF Core" | feature | verified | crates/utopia-server/src/ontology_packs.rs:42-78 five `include_bytes!` of crates/utopia-server/packs/*.gz |
-| "Derivation is off by default, since a wrong axiom derives wrong facts" | config | stale | migrations/0050_a_new_base_starts_with_its_engines_on.sql `ALTER COLUMN materialize_inferences SET DEFAULT TRUE`; crates/utopia-core/src/models.rs:1193 comment says default on |
+| "Derivation is off by default, since a wrong axiom derives wrong facts" | config | stale | migrations/0050_a_new_base_starts_with_its_engines_on.sql `ALTER COLUMN materialize_inferences SET DEFAULT TRUE`; crates/utopia-core/src/models.rs:1208-1211 comment says default on (0050) |
 | "Mount a database on a base (Postgres, MySQL and the engines that speak its protocol, ClickHouse, Trino for Iceberg / Delta Lake / Hive, Databricks, Snowflake)" | integration | verified | crates/utopia-server/src/query_engine/ (mod.rs:48 `"trino"`, clickhouse.rs, snowflake/databricks modules per mod.rs:7); migrations 0021, 0025, 0106 |
 | "Each knowledge base has its own members and roles: owner, admin, editor and viewer" | feature | verified | crates/utopia-core/src/models.rs:55 `enum Role { Viewer, Editor, Admin, Owner }` |
 | "The first account registered becomes the system administrator" | feature | verified | crates/utopia-store/src/accounts.rs:18,58 first user creates the organisation and becomes owner + system admin |
 | "Requirements: Docker (local development also needs Rust 1.85+, Node 20+, pnpm)" | config | unverifiable | No `rust-version` in Cargo.toml or any crate and no rust-toolchain file; CI uses `dtolnay/rust-toolchain@stable`, Dockerfile `rust:1-slim-bookworm`. Node 20 matches checks.yml and docker/Dockerfile:2. Confirming the 1.85 floor needs a build on 1.85 |
-| "The prebuilt image is published for `linux/amd64` and `linux/arm64`" | config | verified | .github/workflows/release.yml:36-40 matrix platforms linux/amd64, linux/arm64 |
+| "The prebuilt image is published for `linux/amd64` and `linux/arm64`" | config | verified | unchanged: .github/workflows/release.yml:36-40 matrix platforms linux/amd64, linux/arm64 |
 | "docker compose --profile app up -d" / "Open http://localhost:1516" | command | verified | docker-compose.yml `app` service has `profiles: ["app"]`, ports `1516:1516` (static; not executed) |
 | "docker compose -f docker-compose.yml -f docker-compose.build.yml --profile app up -d --build" | command | verified | docker-compose.build.yml and docker/Dockerfile exist (static; not executed) |
 | "cargo run -p utopia-server" (backend on :1516) / "cd web && pnpm install && pnpm dev" (frontend on :5173, proxying /api) | command | verified | crates/utopia-core/src/config.rs:60 `bind_addr: "0.0.0.0:1516"`; web/vite.config.ts:11-14 port 5173, `/api` proxy to 127.0.0.1:1516 (static; not executed) |
 | "[ ] **Business rules**: rules written by people over an entity's attribute facts ... (#277)" | status | stale | migrations/0028_a_rule_reads_attributes.sql `CREATE TABLE attribute_rules`; commit 0b18c7c "A rule reads attributes and concludes a type (0021 / #277)"; docs/decisions/0021 status Implemented |
 | "[ ] **Agent memory over MCP**: episode writes, the retrieve endpoint, and the MCP server" | status | stale | The MCP server and the `remember` tool exist (crates/utopia-server/src/api/mcp.rs; commit 57680e9 "An agent can record over MCP"); at least the "MCP server" part is built |
 | "[ ] **Enterprise**: OIDC SSO, backup and restore commands, benchmarks at 100k documents" | status | stale | crates/utopia-server/src/api/oidc_routes.rs, migrations 0056 and 0103, docs/decisions/0069 Implemented; crates/utopia-cli backup/restore (.roadmap-proposals/backup-restore.md: "Both halves are implemented") |
-| "Pin a specific version with `UTOPIA_IMAGE` in production" | config | verified | docker-compose.yml:49 |
+| "Pin a specific version with `UTOPIA_IMAGE` in production" | config | verified | unchanged: docker-compose.yml:49 |
 
 ## Doc: README.zh-CN.md
 
@@ -102,7 +100,7 @@ Method note: all checks ran in the disposable verify sidecar at the audited HEAD
 
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
-| "By default the port binds to loopback (`127.0.0.1:1517`)" / default password `utopia` | config | verified | docker-compose.yml:10 `${UTOPIA_DB_PASSWORD:-utopia}`, :27 `${UTOPIA_DB_BIND:-127.0.0.1:1517}:5432` |
+| "By default the port binds to loopback (`127.0.0.1:1517`)" / default password `utopia` | config | verified | unchanged: docker-compose.yml:10 `${UTOPIA_DB_PASSWORD:-utopia}`, :27 `${UTOPIA_DB_BIND:-127.0.0.1:1517}:5432` |
 | "Credentials sealed at rest ... AES-256-GCM ... `UTOPIA_SECRET_KEY`, or `secret.key` generated in the data directory" | feature | verified | crates/utopia-core/src/secrets.rs uses `Aes256Gcm`; crates/utopia-core/src/config.rs references `secret.key`; Cargo.toml `aes-gcm` |
 | "`Secure` on session cookies behind TLS — decided from `X-Forwarded-Proto` ... `UTOPIA_COOKIE_SECURE=true`" | config | verified | crates/utopia-server/src/auth.rs and crates/utopia-core/src/config.rs reference both |
 | "Optional least-privilege runtime role — set `UTOPIA_APP_DB_PASSWORD` and `UTOPIA_MIGRATION_URL`" | config | verified | docker-compose.yml:19,62; docker/init-app-role.sh; migrations/0010_least_privilege_role.sql |
@@ -114,7 +112,7 @@ Method note: all checks ran in the disposable verify sidecar at the audited HEAD
 
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
-| "数据库默认口令是 `utopia`。默认配置下端口只绑回环（`127.0.0.1:1517`）" | config | verified | docker-compose.yml:10,27 |
+| "数据库默认口令是 `utopia`。默认配置下端口只绑回环（`127.0.0.1:1517`）" | config | verified | unchanged: docker-compose.yml:10,27 |
 | "按 `X-Forwarded-Proto` 判定 ... `UTOPIA_COOKIE_SECURE`" | config | verified | crates/utopia-server/src/auth.rs, crates/utopia-core/src/config.rs |
 | "口令哈希用 argon2" | feature | verified | crates/utopia-server/src/api/auth_routes.rs |
 
@@ -123,7 +121,7 @@ Method note: all checks ran in the disposable verify sidecar at the audited HEAD
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
 | "由 `src/ontology_packs.rs` 用 `include_bytes!` 内嵌进二进制" (five pack files listed) | structure | verified | crates/utopia-server/src/ontology_packs.rs:42-78; all five .gz files present in crates/utopia-server/packs/ |
-| "未压缩合计 1.7 MB，压缩后 316 KB" | structure | verified | `gzip -l packs/*.gz` → 313,173 compressed / 1,749,220 uncompressed bytes |
+| "未压缩合计 1.7 MB，压缩后 316 KB" | structure | verified | unchanged: `gzip -l packs/*.gz` → 313,173 compressed / 1,749,220 uncompressed bytes |
 | "由 `src/scenario_packs.rs` 内嵌 ... 跑 `cargo test -p utopia-server scenario_packs`" | command | verified | crates/utopia-server/src/scenario_packs.rs; packs/scenarios/ has three JSON packs (static; test not executed) |
 
 ## Doc: crates/utopia-server/testdata/README.md
@@ -150,7 +148,7 @@ Method note: all checks ran in the disposable verify sidecar at the audited HEAD
 
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
-| "Status: Implemented (#44)" | status | verified | commit dd1f7b9 "Adopting a predicate moves the facts that were waiting for it" (#44) |
+| "Status: Implemented (#44)" | status | verified | unchanged: commit dd1f7b9 "Adopting a predicate moves the facts that were waiting for it" (#44) |
 
 ## Doc: docs/decisions/0004-language-and-localization.md
 
@@ -162,7 +160,7 @@ Method note: all checks ran in the disposable verify sidecar at the audited HEAD
 
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
-| "Status: Implemented · open: `document.no_text_layer` is unwired" | status | stale | crates/utopia-store/src/alerts.rs:60-65 `DOCUMENT_NEEDS_READER = "document.needs_reader"` with a comment that this is the `document.no_text_layer` 0005 left empty; wired at crates/utopia-server/src/pipeline.rs:96 and tested in pipeline_tests.rs:745 |
+| "Status: Implemented · open: `document.no_text_layer` is unwired" | status | stale | crates/utopia-store/src/alerts.rs:65 `DOCUMENT_NEEDS_READER = "document.needs_reader"` with a comment that this is the `document.no_text_layer` 0005 left empty; wired at crates/utopia-server/src/pipeline.rs:96 and tested in pipeline_tests.rs:745 |
 
 ## Doc: docs/decisions/0006-ontology-scale-and-the-prompt.md
 
@@ -174,7 +172,7 @@ Method note: all checks ran in the disposable verify sidecar at the audited HEAD
 
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
-| "Status: Implemented (#112)" | status | verified | commit b1b2bb8 (#112) |
+| "Status: Implemented (#112)" | status | verified | unchanged: commit b1b2bb8 (#112) |
 
 ## Doc: docs/decisions/0008-ontology-packs-as-cold-start.md
 
@@ -186,7 +184,7 @@ Method note: all checks ran in the disposable verify sidecar at the audited HEAD
 
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
-| "Status: Implemented · open: `metric` and `dimension` retire under 0036" | status | verified | migrations/0024_types_resolve_themselves.sql; `metric`/`dimension` still present in crates/utopia-core/src/models.rs |
+| "Status: Implemented · open: `metric` and `dimension` retire under 0036" | status | verified | migrations/0024_types_resolve_themselves.sql; `metric`/`dimension` are still the accepted mapping kinds at crates/utopia-server/src/api/mapping_routes.rs:264 |
 
 ## Doc: docs/decisions/0010-no-relation-is-no-relation.md
 
@@ -228,7 +226,7 @@ Method note: all checks ran in the disposable verify sidecar at the audited HEAD
 
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
-| "Status: In progress · A, B1–B3, C1 and C2 done · open: B4, C3–C5, D" | status | verified | Sampled: A1 migrations/0018_a_fact_awaiting_a_nod.sql; C2 crates/utopia-core/src/models.rs:1197 "(0016 C2)"; C1 scripts/bench/truth/*.wikidata.json; B4 (R3) has no code |
+| "Status: In progress · A, B1–B3, C1 and C2 done · open: B4, C3–C5, D" | status | verified | Sampled: A1 migrations/0018_a_fact_awaiting_a_nod.sql; C2 crates/utopia-core/src/models.rs:1212 "(0016 C2)"; C1 scripts/bench/truth/*.wikidata.json; B4 (R3) has no code |
 
 ## Doc: docs/decisions/0017-a-contradiction-points-upstream.md
 
@@ -318,7 +316,7 @@ Method note: all checks ran in the disposable verify sidecar at the audited HEAD
 
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
-| "Status: Implemented (#486, #593) · open: the UI cut" | status | verified | commit 2838296 "A relation says whether it happens or holds" (#593) |
+| "Status: Implemented (#486, #593) · open: the UI cut" | status | verified | unchanged: commit 2838296 "A relation says whether it happens or holds" (#593) |
 
 ## Doc: docs/decisions/0032-a-rule-computes-what-it-concludes.md
 
@@ -348,7 +346,7 @@ Method note: all checks ran in the disposable verify sidecar at the audited HEAD
 
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
-| "Status: In progress · conversion expressions (decision 3) and decision 7 built · open: #554, #556" | status | verified | migrations/0044, 0045 (schema document leaves extraction), 0047; `metric`/`dimension` still in models.rs (open part) |
+| "Status: In progress · conversion expressions (decision 3) and decision 7 built · open: #554, #556" | status | verified | migrations/0044, 0045 (schema document leaves extraction), 0047; `metric`/`dimension` still accepted at crates/utopia-server/src/api/mapping_routes.rs:264 (open part) |
 
 ## Doc: docs/decisions/0037-a-relation-carries-its-own-attributes.md
 
@@ -390,13 +388,13 @@ Method note: all checks ran in the disposable verify sidecar at the audited HEAD
 
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
-| "Status: Accepted 2026-09-14 · no code on `dev` (#699 closed)" | status | verified | No reference to 0043 in crates/*/src; no commit with subject "(#699)" in history (absence evidence only) |
+| "Status: Accepted 2026-09-14 · no code on `dev` (#699 closed)" | status | verified | The only `0043` in crates/*/src is crates/utopia-store/src/documents.rs:1512, which names the sha index of migrations/0043_a_blob_is_looked_up_by_its_hash.sql, not this record; no commit with subject "(#699)" in history; 0076 builds its own ledger instead of 0043's (absence evidence only) |
 
 ## Doc: docs/decisions/0044-the-ontology-is-a-view-over-what-documents-say.md
 
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
-| "Status: In progress · accepted 2026-09-17 · cut 1 built (#731), cut 2 mostly built (#751, #876, #878, #882), cut 5 is 0061, cut 6 built (#885)" | status | verified | commits 60df635, f760c76, 60cd5d3, 5fc36e7, 58b4bf9, ef6495c; migrations 0061-0068, 0074 (bench percentages in the status line not reproduced) |
+| "Status: In progress · accepted 2026-09-17 · cut 1 built (#731), cut 2 mostly built (#751, #876, #878, #882), cut 5 is 0061, cut 6 built (#885)" | status | verified | unchanged: commits 60df635, f760c76, 60cd5d3, 5fc36e7, 58b4bf9, ef6495c; migrations 0061-0068, 0074 (bench percentages in the status line not reproduced) |
 
 ## Doc: docs/decisions/0045-a-time-mention-is-resolved-against-its-document.md
 
@@ -426,7 +424,7 @@ Method note: all checks ran in the disposable verify sidecar at the audited HEAD
 
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
-| "Status: Proposed" | status | verified | No reference to 0049 in crates/*/src; docs/design/rules.md lists unit/datatype checks at write time under "Proposed and not built" (absence evidence only) |
+| "Status: Proposed" | status | verified | No reference to 0049 in crates/*/src (grep); docs/design/rules.md lists unit/datatype checks at write time under "Proposed and not built" (absence evidence only) |
 
 ## Doc: docs/decisions/0050-an-action-attempt-keeps-its-identity-and-uncertain-outcome.md
 
@@ -444,19 +442,19 @@ Method note: all checks ran in the disposable verify sidecar at the audited HEAD
 
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
-| "Status: Proposed" | status | stale | crates/utopia-server/src/api/documents_routes.rs:219 cites (0052) for shipped behaviour; routes `/documents/{id}/content` (api/mod.rs:425) and `.../documents/by-external-id` (:484) exist; docs/design/access-and-audit.md cites [0052] under "What it does today". How much of the record is built was not traced |
+| "Status: Proposed" | status | stale | crates/utopia-server/src/api/documents_routes.rs:219 cites (0052) for shipped behaviour; routes `/documents/{id}/content` (api/mod.rs:427) and `.../documents/by-external-id` (:486) exist; docs/design/access-and-audit.md cites [0052] under "What it does today". How much of the record is built was not traced |
 
 ## Doc: docs/decisions/0053-a-phrase-decision-records-the-inputs-it-considered.md
 
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
-| "Status: Implemented 2026-09-23 (#878, migration 0072) · revised 2026-09-26 (migration 0092) · revised 2026-09-27 (#975, migration 0098) · revised 2026-10-17 (#1295, migration 0114)" | status | verified | migrations 0072, 0092, 0098, 0114 present; commits 5fc36e7, 7ceead2, fea5171 |
+| "Status: Implemented 2026-09-23 (#878, migration 0072) · revised 2026-09-26 (migration 0092) · revised 2026-09-27 (#975, migration 0098) · revised 2026-10-17 (#1295, migration 0114)" | status | verified | unchanged: migrations 0072, 0092, 0098, 0114 present; commits 5fc36e7, 7ceead2, fea5171 |
 
 ## Doc: docs/decisions/0054-a-source-may-push-statements-in-the-open-contract.md
 
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
-| "Status: Implemented · cut 1 (#884) · revised 2026-10-23 (#1375)" | status | verified | commits 22c21ea, ead46cb; api/mod.rs:507 `/sources/{source_id}/statements`; `SourceKind::Statements` |
+| "Status: Implemented · cut 1 (#884) · revised 2026-10-23 (#1375)" | status | verified | unchanged: commits 22c21ea, ead46cb; api/mod.rs:507 `/sources/{source_id}/statements`; `SourceKind::Statements` |
 
 ## Doc: docs/decisions/0060-a-rule-definition-has-a-history.md
 
@@ -498,7 +496,7 @@ Method note: all checks ran in the disposable verify sidecar at the audited HEAD
 
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
-| "Status: Implemented · 2026-10-02 · #1010, migration 0103" | status | verified | migrations/0103 `CREATE TABLE oidc_exchanges`; api/mod.rs:125 `/auth/oidc/exchange` |
+| "Status: Implemented · 2026-10-02 · #1010, migration 0103" | status | verified | migrations/0103 `CREATE TABLE oidc_exchanges`; api/mod.rs:127 `/auth/oidc/exchange` |
 
 ## Doc: docs/decisions/0067-each-task-chooses-its-model.md
 
@@ -528,7 +526,7 @@ Method note: all checks ran in the disposable verify sidecar at the audited HEAD
 
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
-| "Implemented 2026-11-10 (#1359, #1397, migration 0119)" | status | verified | commits 6431a5a, 3d307f6 (HEAD); migrations/0119_a_source_checkpoint_ends_at_a_timestamp_boundary.sql |
+| "Implemented 2026-11-10 (#1359, #1397, migration 0119)" | status | verified | commits 6431a5a, 3d307f6; migrations/0119_a_source_checkpoint_ends_at_a_timestamp_boundary.sql |
 
 ## Doc: docs/decisions/0073-a-scenario-pack-is-a-vocabulary-with-its-questions.md
 
@@ -548,16 +546,38 @@ Method note: all checks ran in the disposable verify sidecar at the audited HEAD
 |-------|------|---------|----------|
 | "Status: Implemented · 2026-10-28 · no migration (the column came with 0119)" | status | verified | migrations/0119 present; crates/utopia-server/src/api/sources_checkpoint_tests.rs |
 
+## Doc: docs/decisions/0076-a-token-agent-acts-on-review-under-a-ruled-table.md
+
+| Claim | Type | Verdict | Evidence |
+|-------|------|---------|----------|
+| "Status: In progress · accepted 2026-11-18 · the keep slice built 2026-11-19 (migration 0128): a personal token reads Duplicates and Overview and keeps one duplicate pair through the policy function, over the token API and the MCP tools `review_list`, `review_item` and `review_keep`, with the `token_agent_actions` ledger, the precedent exclusion, and \"owner via token name\" in Agent History and Activity" | status | verified | migrations/0128_a_token_agent_action_is_kept_in_its_own_ledger.sql; crates/utopia-server/src/api/review_ops.rs:78-165 (list, item, summary, keep); review_tools.rs:24-26; crates/utopia-store/src/token_agent_actions.rs:56-180; governance.rs:85; web/src/pages/TokenAgentRow.tsx:12, Review.tsx:2274, KbSettings.tsx:680-684 (static; DB-backed tests not executed) |
+| "open: every row of the table except Keep stays closed to tokens" | status | stale | The alignment kind-word decision is open to write tokens: crates/utopia-server/src/api/review_routes.rs:1420-1422 `decide_alignment_kind_word` takes `SessionOrToken`, and decision 4's own table row says "Already open to write tokens under ADR 0014 decision 6". The other rows are closed as stated (`AuthUser` at review_routes.rs:398, 531, 653, 701, 806) |
+| "The handlers behind `GET /api/v1/kbs/{kb_id}/review?queue=duplicates`, `GET /api/v1/kbs/{kb_id}/review/summary` and `POST /api/v1/kbs/{kb_id}/review/{review_id}` (action `keep`) take `SessionOrToken` instead of `AuthUser`" (decision 1) | feature | verified | crates/utopia-server/src/api/review_routes.rs:86 (`list`), :315 (`decide`), :779 (`summary`) take `caller: SessionOrToken`; routes at api/mod.rs:534, 536, 551; the session branch runs the earlier code after the `caller.pat` early return |
+| "`review_list` takes a `section` parameter and applies the existing 1 to 200 page clamp; `review_item` returns one item's evidence; `review_keep` keeps one duplicate pair ... any other section answers the existing `unknown_queue`" (decision 2) | feature | verified | crates/utopia-server/src/api/review_tools.rs:24-26, 252-297; review_ops.rs:87-96 (`unknown_queue`, `clamp(1, 200)`); the write tool is listed only when `can_write` (review_tools.rs:143, mcp.rs:107-110) |
+| "The table is compiled in. It is not a per-base setting" / "The policy function lives with the `execution_gate` module ... answers `applied`, `held` or `proposed`. In this cut only the Keep row is reachable by a token" (decisions 3 to 5) | structure | verified | crates/utopia-store/src/execution_gate.rs:124 `AgentOperation` (19 variants, one per table row), :181 `agent_ruling` (no wildcard arm; Finalize / FinalizeBehindGate / ProposeOnly sets match the table), :200 `agent_policy`; the only callers pass `AgentOperation::Keep` (review_ops.rs:150, token_agent_actions.rs:67) |
+| "a token whose `kb_ids` exclude the base gets 404, the same answer as for a base that does not exist" (decision 6, said of every read) | feature | stale | True on the token API: crates/utopia-server/src/api/review_ops.rs:42-54 turns an excluded base into `NotFound`. Not true for the same reads over MCP: crates/utopia-server/src/api/mcp.rs:96-98 returns `AppError::Forbidden` (HTTP 403, error.rs:35) before any tool runs; web/src/docs/mcp.md:212 documents the 403 and review_mcp_tests.rs:548 covers it. The two docs disagree for the MCP surface |
+| Codes table: `token_read_only`, `token_kb_out_of_scope`, `token_owner_below_editor`, `already_decided`, `token_operation_not_open`; "scope is checked first" (decision 6) | feature | verified | crates/utopia-server/src/auth.rs:247-268 (`require_token_write`: scope, then `kb_ids`); review_ops.rs:31-37, 59-74; crates/utopia-store/src/token_agent_actions.rs:182-187 (`CodedConflict` `already_decided`); error.rs:36-40 |
+| "The ledger is `token_agent_actions` ... base, operation, target kind and id, owner, token, token name snapshot, outcome, request payload, time ... told apart by a `source` field" (decision 7) | structure | verified | migrations/0128_a_token_agent_action_is_kept_in_its_own_ledger.sql (columns kb_id, operation, target_kind, target_id, owner_id, token_id, token_name, outcome, payload, created_at); crates/utopia-store/src/token_agent_actions.rs:219-236 `"source": "token"`, :251 `agent_history`; review_routes.rs:164 |
+| "Every token Review write adds `detail.token_id` and a `detail.token_name` snapshot ... The stored HTTP `User-Agent` is returned to readers marked as declared ... A failed snapshot or audit write fails the action" (decision 8) | feature | verified | crates/utopia-store/src/token_agent_actions.rs:110-119, 164-178 (audit row written with `record_on` inside the transaction, then commit); audit.rs:188-197 `declared_client`; web/src/pages/TokenAgentRow.tsx:21-22; test review_mcp_tests.rs:1037 (static; not executed) |
+| "The governor's precedent queries and `settled_by_people` exclude audit rows whose detail carries a token id and review rows marked by the new nullable `resolution_reviews.decided_token`. `after_human_decision` is not called for a token decision ... `review/agent/{decision_id}`, stays session-only" (decision 9) | feature | verified | crates/utopia-store/src/governance.rs:85 `NOT_BY_TOKEN`, used at :101, :114, :128, :827; `decided_token IS NULL` at :171, :595; migrations/0128 `ADD COLUMN IF NOT EXISTS decided_token UUID`; review_ops.rs:142-165 makes no `after_human_decision` call; review_routes.rs:396-398 `agent_answer` takes `AuthUser`; crates/utopia-store/tests/a_token_keep_is_never_human_precedent.rs exists (not executed) |
+| "the session cap stays 500" (decision 10) | config | verified | crates/utopia-server/src/api/review_routes.rs:525 `BATCH_MAX: usize = 500`, :536 |
+| "To a token: merge ... (answered `token_operation_not_open`)" — the merge part (decision 12) | feature | verified | crates/utopia-server/src/api/review_routes.rs:321-327: a token sending any action other than `keep` to the decision route gets `review_ops::not_open()` (403); test review_token_api_tests.rs:402-403 |
+| "To a token: merge, manual merge, revert and batch (answered `token_operation_not_open`)" — the manual merge, revert and batch part | feature | aspirational | These three routes take `AuthUser` only (crates/utopia-server/src/api/review_routes.rs:529-531 `batch`, :651-653 `revert_merge`, :699-701 `manual_merge`), so a token gets 401 with no code (error.rs:34); test review_token_api_tests.rs:404-425 asserts `UNAUTHORIZED`; web/src/docs/mcp.md:259 documents 401. No commit ever answered these routes with the code |
+| "`save_agent_proposals`, `open_proposal`, `open_proposals` and `reject_proposal` in the store's ontology module ... `adopt` in `question_routes` (`POST /kbs/{id}/ontology/proposals/adopt`) ... `decide_proposal`, only rejects and answers `adoption_endpoint` ... `unadopt_types` ... behind `type_resolution_undo` ... `adopt_iri_onto_key`" | structure | verified | crates/utopia-store/src/ontology.rs:1979, 2003, 2021, 1963, 1561; crates/utopia-server/src/api/ontology_routes.rs:616-625, 808, 280; ontology_agent.rs:733, 1047, 1216; api/mod.rs:392; crates/utopia-store/src/resolution.rs:2726 (symbols located; the "no statement moves a row out of adopted" finding not re-derived) |
+| "The gaps are not reused (0055 to 0059 and 0068 here; 0081 to 0089, 0107, 0108, 0112 and 0124 among migrations)" | structure | verified | `ls docs/decisions` (0054 → 0060, 0067 → 0069); `ls migrations` → 114 files, highest 0128, with 0080 → 0090, 0111 → 0113, 0123 → 0125 and no 0127 (14 absent numbers including 0107 and 0108) |
+| "0127 is claimed by upstream #1496" | integration | unverifiable | A claim about open pull requests on the upstream forge (deeplethe/utopia); not checkable from the tree, and the brief forbids remote requests. migrations/ has no 0127, which is consistent with it |
+| "`scripts/check-upstream-numbers.sh <adr-number> <migration-number>` re-checks both ... Exit 0 is free, 1 names the colliding file, 2 means upstream could not be read" | command | verified | scripts/check-upstream-numbers.sh:3-5 (usage and exit codes), :23-41 `exit 2`, :157 `exit 1`, :160 `exit 0`; reads only `deeplethe/utopia` (:14-17) (static; not executed because it calls the upstream forge) |
+
 ## Doc: docs/decisions/README.md
 
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
-| "File names are `NNNN-short-english-title.md`, four digits, increasing in creation order, no gaps" | structure | stale | docs/decisions/ has no 0055, 0056, 0057, 0058, 0059 or 0068 (0054 → 0060, 0067 → 0069) |
-| "The directory is flat" | structure | verified | docs/decisions/ contains only files: 69 records + README.md |
-| Index: every record listed with the first word of its own status line | status | verified | 69 index rows vs 69 record files; first status word of each record compared with its index row → all match |
+| "File names are `NNNN-short-english-title.md`, four digits, increasing in creation order, no gaps" | structure | stale | docs/decisions/ has no 0055, 0056, 0057, 0058, 0059 or 0068 (0054 → 0060, 0067 → 0069); docs/decisions/0076-a-token-agent-acts-on-review-under-a-ruled-table.md:201-203 itself states these gaps exist and are not reused, contradicting "no gaps" |
+| "The directory is flat" | structure | verified | docs/decisions/ contains only files: 70 records + README.md |
+| Index: every record listed with the first word of its own status line | status | verified | 70 index rows (README.md:35-164, 0076 added at :91 as In progress) vs 70 record files; first status word of each record's status line compared with its index row → all match |
 | "`/docs/*` is git-ignored except `/docs/decisions/`, `/docs/design/` and `/docs/pipeline.md`" | config | verified | .gitignore: `/docs/*`, `!/docs/decisions/`, `!/docs/design/`, `!/docs/pipeline.md` |
 | "that page explains how things flow ... with five mermaid diagrams" | structure | verified | `grep -c '```mermaid' docs/pipeline.md` → 5 |
-| "A status line is one line. It starts with one of five words" | structure | verified | First words across the 69 records: Proposed, Accepted, In progress, Implemented, Superseded (0072 carries the word without the `Status` label) |
+| "A status line is one line. It starts with one of five words" | structure | verified | First words across the 70 records: Proposed, Accepted, In progress, Implemented, Superseded (0072 carries the word without the `Status` label); 0076:3 starts `In progress` |
 
 ## Doc: docs/design/README.md
 
@@ -573,9 +593,9 @@ Method note: all checks ran in the disposable verify sidecar at the audited HEAD
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
 | "a base has the roles Viewer, Editor and Admin (`access::kb_role`, `require_kb`)" | feature | stale | crates/utopia-core/src/models.rs:55 `enum Role { Viewer, Editor, Admin, Owner }`; README.md lists "owner, admin, editor and viewer". `access::kb_role` exists (crates/utopia-store/src/access.rs:12) |
-| "`personal_tokens` (prefix `utp_pat_` ...) ... writes an audit row `mcp.tool_called`" | feature | verified | migrations/0017_personal_tokens.sql; `utp_pat_` in crates/utopia-core/src/models.rs:1782; crates/utopia-server/src/api/mcp.rs:251 |
-| "`POST /auth/oidc/exchange` ... `UTOPIA_OIDC_EXCHANGE_AUDIENCES` ... spends it once (`oidc_exchanges`)" | feature | verified | api/mod.rs:125; api/oidc_exchange_tests.rs:88; migrations/0103:7 |
-| "`GET /kbs/{id}/sources/{sid}/documents/by-external-id?external_id=…`" | feature | verified | crates/utopia-server/src/api/mod.rs:484 |
+| "`personal_tokens` (prefix `utp_pat_` ...) ... writes an audit row `mcp.tool_called`" | feature | verified | migrations/0017_personal_tokens.sql; `utp_pat_` in crates/utopia-core/src/models.rs:1797; crates/utopia-server/src/api/mcp.rs:226,278 |
+| "`POST /auth/oidc/exchange` ... `UTOPIA_OIDC_EXCHANGE_AUDIENCES` ... spends it once (`oidc_exchanges`)" | feature | verified | api/mod.rs:127; api/oidc_exchange_tests.rs:88; migrations/0103:7 |
+| "`GET /kbs/{id}/sources/{sid}/documents/by-external-id?external_id=…`" | feature | verified | crates/utopia-server/src/api/mod.rs:486 |
 | "sealed at rest (`secrets::seal`), listed in `SOURCE_SECRET_KEYS`" | feature | verified | crates/utopia-core/src/secrets.rs; crates/utopia-core/src/models.rs:264 |
 | "`GET /kbs/{id}/export?format=turtle\|jsonld` streams the base as RDF" | feature | verified | crates/utopia-server/src/api/export_routes.rs:30 |
 | "Proposed and not built: OIDC SSO, backup and restore [0016 E, #712]" | status | stale | crates/utopia-server/src/api/oidc_routes.rs, migrations/0056 (SSO subject link), docs/decisions/0069 Implemented; crates/utopia-cli backup/restore with tests |
@@ -587,14 +607,14 @@ Method note: all checks ran in the disposable verify sidecar at the audited HEAD
 | "The loop is rig's multi-turn runner (`rig-core` / `rig-agent` ...); every policy is one `AgentHook` in `api/agent.rs`" | structure | verified | `rig-core` in crates/utopia-server/Cargo.toml; crates/utopia-server/src/api/agent.rs:20 imports `AgentHook` |
 | "`STALL_NUDGE` and `DONE` are gone" | structure | verified | No `STALL_NUDGE` in crates/ |
 | "Proposed and not built: A per-task model (`on_model_select`)" | status | verified | No `on_model_select` in crates/; docs/decisions/0067 open: cuts 1–4 |
-| "Proposed and not built: `query_data` over MCP" | status | verified | crates/utopia-server/src/api/mcp.rs:37,200-209 comments: `query_data` is deliberately not served |
+| "Proposed and not built: `query_data` over MCP" | status | verified | crates/utopia-server/src/api/mcp.rs:37,198,236,256 comments: `query_data` is deliberately not served |
 
 ## Doc: docs/design/extraction.md
 
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
 | "One call per chunk, at temperature 0 ... the document's opening (its first 1,500 characters, #680)" | feature | verified | crates/utopia-server/src/extraction_open.rs:133 `Some(0.0)`; crates/utopia-extract/src/lib.rs:31 `OPENING_BUDGET_CHARS: usize = 1500` |
-| "the typed path is deleted in #736" | status | verified | migrations/0063_extraction_reads_only_the_open_graph.sql; 34 of 36 backticked code identifiers in the file resolve in the code (the two misses are provider JSON fields) |
+| "the typed path is deleted in #736" | status | verified | migrations/0063_extraction_reads_only_the_open_graph.sql; 34 of 36 backticked code identifiers in the file resolve in the code (count from the prior audit, not recounted; no file was deleted or renamed since) (the two misses are provider JSON fields) |
 
 ## Doc: docs/design/governance.md
 
@@ -608,7 +628,7 @@ Method note: all checks ran in the disposable verify sidecar at the audited HEAD
 
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
-| "Every name ... is a value fact on the system attribute `known_as` ... `entities.aliases` is gone" | feature | verified | migrations/0055_a_name_is_a_fact.sql:119 `ALTER TABLE entities DROP COLUMN aliases`; `known_as` in crates/utopia-core/src/models.rs:840 |
+| "Every name ... is a value fact on the system attribute `known_as` ... `entities.aliases` is gone" | feature | verified | migrations/0055_a_name_is_a_fact.sql:119 `ALTER TABLE entities DROP COLUMN aliases`; `known_as` in crates/utopia-core/src/models.rs:855 |
 | "Proposed and not built: ... `doc_cache` removed" | status | stale | No `doc_cache` anywhere in crates/ — it is already gone, yet the file lists its removal as not built (twice: cuts 2–4 of 0041 and the #725 retirement list) |
 
 ## Doc: docs/design/interface.md
@@ -617,7 +637,7 @@ Method note: all checks ran in the disposable verify sidecar at the audited HEAD
 |-------|------|---------|----------|
 | "stored as `utopia.theme` in the browser and set on `<html data-theme>`" | feature | verified | web/src/theme.ts:2 |
 | "Design rules (`web/DESIGN.md`, enforced by `pnpm guard`)" | command | verified | web/package.json `"guard": "node scripts/style-guard.mjs"`, also first step of `build` (static; not executed) |
-| "Kinds: `source.sync_failed`, `llm.unreachable`, `llm.rate_limited`, `llm.out_of_credit`, `data_source.schema_sync_failed`, `document.needs_reader`, `governance.tripped`" | feature | stale | crates/utopia-store/src/alerts.rs:60-68 also defines `document.contents_truncated`, which the list omits; the listed kinds are present (alerts.rs, crates/utopia-server/src/alerting.rs:229) |
+| "Kinds: `source.sync_failed`, `llm.unreachable`, `llm.rate_limited`, `llm.out_of_credit`, `data_source.schema_sync_failed`, `document.needs_reader`, `governance.tripped`" | feature | stale | crates/utopia-store/src/alerts.rs:26-68 also defines `mapping.exploration_empty` (:56) and `document.contents_truncated` (:68), which the list omits; the seven listed kinds are present (alerts.rs:26,30,41,47,53,60,65; crates/utopia-server/src/alerting.rs:229) |
 
 ## Doc: docs/design/lakehouse-and-actions.md
 
@@ -633,7 +653,7 @@ Method note: all checks ran in the disposable verify sidecar at the audited HEAD
 
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
-| "`facts (kb, subject_id, predicate_id NULL, ... end_derived, end_after_period, layer, phrase)`" | structure | verified | migrations/0114 (`end_after_period`), 0061 (open layer and phrase), 0057 (end the engine drew); 24 backticked code identifiers in the file resolve in the code |
+| "`facts (kb, subject_id, predicate_id NULL, ... end_derived, end_after_period, layer, phrase)`" | structure | verified | migrations/0114 (`end_after_period`), 0061 (open layer and phrase), 0057 (end the engine drew); 24 backticked code identifiers in the file resolve in the code (count from the prior audit, not recounted; no file was deleted or renamed since) |
 | "`no_predicate_still_shows.rs`" guards the null-predicate display | structure | verified | crates/utopia-store/tests/store/no_predicate_still_shows.rs |
 
 ## Doc: docs/design/ontology.md
@@ -641,7 +661,7 @@ Method note: all checks ran in the disposable verify sidecar at the audited HEAD
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
 | "A property regression case can also expect no binding (`expected_binding: \"none\"` ...)" — listed under "Proposed and not built" | status | stale | crates/utopia-server/src/api/ontology_regression_routes.rs:26 `expected_binding: ExpectedBinding`; migrations/0118_a_regression_case_can_expect_no_binding.sql — built, but placed in the not-built section |
-| Packs and import: five packs embedded, OWL import | feature | verified | crates/utopia-server/src/ontology_packs.rs; crates/utopia-server/src/owl_import.rs; 46 backticked code identifiers in the file resolve in the code |
+| Packs and import: five packs embedded, OWL import | feature | verified | crates/utopia-server/src/ontology_packs.rs; crates/utopia-server/src/owl_import.rs; 46 backticked code identifiers in the file resolve in the code (count from the prior audit, not recounted; no file was deleted or renamed since) |
 
 ## Doc: docs/design/prior-work.md
 
@@ -660,7 +680,7 @@ Method note: all checks ran in the disposable verify sidecar at the audited HEAD
 
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
-| "`documents` and `document_versions` keep every version; `ingest_item()` owns identity (`external_key`)" | feature | verified | migrations/0002_ingest.sql; 20 backticked code identifiers in the file resolve in the code |
+| "`documents` and `document_versions` keep every version; `ingest_item()` owns identity (`external_key`)" | feature | verified | migrations/0002_ingest.sql; 20 backticked code identifiers in the file resolve in the code (count from the prior audit, not recounted; no file was deleted or renamed since) |
 | "Proposed and not built: Feishu and Confluence connectors" | status | verified | No `feishu` or `confluence` in crates/ or web/src; `SourceKind` has neither |
 | "Proposed and not built: Backup and restore (#712)" | status | stale | crates/utopia-cli/src/main.rs backup and restore, crates/utopia-cli/tests/restore.rs |
 
@@ -677,7 +697,7 @@ Method note: all checks ran in the disposable verify sidecar at the audited HEAD
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
 | "Chunk 1200 chars · overlap 150" | config | stale | crates/utopia-ingest/src/chunker.rs:45 `BUDGET_TOKENS: usize = 300` (token budget, 0039); no 1200/150 constants in crates/utopia-ingest/src/lib.rs |
-| "Eleven reason codes, all recorded in `extraction_drops`" (`not_an_entity_name`, `subject_not_declared`, `attr_domain_mismatch`, `attr_no_value`, `direction_corrected`, `domain_mismatch` among them) | feature | stale | Those six codes appear nowhere in crates/, migrations/ or web/src; only `truncated_reply`, `malformed_item`, `attr_datatype`, `object_missing` (crates/utopia-store/src/extraction_drops.rs) and `low_confidence` remain |
+| "Eleven reason codes, all recorded in `extraction_drops`" (`not_an_entity_name`, `subject_not_declared`, `attr_domain_mismatch`, `attr_no_value`, `direction_corrected`, `domain_mismatch` among them) | feature | stale | Of those six codes only `attr_domain_mismatch` survives, in two comments (migrations/0003_graph.sql:419, web/src/api.ts:227); none is emitted by crates/. Only `truncated_reply`, `malformed_item`, `attr_datatype`, `object_missing` (crates/utopia-store/src/extraction_drops.rs) and `low_confidence` remain |
 | "The ... signature check ... lives in the store (`ontology::judge_direction`). Extraction calls it when writing new facts" | structure | stale | `judge_direction` appears only in a comment of migrations/0019; no such function in crates/. docs/design/README.md says the write-time direction correction left with the typed path |
 | "node scripts/bench/run.mjs --corpus pharma --label seeds-only" / "--corpus holmes" | command | verified | scripts/bench/run.mjs; scripts/bench/corpora/pharma.json, holmes.json, tech.json (static; needs a running server and model, not executed) |
 
@@ -714,21 +734,35 @@ Method note: all checks ran in the disposable verify sidecar at the audited HEAD
 
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
-| "POST {your-utopia-base}/api/v1/sources/{source_id}/ingest" | feature | verified | crates/utopia-server/src/api/mod.rs:502 |
-| "POST {your-utopia-base}/api/v1/sources/{source_id}/statements" | feature | verified | api/mod.rs:507 |
-| "GET .../api/v1/kbs/{kb_id}/sources/{source_id}/documents/by-external-id?external_id=note-42" | feature | verified | api/mod.rs:484 |
-| "older versions are at `GET /api/v1/documents/{id}/content?version=N`" | feature | verified | api/mod.rs:425 |
-| "POST {your-utopia-base}/api/v1/kbs/{kb_id}/search" | feature | verified | api/mod.rs:406 |
+| "POST {your-utopia-base}/api/v1/sources/{source_id}/ingest" | feature | verified | crates/utopia-server/src/api/mod.rs:504 |
+| "POST {your-utopia-base}/api/v1/sources/{source_id}/statements" | feature | verified | unchanged: api/mod.rs:507 |
+| "GET .../api/v1/kbs/{kb_id}/sources/{source_id}/documents/by-external-id?external_id=note-42" | feature | verified | unchanged: api/mod.rs:484 |
+| "older versions are at `GET /api/v1/documents/{id}/content?version=N`" | feature | verified | unchanged: api/mod.rs:425 |
+| "POST {your-utopia-base}/api/v1/kbs/{kb_id}/search" | feature | verified | unchanged: api/mod.rs:406 |
 
 ## Doc: web/src/docs/mcp.md
 
 | Claim | Type | Verdict | Evidence |
 |-------|------|---------|----------|
-| "POST /api/v1/kbs/{kb_id}/mcp ... JSON-RPC 2.0 (MCP protocol version `2025-06-18`, stateless HTTP)" | feature | verified | api/mod.rs:238; crates/utopia-server/src/api/mcp.rs:33 `PROTOCOL_VERSION: &str = "2025-06-18"` |
-| Tools table: `search_chunks`, `get_document`, `find_entities`, `entity_facts`, `neighbors`, `timeline`, `paths_between`, `changes`, `list_rules`, `rule_matches`, `search_docs`, `remember` | feature | verified | Each name appears as a string literal in crates/utopia-server/src/api/chat.rs and/or mcp.rs, tools.rs, tools_graph.rs |
+| "POST /api/v1/kbs/{kb_id}/mcp ... JSON-RPC 2.0 (MCP protocol version `2025-06-18`, stateless HTTP)" | feature | verified | crates/utopia-server/src/api/mod.rs:240; crates/utopia-server/src/api/mcp.rs:33 `PROTOCOL_VERSION: &str = "2025-06-18"`, :183-204 serve `initialize`, `tools/list`, `tools/call` |
+| Tools table: `search_chunks`, `get_document`, `find_entities`, `entity_facts`, `neighbors`, `timeline`, `paths_between`, `changes`, `list_rules`, `rule_matches`, `search_docs`, `remember` | feature | verified | crates/utopia-server/src/api/mcp.rs:43-55 `EXPOSED` holds the eleven read tools, :63 `WRITABLE = ["remember"]`, :67-69 `is_exposed` |
 | "`search_chunks` ... each cut at 800 characters" / "`get_document` ... up to 24,000 body characters per call" | config | verified | crates/utopia-server/src/api/tools.rs:19 `TOOL_CHUNK_CHARS = 800`, :21 `DOCUMENT_CHARS = 24_000` |
-| "`query_data` ... is a chat tool and is not served over MCP" | feature | verified | crates/utopia-server/src/api/mcp.rs:37,200-209 |
-| "Authorization: Bearer utp_pat_…" | config | verified | `utp_pat_` prefix in crates/utopia-core/src/models.rs:1782; migrations/0017_personal_tokens.sql |
+| "`query_data` ... is a chat tool and is not served over MCP" | feature | verified | crates/utopia-server/src/api/mcp.rs:37, 198, 236 (not in `EXPOSED`; `tools_schema` is called with an empty source list) |
+| "Authorization: Bearer utp_pat_…" | config | verified | `utp_pat_` prefix in crates/utopia-core/src/models.rs:1797; migrations/0017_personal_tokens.sql:12; mcp.rs:89-94 |
+| "Expires in \| 90 days by default" | config | verified | crates/utopia-server/src/api/token_routes.rs:27-37 (default 90 days; 0 means no expiry) |
+| "Search returns at most six chunks and changes at most 40 events" / "the default 80-fact limit (maximum 300)" | config | verified | crates/utopia-server/src/api/tools.rs:18 `SEARCH_TOP_K = 6`, :26 `CHANGES_LIMIT = 40`; tools_graph.rs:26 `FACTS_DEFAULT = 80`, :27 `LIST_MAX = 300` |
+| "`GET /api/v1/kbs/{kb_id}/export?format=turtle\|jsonld` streams the whole base" / "`?base=https://example.org/`" | feature | verified | crates/utopia-server/src/api/mod.rs:185; export_routes.rs:30 (`turtle` or `jsonld`), :35 `pub base: Option<String>` |
+| Tools table: `review_list`, `review_item`, `review_keep` ("**Needs a `write` token held by an editor**; a token without it does not see this tool in `tools/list`") | feature | verified | crates/utopia-server/src/api/review_tools.rs:24-31, 135-156 (`review_keep` filtered out unless `can_write`); mcp.rs:107-110 (`can_write` = write scope and owner at least Editor), :197-204; test review_mcp_tests.rs:851 (static; not executed) |
+| "`review_list` serves two sections in this version: `duplicates` and `overview`. Any other section ... is refused with `unknown_queue`" | feature | verified | crates/utopia-server/src/api/review_tools.rs:255-273; review_ops.rs:87-92 |
+| "`limit` defaults to 10 and is served as 1 to 200 ... `offset` defaults to 0, and a negative value is served as 0" | config | verified | crates/utopia-server/src/api/review_routes.rs:29 `REVIEW_PAGE: i64 = 10`; review_ops.rs:95-96 `clamp(1, 200)`, `.max(0)` |
+| "A token whose knowledge-base list excludes the base is turned away by the endpoint itself with HTTP 403 before any tool runs" | feature | verified | crates/utopia-server/src/api/mcp.rs:96-98 `if !auth.covers(kb_id) { return Err(AppError::Forbidden) }` inside `authorize`, called first in `handle` (:177); error.rs:35 maps it to 403; test review_mcp_tests.rs:548 (not executed) |
+| MCP errors table: `unknown_queue`, `not_found`, `token_read_only`, `token_owner_below_editor`, `already_decided`; "`structuredContent` is `{\"code\": \"<code>\", \"message\": \"<text>\"}`" | feature | verified | crates/utopia-server/src/api/review_tools.rs:208-235 (code and message taken from the REST error body; 404 becomes `not_found` at :223); review_ops.rs:59-74; auth.rs:253; crates/utopia-store/src/token_agent_actions.rs:182-187 |
+| "Each call to any of the three tools also writes the `mcp.tool_called` row" | feature | verified | crates/utopia-server/src/api/mcp.rs:209-232 (written for refused calls too) |
+| Annotations: "`readOnlyHint` on the two reads; `readOnlyHint`, `destructiveHint` and `idempotentHint`, all `false`, on `review_keep`" | feature | verified | crates/utopia-server/src/api/review_tools.rs:124-130, :152 |
+| Token API routes table: `GET /kbs/{kb_id}/review?queue=duplicates`, `GET /kbs/{kb_id}/review/summary`, `POST /kbs/{kb_id}/review/{review_id}` with `{"action": "keep"}` answering `{"ok": true, "outcome": "applied", "action_id": "<uuid>"}` | feature | verified | crates/utopia-server/src/api/review_routes.rs:86, 315, 779 (`SessionOrToken`); api/mod.rs:534, 536, 551; review_ops.rs:164 response shape; `types` filter parsed by `TypeFilter::parse` (review_ops.rs:100) |
+| "recorded three ways in one transaction ... If any of the three cannot be written, the keep fails and the pair stays in the queue" | feature | verified | crates/utopia-store/src/token_agent_actions.rs:87-178: one `tx` updates `resolution_reviews` (:122-135), inserts `token_agent_actions` (:143-161), writes the audit row (:164-176), then commits; test review_mcp_tests.rs:1037 (not executed) |
+| Token API refusals table: 401 none; 404 none on the reads; 422 `unknown_queue`, `unknown_type_filter`; 403 `token_read_only`, `token_kb_out_of_scope`, `token_owner_below_editor`, `token_operation_not_open`; 409 `already_decided`; 409 none while the governor decides | feature | verified | crates/utopia-server/src/error.rs:31-45 (status mapping); review_ops.rs:31-37, 42-54, 59-74, 87-92; crates/utopia-store/src/resolution.rs:1863 `unknown_type_filter`; auth.rs:253, 263; token_agent_actions.rs:80-85 (`Conflict`), :182-187 |
+| "`merge` on the decision route answers `token_operation_not_open`, and the batch ..., revert ... and manual-merge ... routes take a session only and answer a token with 401" | feature | verified | crates/utopia-server/src/api/review_routes.rs:321-327 (`not_open` for a non-keep action), :529-531, :651-653, :699-701 (`AuthUser`); error.rs:34; test review_token_api_tests.rs:402-425 asserts 403 with the code, then `UNAUTHORIZED` on batch, revert and manual merge (not executed). docs/decisions/0076-a-token-agent-acts-on-review-under-a-ruled-table.md:148-149 says all four answer `token_operation_not_open`; the code agrees with this doc |
 
 ## Descriptive docs
 
@@ -754,6 +788,9 @@ Not applicable: alignment mode is off for this audit.
 | 17 | fix-doc | Delegated (driver D016): drop or explain "no gaps" — doc-only, changes no behaviour | no |
 | 20 | fix-doc | Delegated (driver D017): correct ADR 0052's status line — doc-only, changes no behaviour | no |
 | 28 | fix-doc | Delegated (driver D018): point to the table-cap constant or correct the number — doc-only, changes no behaviour | no |
+| 36 | fix-doc | Delegated (driver D074): state the MCP endpoint's 403 in ADR 0076 decision 6; the endpoint's answer does not change | T004 |
+| 37 | fix-doc | Delegated (driver D077): say manual merge, revert and batch are session-only and answer a token with 401 until M003 opens them | T004 |
+| 38 | accept-drift | Delegated (driver D078): a forge-side claim like queue 13 and 14 | n/a (accept-drift) |
 
 ## Remediation queue
 
@@ -771,8 +808,6 @@ Not applicable: alignment mode is off for this audit.
 | 10 | README.zh-CN.md | "[ ] **业务规则**：由人写下、作用于实体属性事实的规则" | stale | fix-doc | Move to features (0021 implemented) |
 | 11 | README.zh-CN.md | Use-case row links the walkthrough (`docs/walkthrough.md`) | aspirational | NEEDS-USER | Same ruling as queue item 1 |
 | 12 | CONTRIBUTING.md | "that is how the `migrations` job in CI runs the whole `utopia-store` suite" | stale | fix-doc | Name the `test` job (part of `backend`); the `migrations` job now only replays migrations |
-| 13 | CONTRIBUTING.md | "Both branches are protected: pull request required, CI (`backend` and `web`) must pass, no force pushes, no deletions" | unverifiable | NEEDS-USER | Confirm against the GitHub branch-protection settings |
-| 14 | CONTRIBUTING.zh-CN.md | "两个分支都开了保护：必须走 PR，CI（`backend` 与 `web`）必须通过，禁止强推与删除" | unverifiable | NEEDS-USER | Confirm against the GitHub branch-protection settings |
 | 15 | .roadmap-proposals/backup-restore.md | "`schema_version`: pulled from the running migrations" | stale | fix-doc | Say it is the `CURRENT_SCHEMA_VERSION` constant in crates/utopia-cli/src/main.rs |
 | 16 | .roadmap-proposals/backup-restore.md | "the operator can pipe `utopia backup --output -` to `aws s3 cp - s3://…` today" | aspirational | NEEDS-USER | Either implement stdout output or remove the sentence |
 | 17 | docs/decisions/README.md | "File names are `NNNN-short-english-title.md`, four digits, increasing in creation order, no gaps" | stale | NEEDS-USER | Numbers 0055–0059 and 0068 are absent; either explain the reserved numbers or drop "no gaps" |
@@ -784,7 +819,7 @@ Not applicable: alignment mode is off for this audit.
 | 23 | docs/design/access-and-audit.md | "Proposed and not built: OIDC SSO, backup and restore [0016 E, #712]" | stale | fix-doc | Move both to "What it does today" |
 | 24 | docs/design/governance.md | "[0043] (every queue, in PR #699)" | stale | fix-doc | PR #699 is closed per 0043's own status line; say the work is to re-land |
 | 25 | docs/design/identity.md | "Proposed and not built: ... `doc_cache` removed" | stale | fix-doc | `doc_cache` is already gone from the code; drop it from the not-built lists |
-| 26 | docs/design/interface.md | "Kinds: `source.sync_failed`, `llm.unreachable`, `llm.rate_limited`, `llm.out_of_credit`, `data_source.schema_sync_failed`, `document.needs_reader`, `governance.tripped`" | stale | fix-doc | Add `document.contents_truncated` |
+| 26 | docs/design/interface.md | "Kinds: `source.sync_failed`, `llm.unreachable`, `llm.rate_limited`, `llm.out_of_credit`, `data_source.schema_sync_failed`, `document.needs_reader`, `governance.tripped`" | stale | fix-doc | Add `document.contents_truncated` and `mapping.exploration_empty` |
 | 27 | docs/design/lakehouse-and-actions.md | "the scheme picks the engine (`postgres`, the MySQL wire family since #303, `trino`, `databricks`, `snowflake`)" | stale | fix-doc | Add ClickHouse (migration 0106) |
 | 28 | docs/design/lakehouse-and-actions.md | "How much schema to fetch from a lakehouse catalog (cap 200 tables today)" | unverifiable | NEEDS-USER | Point to the constant that caps tables, or correct the number |
 | 29 | docs/design/ontology.md | "A property regression case can also expect no binding (`expected_binding: \"none\"` ...)" — listed under "Proposed and not built" | stale | fix-doc | Move the built regression-case behaviour (migration 0118) to "What it does today" |
@@ -793,3 +828,7 @@ Not applicable: alignment mode is off for this audit.
 | 32 | docs/pipeline.md | "Chunk 1200 chars · overlap 150" | stale | fix-doc | Rewrite around the token-budget chunker (0039) |
 | 33 | docs/pipeline.md | "Eleven reason codes, all recorded in `extraction_drops`" (`not_an_entity_name`, `subject_not_declared`, `attr_domain_mismatch`, `attr_no_value`, `direction_corrected`, `domain_mismatch` among them) | stale | fix-doc | Rewrite the drop table for the open-graph path, as docs/design/README.md already promises |
 | 34 | docs/pipeline.md | "The ... signature check ... lives in the store (`ontology::judge_direction`). Extraction calls it when writing new facts" | stale | fix-doc | Remove or rewrite; no such function remains |
+| 35 | docs/decisions/0076-a-token-agent-acts-on-review-under-a-ruled-table.md | "open: every row of the table except Keep stays closed to tokens" | stale | fix-doc | Name the alignment kind-word decision as already open to write tokens (ADR 0014 decision 6), as the record's own table row does |
+| 36 | docs/decisions/0076-a-token-agent-acts-on-review-under-a-ruled-table.md | "a token whose `kb_ids` exclude the base gets 404, the same answer as for a base that does not exist" (decision 6, said of every read) | stale | NEEDS-USER | Decide whether MCP should answer 404 like the token API (code) or decision 6 should state the endpoint's 403 as web/src/docs/mcp.md does (doc) |
+| 37 | docs/decisions/0076-a-token-agent-acts-on-review-under-a-ruled-table.md | "To a token: merge, manual merge, revert and batch (answered `token_operation_not_open`)" — the manual merge, revert and batch part | aspirational | NEEDS-USER | Either say these three routes are session-only and answer a token with 401 (as web/src/docs/mcp.md does), or make them answer `token_operation_not_open` |
+| 38 | docs/decisions/0076-a-token-agent-acts-on-review-under-a-ruled-table.md | "0127 is claimed by upstream #1496" | unverifiable | NEEDS-USER | Confirm against the upstream forge, or accept as a forge-side claim like queue items 13 and 14 |

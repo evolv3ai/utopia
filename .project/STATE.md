@@ -1,18 +1,18 @@
 ---
 pipeline: gsd-path/v2
 project: utopia
-milestone: token-review-skeleton
-phase: shipped
+milestone: token-review-reads
+phase: plan
                     # inspect only for brownfield; greenfield starts at define
                     # roadmap only in program flow (CHARTER.md exists)
 status: done
-branch: gsd-path/M001
+branch: gsd-path/M002
                     # the router rebinds before any next-milestone file change
                     # the bound branch is never main; ship integrates it there
-archive: .project/archive/001-token-review-skeleton
-integration_default: direct # direct | pull-request | external-landing; project setting
-integration: direct # current milestone; may override the default before build
-integration_source: default # default | milestone; preserves override provenance
+archive: null
+integration_default: direct
+integration: direct
+integration_source: default
 default_branch: dev # origin default branch; initialization records it once, nothing changes it
 ---
 
@@ -50,3 +50,9 @@ it on completion. If this file and the artifacts disagree, the artifacts win
 - 2026-11-19 — ship — build done; final review pending
 - 2026-11-19 — ship — final gate passed; shipping approval pending
 - 2026-11-19 — shipped — archive preflight passed; shipment recorded
+- 2026-11-19 — inspect — next milestone M002 token-review-reads bound on gsd-path/M002 at base 904b2a20380719553896160aa05d0af4f3a561ce; previous archive .project/archive/001-token-review-skeleton, ship 647c8678ae41dd0ff7e1ed98ddf3f351ad180902, integration 904b2a20380719553896160aa05d0af4f3a561ce, previous branch gsd-path/M001
+- 2026-11-19 — inspect — inspection artifacts passed
+- 2026-11-19 — define — definition started
+- 2026-11-19 — define — milestone intent approved
+- 2026-11-19 — plan — planning started
+- 2026-11-19 — plan — plan approved
