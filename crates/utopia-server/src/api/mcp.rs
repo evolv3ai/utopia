@@ -194,16 +194,43 @@ pub async fn handle(
         "ping" => ok(id, json!({})),
         // **列表跟着这枚令牌变。** 写不了的令牌看不见 `remember`——
         // 列出一个调不动的工具，等于让对面的 agent 反复试
-        "tools/list" => ok(
-            id,
-            json!({
-                // 传空的数据源列表：`query_data` 没放出来，那份描述也就不必生成
-                "tools": to_mcp_tools(&super::chat::tools_schema(can_write, &[]), can_write)
-            }),
-        ),
+        "tools/list" => {
+            // 传空的数据源列表：`query_data` 没放出来，那份描述也就不必生成
+            let mut tools = to_mcp_tools(&super::chat::tools_schema(can_write, &[]), can_write);
+            // Review 的三个工具（0076）不在聊天那份清单里——助手不该拿到它们，
+            // 所以在这里另接。`review_keep` 同样只列给写得了的调用方
+            tools.extend(super::review_tools::listed(can_write));
+            ok(id, json!({ "tools": tools }))
+        }
         "tools/call" => {
             let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
+            // 台账要的两个 id 先取出来：下面 Review 那一支会把人和令牌整个交出去
+            let (actor, token_id) = (user.id, auth.token_id);
+            if super::review_tools::serves(name) {
+                // Review 工具不问 `is_exposed`：能不能做由 `review_ops` 里的检查说了算，
+                // 写不了的调用方拿到的是带 code 的工具错误（与 REST 同一个 code），
+                // 不是 `remember` 那种 -32601
+                let caller = super::review_ops::ReviewCaller {
+                    user,
+                    token: auth,
+                    kb_id,
+                };
+                let result = super::review_tools::call(&state, &caller, name, &args).await;
+                // 每次调用一行，被拒绝的也记。分开一对另有它自己的 `review.keep`，
+                // 在 `keep_duplicate_pair` 的事务里写，这里不补第二行
+                let _ = utopia_store::audit::record(
+                    &state.pool,
+                    Some(kb_id),
+                    actor,
+                    "mcp.tool_called",
+                    "personal_token",
+                    Some(token_id),
+                    json!({ "tool": name }),
+                )
+                .await;
+                return Ok(ok(id, tool_result(result)));
+            }
             if !is_exposed(name, can_write) {
                 // 三种「不行」要分得开，否则客户端只能反复重试：
                 // 拿不到的工具（query_data）是「这一版没放出来」，写工具是
@@ -234,9 +261,9 @@ pub async fn handle(
                         workspace_id: kb.workspace_id,
                         mounted_sources: &[],
                         can_write,
-                        actor: Some(user.id),
+                        actor: Some(actor),
                         // 「谁说的」要答到 agent 这一层：一个人可以同时挂三个客户端
-                        via_token: Some(auth.token_id),
+                        via_token: Some(token_id),
                         // agent 的意图不在请求里；同名按事实数排
                         question: None,
                     };
@@ -247,10 +274,10 @@ pub async fn handle(
             let _ = utopia_store::audit::record(
                 &state.pool,
                 Some(kb_id),
-                user.id,
+                actor,
                 "mcp.tool_called",
                 "personal_token",
-                Some(auth.token_id),
+                Some(token_id),
                 json!({ "tool": name }),
             )
             .await;

@@ -7,6 +7,11 @@
 //!
 //! 先例只认人的决定（actor 不为空）。agent 自己裁过的不算——否则它引用自己，
 //! 越判越自信。人接受了 agent 的建议算：那一笔是人签的，走的是人的裁决路径。
+//!
+//! **令牌 agent 裁的也不算**（0076 决定 9）。令牌以发它的人的身份行事，台账上的 actor
+//! 是这个人、审核行上的 decided_by 也是这个人——光看这两列分不出来。分得出来的是：
+//! 台账行的 detail 带着 `token_id`，审核行带着 `decided_token`。下面每一条读先例的
+//! 查询都把这两种排除掉（`NOT_BY_TOKEN`、`decided_token IS NULL`）。
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -73,6 +78,11 @@ const COLS: &str = "id AS event_id, action,
          COALESCE(detail->>'right', detail->>'target', '') AS \"right\",
          created_at AS at,
          NULLIF(detail->>'why', '') AS why";
+/// 台账行不是经令牌做的：detail 里没有 `token_id` 这个键。经令牌的 Review 写入都带着它
+/// （0076 决定 8），所以有这个键的行不是人亲手的决定，不进先例。
+/// 用 `->` 取键再判空而不是 `?` 运算符：键在而值是 JSON null 时 `->` 回的是 jsonb 的
+/// null（不是 SQL NULL），照样算「有这个键」
+const NOT_BY_TOKEN: &str = "(detail -> 'token_id') IS NULL";
 
 pub async fn precedents_for(
     pool: &PgPool,
@@ -88,7 +98,7 @@ pub async fn precedents_for(
 
     let same_pair: Vec<Precedent> = sqlx::query_as(&format!(
         "SELECT {COLS} FROM audit_events
-         WHERE kb_id = $1 AND actor_id IS NOT NULL
+         WHERE kb_id = $1 AND actor_id IS NOT NULL AND {NOT_BY_TOKEN}
            AND action IN ('review.merge', 'review.keep', 'merge.manual') AND {is_pair}
          ORDER BY created_at DESC LIMIT $4"
     ))
@@ -101,7 +111,7 @@ pub async fn precedents_for(
 
     let same_name: Vec<Precedent> = sqlx::query_as(&format!(
         "SELECT {COLS} FROM audit_events
-         WHERE kb_id = $1 AND actor_id IS NOT NULL
+         WHERE kb_id = $1 AND actor_id IS NOT NULL AND {NOT_BY_TOKEN}
            AND action IN ('review.merge', 'review.keep', 'merge.manual')
            AND {touches} AND NOT {is_pair}
          ORDER BY created_at DESC LIMIT $4"
@@ -115,7 +125,7 @@ pub async fn precedents_for(
 
     let reverts: Vec<Precedent> = sqlx::query_as(&format!(
         "SELECT {COLS} FROM audit_events
-         WHERE kb_id = $1 AND action = 'merge.revert' AND {touches}
+         WHERE kb_id = $1 AND action = 'merge.revert' AND {touches} AND {NOT_BY_TOKEN}
          ORDER BY created_at DESC LIMIT $4"
     ))
     .bind(kb_id)
@@ -144,7 +154,8 @@ pub async fn precedents_for(
     })
 }
 
-/// 这个库对这种类型对的习惯：人合了多少、分了多少、合了又撤回多少
+/// 这个库对这种类型对的习惯：人合了多少、分了多少、合了又撤回多少。
+/// 令牌裁的一对（`decided_token` 不为空）不是人的习惯，不数
 async fn type_pair_stats(
     pool: &PgPool,
     kb_id: Uuid,
@@ -157,7 +168,7 @@ async fn type_pair_stats(
          FROM resolution_reviews rr
          JOIN entities a ON a.id = rr.left_id
          JOIN entities b ON b.id = rr.right_id
-         WHERE rr.kb_id = $1 AND rr.decided_by IS NOT NULL
+         WHERE rr.kb_id = $1 AND rr.decided_by IS NOT NULL AND rr.decided_token IS NULL
            AND ((a.type_id = $2 AND b.type_id = $3) OR (a.type_id = $3 AND b.type_id = $2))",
     )
     .bind(kb_id)
@@ -571,7 +582,8 @@ pub fn gate(
 }
 
 /// 同一对实体，人裁过没有：Some(true) 合过、Some(false) 分过、None 没裁过。
-/// 按实体 id 认，不按名字——名字一样的两个「张伟」不是同一个问题
+/// 按实体 id 认，不按名字——名字一样的两个「张伟」不是同一个问题。
+/// 令牌裁过的不算裁过：否则 `settled_by_people` 会把一枚令牌的决定当成人已经定了
 pub async fn decided_before(
     pool: &PgPool,
     kb_id: Uuid,
@@ -580,7 +592,8 @@ pub async fn decided_before(
 ) -> AppResult<Option<bool>> {
     let merged: Option<bool> = sqlx::query_scalar(
         "SELECT status = 'merged' FROM resolution_reviews
-         WHERE kb_id = $1 AND decided_by IS NOT NULL AND status IN ('merged', 'kept')
+         WHERE kb_id = $1 AND decided_by IS NOT NULL AND decided_token IS NULL
+           AND status IN ('merged', 'kept')
            AND ((left_id = $2 AND right_id = $3) OR (left_id = $3 AND right_id = $2))
          ORDER BY decided_at DESC LIMIT 1",
     )
@@ -811,7 +824,7 @@ pub async fn ledger_search(
     let like = format!("%{}%", query.trim().to_lowercase());
     let rows: Vec<Precedent> = sqlx::query_as(&format!(
         "SELECT {COLS} FROM audit_events
-         WHERE kb_id = $1 AND actor_id IS NOT NULL
+         WHERE kb_id = $1 AND actor_id IS NOT NULL AND {NOT_BY_TOKEN}
            AND action IN ('review.merge', 'review.keep', 'merge.manual', 'merge.revert')
            AND ({L} LIKE $2 OR {R} LIKE $2)
          ORDER BY created_at DESC LIMIT $3"

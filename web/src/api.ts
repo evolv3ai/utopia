@@ -173,6 +173,12 @@ export interface AuditEvent {
   actor_id: string | null;
   actor_name: string | null;
   created_at: string;
+  /** 经个人令牌做的动作才有（0076）：是哪一枚 */
+  token_id?: string;
+  /** 动作那一刻令牌叫什么（存下的快照，令牌改名、撤销都不动它） */
+  token_name?: string;
+  /** 调用方**自己报的** User-Agent，只在带令牌的行上有。是声明，不是验证过的身份 */
+  declared_client?: string;
 }
 
 export interface KbMember {
@@ -691,6 +697,8 @@ export interface ReviewItem {
 
 /** agent 的一笔（0025）：看了哪一对、想怎么办、凭什么、人怎么答的 */
 export interface AgentDecision {
+  /** 治理 agent 的行没有这个键；有它（`"token"`）的是令牌 agent 台账的行 */
+  source?: undefined;
   id: string;
   run_id: string;
   target_kind: "review";
@@ -714,6 +722,30 @@ export interface AgentDecision {
   left: string | null;
   right: string | null;
 }
+
+/** 令牌 agent 台账的一行（0076）：某个人的一枚令牌对 Review 做的一个动作。
+ *  `token_name` 是动作那一刻存下的名字；`owner_name` 为 null = 账号已移除 */
+export interface TokenAgentAction {
+  source: "token";
+  id: string;
+  /** 这一刀只有 review.keep */
+  operation: string;
+  target_kind: string;
+  target_id: string;
+  owner_id: string;
+  owner_name: string | null;
+  token_id: string;
+  token_name: string;
+  /** applied | held | proposed */
+  outcome: string;
+  left: string | null;
+  right: string | null;
+  rationale: string | null;
+  created_at: string;
+}
+
+/** Agent 一档的一行：治理 agent 的一笔，或令牌 agent 台账的一行，靠 `source` 分 */
+export type AgentQueueRow = AgentDecision | TokenAgentAction;
 
 export type AgentPrecedent =
   | {

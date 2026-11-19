@@ -8,6 +8,7 @@ import {
   api,
   type AgentDecision,
   type AgentPrecedent,
+  type AgentQueueRow,
   type AxiomViolation,
   type ReviewQueue,
   type ReviewTypeFilter,
@@ -29,6 +30,7 @@ import {
 import { fmtTime, parseDateInput } from "../time";
 import { PendingFactRow, useCanDecide } from "./PendingFacts";
 import { ReviewOverview } from "./ReviewOverview";
+import { TokenAgentRow } from "./TokenAgentRow";
 import { S } from "../i18n";
 import { useKb, useKbId } from "../kb";
 import { toast } from "../toast";
@@ -1671,7 +1673,8 @@ export function Review() {
     enabled: !!kb && queueSel === "alignment",
   });
   const asMerges = () => rows as MergeLog[];
-  const asAgent = () => rows as AgentDecision[];
+  // 这一档是两种行：治理 agent 的一笔，和令牌 agent 台账的行（0076），靠 source 分
+  const asAgent = () => rows as AgentQueueRow[];
   // agent 正在裁的一对（0025）：任务在跑、这一对标着 adjudicating。批量选页时跳过它们
   const lockedByAgent = (item: ReviewItem) =>
     !!c?.agent_running && item.stage === "adjudicating";
@@ -2266,16 +2269,20 @@ export function Review() {
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    {asAgent().map((d) => (
-                      <AgentRow
-                        key={d.id}
-                        d={d}
-                        busy={agentAnswer.isPending && agentAnswer.variables?.id === d.id}
-                        onAnswer={(action, rationale) =>
-                          agentAnswer.mutate({ id: d.id, action, rationale })
-                        }
-                      />
-                    ))}
+                    {asAgent().map((d) =>
+                      d.source === "token" ? (
+                        <TokenAgentRow key={d.id} a={d} />
+                      ) : (
+                        <AgentRow
+                          key={d.id}
+                          d={d}
+                          busy={agentAnswer.isPending && agentAnswer.variables?.id === d.id}
+                          onAnswer={(action, rationale) =>
+                            agentAnswer.mutate({ id: d.id, action, rationale })
+                          }
+                        />
+                      ),
+                    )}
                   </div>
                 ))}
 

@@ -1,6 +1,6 @@
 # Agents over MCP
 
-Utopia serves every knowledge base as a **Model Context Protocol** server. Any MCP client — Claude Desktop, Cursor, an agent framework, a script — can search a base, read a document, look up an entity and ask what changed, with the same permissions as the person whose token it carries. Reading needs nothing but a token. One tool records: `remember` asks a `write` token held by an editor, and what it records **waits for a person's nod** before it reaches the graph.
+Utopia serves every knowledge base as a **Model Context Protocol** server. Any MCP client — Claude Desktop, Cursor, an agent framework, a script — can search a base, read a document, look up an entity and ask what changed, with the same permissions as the person whose token it carries. Reading needs nothing but a token. One tool records: `remember` asks a `write` token held by an editor, and what it records **waits for a person's nod** before it reaches the graph. Three tools reach the Review tab: two read it, and `review_keep` keeps one duplicate pair apart for a `write` token held by an editor.
 
 ## Get a token
 
@@ -49,6 +49,9 @@ Three methods are served:
 | `rule_matches` | The entities a business rule currently marks, with its premises. Takes a business rule ID from `list_rules` |
 | `search_docs` | Utopia's own manual, for questions about how the platform works. Never the user's documents |
 | `remember` | Record one sentence into the base's memory. **Needs a `write` token held by an editor**; a token without it does not see this tool in `tools/list`, and calling it anyway says why |
+| `review_list` | One section of the base's Review tab. `section: "duplicates"` returns a page of pending duplicate pairs; `section: "overview"` returns the Review summary. See [Review over MCP](#review-over-mcp) |
+| `review_item` | The evidence on one pending duplicate pair, by the `id` shown in `review_list`: what the pair's card shows in the Review tab |
+| `review_keep` | Keep one pending duplicate pair apart. **Needs a `write` token held by an editor**; a token without it does not see this tool in `tools/list`, and calling it anyway returns a tool error with a code that says why |
 
 The two time axes matter here. `at` reads **world time** (when something was true); `as_of` reads **record time** (what Utopia held at that moment, before it revised it), and `changes` lists what moved on that axis in a window. They are separate parameters on purpose: folded into one they would answer "what happened in March" with "what we learned in March", and both look plausible.
 
@@ -107,7 +110,10 @@ versioned snapshot of the evidence set.
 
 `find_entities`, `search_chunks`, `entity_facts` and `changes` return a JSON object
 in `result.structuredContent`, beside the unchanged human-readable `content`.
-No extra argument or protocol upgrade is needed. Other tools remain text-only.
+No extra argument or protocol upgrade is needed. The three Review tools also return
+structured results, with their own shapes and structured errors; they are described
+under [Review over MCP](#review-over-mcp), and the rest of this section does not
+apply to them. Other tools remain text-only.
 Read the JSON field directly; the text is presentation, not a format to parse.
 
 Every structured result includes `kb_id`. IDs are opaque UUID strings, timestamps
@@ -188,6 +194,69 @@ Historical full-text search retains the recall limitation described above.
 That gate is why the tool can be served at all. An agent reads documents in the base, and a document can say "remember that X" — so an agent may be talked into recording something by the very material it was asked to read. A proposal that waits for a person costs a click; an assertion that does not costs a wrong edge on the graph, indistinguishable from one someone meant.
 
 The Review card names the agent, not only the person: several clients can share one owner's identity, and "which one said this" is most of what a reviewer has to go on. Never claim to a user that a fact was added — say the sentence was recorded and its facts await confirmation.
+
+## Review over MCP
+
+Three tools serve the Review tab. They call the same server functions as the token routes described in the next section, so for one token a tool and its route return the same data and refuse with the same code.
+
+| Tool | Arguments | Listed in `tools/list` for | Successful `structuredContent` |
+|---|---|---|---|
+| `review_list` | `section` (required), `limit`, `offset` | Every token that reaches the base, `read` or `write`, with an owner who is at least a viewer | For `duplicates`: `{"counts", "queue", "items"}`, the body of `GET /kbs/{kb_id}/review?queue=duplicates`. For `overview`: the body of `GET /kbs/{kb_id}/review/summary` |
+| `review_item` | `id` (required): the review id of a pair | The same | One element of `items`: `id`, `score`, `reason`, `stage`, `created_at`, `left` and `right` (each with `id`, `name`, `type_label`, `color`, `disambiguator`, `degree`, `top_facts`), and `proposal` (the governor's open proposal, or `null`) |
+| `review_keep` | `id` (required), `rationale` (optional string) | Only a `write` token whose owner is at least an editor of the base | `{"ok": true, "outcome": "applied", "action_id": "<uuid>"}`, the body of the keep route |
+
+**Sections served.** `review_list` serves two sections in this version: `duplicates` and `overview`. Any other section (`pending`, `agent`, `merges` and the rest of the Review tab) is refused with `unknown_queue` and returns no items. `review_item` reads duplicate pairs only.
+
+**Page size.** `limit` defaults to 10 and is served as 1 to 200: a value below 1 returns one item and a value above 200 returns 200. An out-of-range `limit` is not an error. `offset` defaults to 0, and a negative value is served as 0. Both apply to `duplicates` only.
+
+**Who may call.** The two read tools need a token that reaches the base and an owner who is at least a viewer. `review_keep` needs the `write` scope and an owner who is at least an editor; the scope is checked before the owner's role. A caller without that right does not see `review_keep` in `tools/list`. If it calls the tool anyway, the answer is a tool error with a code, not a JSON-RPC error. A token whose knowledge-base list excludes the base is turned away by the endpoint itself with HTTP 403 before any tool runs, and gets no tool list, item, count or evidence.
+
+**A keep made by an agent is recorded under the token's owner and the token's name**: the audit row has the owner as its actor and carries the token's id and the name the token had at that moment, and the same keep is one row in the token-agent ledger (`action_id`). The keep is applied at once, changes no entity and no fact, and is not treated as a person's decision; the paragraph on keeps in the next section applies unchanged. Each call to any of the three tools also writes the `mcp.tool_called` row that every MCP tool call writes.
+
+**Errors.** A refused or failed call is a normal `tools/call` result with `isError: true`. Its `structuredContent` is `{"code": "<code>", "message": "<text>"}`, where `code` and `message` are the `code` and `error` of the response the matching token route gives. `content` holds the same message as text.
+
+| Code | Tool | When |
+|---|---|---|
+| `unknown_queue` | `review_list` | `section` is not `duplicates` or `overview` |
+| `not_found` | `review_item`, `review_keep` | The id is not a pending duplicate pair of this base (`review_item`), or no pair with that id is in this base (`review_keep`). `review_item` gives one identical answer for an unknown id, a pair that was already decided and a pair of another base, with no evidence in it. The routes answer these cases with 404 and no code |
+| `token_read_only` | `review_keep` | The token has the `read` scope |
+| `token_owner_below_editor` | `review_keep` | The token's owner is below editor in the base |
+| `already_decided` | `review_keep` | The pair was decided before this call: a repeated call, a lost race, or a person decided it first |
+
+An error for which the route has no code has no `code` field: the governor is deciding the pair right now (try again after its proposal), or the server failed. A failed keep writes nothing, and the pair stays in the Duplicates section. A call with a missing or malformed argument (no `section`, an `id` that is not a uuid, a `limit` that is not an integer) is not run; it returns `isError: true` with a text message and no `structuredContent`.
+
+The annotations on these tools (`readOnlyHint` on the two reads; `readOnlyHint`, `destructiveHint` and `idempotentHint`, all `false`, on `review_keep`) are hints for the client. The server does not read them, and it does not use elicitation: what a token may do is decided by the checks above.
+
+## Review over the token API
+
+A token can also call three of the Review tab's own HTTP routes. They are the routes the browser uses — same URLs, same handlers — so an agent reads what a signed-in editor sees. All are under `/api/v1` and take `Authorization: Bearer utp_pat_…`.
+
+| Route | What it does | Who may call it |
+|---|---|---|
+| `GET /kbs/{kb_id}/review?queue=duplicates` | One page of the Duplicates section, as `{"counts", "queue", "items"}`. Optional `types` (`any`, `same`, `conflict`), `limit` (default 10, served as 1 to 200) and `offset` (default 0). `counts` and the order of `items` are the ones a session gets for the same request; an empty section is `"items": []` with zero counts, not an error | Any token (`read` or `write`) that reaches the base, with an owner who is at least a viewer |
+| `GET /kbs/{kb_id}/review/summary` | The Overview summary: what is waiting, what was decided, the base's health, the governor's recent rows | The same |
+| `POST /kbs/{kb_id}/review/{review_id}` with `{"action": "keep", "rationale": "…"}` | Keeps one pending duplicate pair apart. `rationale` is optional (a string or `null`). Answers `{"ok": true, "outcome": "applied", "action_id": "<uuid>"}` | A `write` token that reaches the base, with an owner who is at least an editor |
+
+A keep made with a token is applied at once and is recorded three ways in one transaction: the pair is marked kept by the token's owner through that token, a row is written to the token-agent ledger (`action_id` is its id), and an audit row is written with the owner as actor plus the token's id and the name it had at that moment. If any of the three cannot be written, the keep fails and the pair stays in the queue. A token's keep is **not** treated as a person's decision: the governor does not read it as precedent, it starts no governor round, and a governor proposal open on the pair stays open for a person to answer.
+
+Refusals carry a stable `code` beside the `error` message where one is listed:
+
+| Status | Code | When |
+|---|---|---|
+| 401 | none | The token is unknown, revoked or expired; or the route is one of the Review routes that take a signed-in session only (see below) |
+| 404 | none | On the two reads: the token's knowledge-base list excludes the base, or its owner cannot open it. The answer is the same as for a base that does not exist, and carries no item, count or summary. On the keep: no pair with that id in this base |
+| 422 | `unknown_queue` | A token asks the list for any section other than `duplicates`. No items are returned |
+| 422 | `unknown_type_filter` | `types` is not `any`, `same` or `conflict` |
+| 403 | `token_read_only` | A `read` token calls the keep route |
+| 403 | `token_kb_out_of_scope` | A `write` token whose knowledge-base list excludes the base calls the keep route |
+| 403 | `token_owner_below_editor` | The token's owner is below editor in the base |
+| 403 | `token_operation_not_open` | A `write` token of an editor sends any action other than `keep` (for example `merge`) to the decision route. Nothing is written |
+| 409 | `already_decided` | The pair was decided before this call: a repeated call, a lost race, or a person decided it first |
+| 409 | none | The governor is deciding this pair right now; nothing was decided, so try again after its proposal |
+
+Scope is checked before the owner's role, so a `read` token whose owner is a viewer gets `token_read_only`. A refusal changes nothing: the pair stays as it was and no ledger or audit row is written.
+
+**Not open to tokens.** The other eleven Review sections cannot be listed with a token. Merge, manual merge, merge revert and batch decisions are not open either: `merge` on the decision route answers `token_operation_not_open`, and the batch (`POST /kbs/{kb_id}/review/batch`, whatever its action — a batch of keeps included), revert (`POST /kbs/{kb_id}/merges/{merge_id}/revert`) and manual-merge (`POST /kbs/{kb_id}/entities/merge`) routes take a session only and answer a token with 401. Every other Review route — confirming or rejecting facts, answering the governor, the nod on what `remember` recorded — is also session only. A signed-in person's requests and responses on all of these routes are unchanged.
 
 ## Try it from a shell
 

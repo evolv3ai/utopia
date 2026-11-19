@@ -1870,6 +1870,15 @@ export const zh: Strings = {
     agentAsks: "问：",
     agentLookups: (n) => `查了 ${n} 次`,
     agentLookedAt: "看了",
+    tokenVia: (owner, token) => `${owner} 经 ${token}`,
+    tokenOperations: {
+      "review.keep": "把一对重复项分开了",
+    } as Record<string, string>,
+    tokenOutcome: {
+      applied: "已生效",
+      held: "已拦下",
+      proposed: "建议",
+    } as Record<string, string>,
     overviewAgent: "Agent",
     overviewAgentOff: "这个库的治理没有打开。",
     overviewAgentSettings: "去设置里打开",
@@ -2229,6 +2238,7 @@ export const zh: Strings = {
     deletedUser: "一位已移除的用户",
     adjudicator: "AI 裁决器",
     engine: "引擎",
+    auditDeclaredClient: (client) => `客户端（自报）：${client}`,
     auditActions: {
       "entity_type.created": "创建了实体类型",
       "entity_type.updated": "更新了实体类型",

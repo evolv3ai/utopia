@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it } from "vitest";
-import { ApiError } from "../api";
+import { ApiError, type AuditEvent } from "../api";
 import { S } from "../i18n";
 import { KbActivity } from "./KbSettings";
 
@@ -55,4 +55,96 @@ it("shows zero records after a successful empty response", () => {
   expect(html).toContain(S.kbset.auditTotal(0));
   expect(html).toContain(S.kbset.activityEmpty);
   expect(html).not.toContain('role="alert"');
+});
+
+// 令牌分开的一对（0076）：actor 是主人，另带令牌的 id、名字快照，和调用方自己报的客户端
+const tokenKeep: AuditEvent = {
+  id: "019a0000-0000-7000-8000-000000000001",
+  action: "review.keep",
+  target_kind: "review",
+  target_id: "019a0000-0000-7000-8000-000000000002",
+  detail: { left: "Ada Lovelace", right: "Ada King", score: 0.5, why: null },
+  actor_id: "019a0000-0000-7000-8000-000000000003",
+  actor_name: "Mira Okafor",
+  created_at: "2026-11-18T09:30:00Z",
+  token_id: "019a0000-0000-7000-8000-000000000004",
+  token_name: "graph-curator",
+  declared_client: "curl/8.5.0",
+};
+
+function renderEvents(events: AuditEvent[]) {
+  const client = createClient();
+  client.setQueryData(queryKey, { events, total: events.length, actions: ["review.keep"] });
+  return render(client);
+}
+
+/** 只看台账那几行：筛选下拉也会写出动作名，那不是行上的标签 */
+function rowsOf(html: string) {
+  const start = html.indexOf("divide-y");
+  expect(start).toBeGreaterThan(-1);
+  return html.slice(start);
+}
+
+it("shows a token event as owner via token name with a readable action and a declared client", () => {
+  const rows = rowsOf(renderEvents([tokenKeep]));
+  expect(rows).toContain("Mira Okafor via graph-curator");
+  expect(rows).toContain(S.review.tokenOperations["review.keep"]);
+  expect(rows).not.toContain("review.keep");
+  // 客户端是调用方自己报的：只以「declared」的写法出现，不单独当身份写出来
+  expect(rows).toContain("client (declared): curl/8.5.0");
+  expect(rows.split("curl/8.5.0").length - 1).toBe(1);
+});
+
+it("shows a token event that sent no User-Agent without a client label", () => {
+  const withoutClient: AuditEvent = { ...tokenKeep };
+  delete withoutClient.declared_client;
+  const rows = rowsOf(renderEvents([withoutClient]));
+  expect(rows).toContain("Mira Okafor via graph-curator");
+  expect(rows).toContain(S.review.tokenOperations["review.keep"]);
+  expect(rows).not.toContain("review.keep");
+  expect(rows).not.toContain("declared");
+  expect(rows).not.toContain("client");
+});
+
+it("uses the removed-user wording before via when the owner's name is gone", () => {
+  const rows = rowsOf(renderEvents([{ ...tokenKeep, actor_name: null }]));
+  expect(rows).toContain(`${S.kbset.deletedUser} via graph-curator`);
+});
+
+it("leaves events without a token name exactly as they were", () => {
+  const base = {
+    target_kind: "review",
+    target_id: null,
+    detail: {},
+    created_at: "2026-11-18T09:30:00Z",
+  };
+  const rows = rowsOf(renderEvents([
+    // 人自己分开的一对：没有令牌，哪怕带着别的字段也不写 via、不写客户端
+    { ...base, id: "e1", action: "review.keep", actor_id: "u1", actor_name: "Mira Okafor" },
+    // 治理 agent / 裁决器、引擎、已移除的用户：标签都不变
+    { ...base, id: "e2", action: "review.merge", actor_id: null, actor_name: null },
+    { ...base, id: "e3", action: "kb.updated", actor_id: null, actor_name: null },
+    { ...base, id: "e4", action: "kb.updated", actor_id: "u2", actor_name: null },
+    // 只有令牌 id、没有名字快照的老行（0014 的令牌写入）：不是这一刀的令牌行
+    {
+      ...base,
+      id: "e5",
+      action: "document.deleted",
+      actor_id: "u1",
+      actor_name: "Mira Okafor",
+      token_id: "t1",
+      declared_client: "curl/8.5.0",
+    },
+  ]));
+  expect(rows).not.toContain(" via ");
+  expect(rows).not.toContain("declared");
+  expect(rows).not.toContain("curl/8.5.0");
+  expect(rows).toContain("review.keep");
+  expect(rows).not.toContain(S.review.tokenOperations["review.keep"]);
+  expect(rows).toContain(S.kbset.adjudicator);
+  expect(rows).toContain(S.kbset.engine);
+  expect(rows).toContain(S.kbset.deletedUser);
+  expect(rows).toContain(S.kbset.auditActions["kb.updated"]);
+  expect(rows).toContain(S.kbset.auditActions["document.deleted"]);
+  expect(S.kbset.auditActions["review.keep"]).toBeUndefined();
 });

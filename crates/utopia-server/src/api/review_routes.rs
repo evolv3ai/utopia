@@ -8,6 +8,7 @@ use utopia_core::models::Role;
 use uuid::Uuid;
 
 use super::graph_routes::require_kb;
+use super::review_ops::{self, ReviewCaller};
 use crate::auth::{AuthUser, SessionOrToken};
 use crate::error::ApiResult;
 use crate::state::AppState;
@@ -20,8 +21,12 @@ mod phrase_tests;
 #[path = "review_conflict_tests.rs"]
 mod conflict_tests;
 
+#[cfg(test)]
+#[path = "review_attribution_tests.rs"]
+mod attribution_tests;
+
 /// 一页多少条。**服务端的默认，不是上限**——前端可以要更少，多则被 clamp 挡住
-const REVIEW_PAGE: i64 = 10;
+pub(super) const REVIEW_PAGE: i64 = 10;
 
 /// 事实快照（决策台账用）：reject 后事实从图里消失，台账必须自包含展示文本。
 /// 一律在动作执行前取。
@@ -73,12 +78,31 @@ pub struct ReviewQuery {
 /// 现在：计数每次都回（八个 COUNT 一条查询，走的是与列表同一套 WHERE），
 /// 内容只回当前那一档的一页。切换分档或翻页各发一次请求，代价是多几次往返，
 /// 换来的是**数字不再骗人**，而且一个有十万条待办的库也翻得到底。
+///
+/// 个人令牌也能读（0076）：令牌走 `review_ops::list`，这一刀只开 `duplicates` 一档；
+/// 会话照旧跑下面这一段
 pub async fn list(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    caller: SessionOrToken,
     Path(kb_id): Path<Uuid>,
     Query(q): Query<ReviewQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    let user = caller.user;
+    if let Some(token) = caller.pat {
+        let caller = ReviewCaller { user, token, kb_id };
+        let section = q.queue.as_deref().unwrap_or("duplicates");
+        return Ok(Json(
+            review_ops::list(
+                &state,
+                &caller,
+                section,
+                q.types.as_deref(),
+                q.limit,
+                q.offset,
+            )
+            .await?,
+        ));
+    }
     require_kb(&state, &user, kb_id, Role::Viewer).await?;
     let counts = utopia_store::review::counts(&state.pool, kb_id).await?;
     let queue = q.queue.as_deref().unwrap_or("duplicates");
@@ -135,8 +159,12 @@ pub async fn list(
         "merges" => {
             json!(utopia_store::resolution::list_merges(&state.pool, kb_id, limit, offset).await?)
         }
-        // agent 的每一笔（0025）：建议、自动裁决与人的回答，最新的在前
-        "agent" => json!(utopia_store::governance::list(&state.pool, kb_id, limit, offset).await?),
+        // agent 的每一笔（0025）：建议、自动裁决与人的回答，最新的在前。令牌 agent 台账的行
+        // 按动作时间并进同一页（0076 决定 7），带 `source: "token"`；治理 agent 的行原样
+        "agent" => json!(
+            utopia_store::token_agent_actions::agent_history(&state.pool, kb_id, limit, offset)
+                .await?
+        ),
         // 认不出的档名当成契约错误报出来，而不是悄悄回空——悄悄回空会让前端
         // 拼错一个字母之后看到「这一档清空了」
         other => {
@@ -280,12 +308,27 @@ pub struct DecideBody {
     pub rationale: Option<String>,
 }
 
+/// 人裁一对重复项。写令牌也能把一对分开（0076）：令牌走 `review_ops::keep`，判定经
+/// 裁定表、记进令牌 agent 的台账，不算人的先例；合并没开给令牌。会话照旧跑下面这一段
 pub async fn decide(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    caller: SessionOrToken,
     Path((kb_id, review_id)): Path<(Uuid, Uuid)>,
     Json(body): Json<DecideBody>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    let user = caller.user;
+    if let Some(token) = caller.pat {
+        let caller = ReviewCaller { user, token, kb_id };
+        if body.action != "keep" {
+            // 先过 scope 与角色，再说「这个动作没开」：只读令牌问合并，答的仍是
+            // `token_read_only`。什么都不写
+            review_ops::authorize_write(&state, &caller).await?;
+            return Err(review_ops::not_open().into());
+        }
+        return Ok(Json(
+            review_ops::keep(&state, &caller, review_id, body.rationale.as_deref()).await?,
+        ));
+    }
     require_kb(&state, &user, kb_id, Role::Editor).await?;
     let snap: Option<(String, String, f32)> = sqlx::query_as(
         "SELECT a.canonical_name, b.canonical_name, rr.score
@@ -729,11 +772,18 @@ pub async fn history(
 }
 
 /// 审核台的总览（#377）：等着办的、办过的、库的成色。三段聚合，一次返回。
+///
+/// 个人令牌也能读（0076），走 `review_ops::summary`；会话照旧
 pub async fn summary(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    caller: SessionOrToken,
     Path(kb_id): Path<Uuid>,
 ) -> ApiResult<Json<utopia_core::models::ReviewSummary>> {
+    let user = caller.user;
+    if let Some(token) = caller.pat {
+        let caller = ReviewCaller { user, token, kb_id };
+        return Ok(Json(review_ops::summary(&state, &caller).await?));
+    }
     require_kb(&state, &user, kb_id, Role::Viewer).await?;
     Ok(Json(
         utopia_store::review_summary::summary(&state.pool, kb_id).await?,
