@@ -2,7 +2,7 @@
 pipeline: gsd-path/v2
 project: utopia
 milestone: token-review-skeleton
-phase: build
+phase: ship
                     # inspect only for brownfield; greenfield starts at define
                     # roadmap only in program flow (CHARTER.md exists)
 status: active
@@ -47,3 +47,4 @@ it on completion. If this file and the artifacts disagree, the artifacts win
 - 2026-11-19 — plan — patch plan reopened
 - 2026-11-19 — plan — patch plan approved
 - 2026-11-19 — build — build started
+- 2026-11-19 — ship — build done; final review pending

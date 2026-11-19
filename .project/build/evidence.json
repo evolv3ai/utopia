@@ -1,7 +1,7 @@
 {
   "canonical_project_dir": ".project",
   "command": "verify-landed",
-  "head": "9fc511b167d6efcc996a86e58174822a1c3d1d73",
+  "head": "15aba10aeca484a5b04a7144f03bac806554a701",
   "project_dir": ".project",
   "tasks": [
     {
@@ -16,7 +16,7 @@
             "valid": true
           }
         ],
-        "head": "9fc511b167d6efcc996a86e58174822a1c3d1d73",
+        "head": "15aba10aeca484a5b04a7144f03bac806554a701",
         "subject": "T001: Prove database-backed verification and per-run database isolation on the compose Postgres"
       },
       "landed_commit": "fe713f5c2f4b6dc44ac394b79480d99292a4862c",
@@ -40,7 +40,7 @@
             "valid": true
           }
         ],
-        "head": "9fc511b167d6efcc996a86e58174822a1c3d1d73",
+        "head": "15aba10aeca484a5b04a7144f03bac806554a701",
         "subject": "T002: Record ADR 0076 with the ruled authority table and check its numbers against upstream"
       },
       "landed_commit": "d9f67d16990a649142b99dbf3f7d397b8488a793",
@@ -64,7 +64,7 @@
             "valid": true
           }
         ],
-        "head": "9fc511b167d6efcc996a86e58174822a1c3d1d73",
+        "head": "15aba10aeca484a5b04a7144f03bac806554a701",
         "subject": "T003: Add the token-agent ledger, the atomic token keep, the authority policy and the precedent isolation in the store"
       },
       "landed_commit": "178de2cedf25647c8336d003285b4758dd641717",
@@ -88,7 +88,7 @@
             "valid": true
           }
         ],
-        "head": "9fc511b167d6efcc996a86e58174822a1c3d1d73",
+        "head": "15aba10aeca484a5b04a7144f03bac806554a701",
         "subject": "T004: Open Duplicates, Overview and keep to personal tokens over the HTTP API through one shared operation layer"
       },
       "landed_commit": "698659805cc5dc350f7826af9cc4e382efa253c5",
@@ -112,7 +112,7 @@
             "valid": true
           }
         ],
-        "head": "9fc511b167d6efcc996a86e58174822a1c3d1d73",
+        "head": "15aba10aeca484a5b04a7144f03bac806554a701",
         "subject": "T005: Serve review_list, review_item and review_keep over MCP through the shared operation layer"
       },
       "landed_commit": "46b0acc3c08776be2a0be189532b14df6426fd52",
@@ -136,7 +136,7 @@
             "valid": true
           }
         ],
-        "head": "9fc511b167d6efcc996a86e58174822a1c3d1d73",
+        "head": "15aba10aeca484a5b04a7144f03bac806554a701",
         "subject": "T006: Show a token keep as \"owner via token name\" in Agent History and in Activity"
       },
       "landed_commit": "1991c99069f67868798bbaf6e3e9bb777a24f7c7",
@@ -146,6 +146,30 @@
         "id": "T006",
         "status": "done",
         "task_file": ".project/tasks/T006-show-token-keeps-in-agent-history-and-activity.md"
+      }
+    },
+    {
+      "classification": "proven-landed",
+      "command": "reconcile",
+      "history": {
+        "branch": "gsd-path/M001",
+        "candidates": [
+          {
+            "base": "d68e4bbe4d905207d7c2215cceb76910c3e971d2",
+            "commit": "aab411c133886dac208d39fc7aee57cb32250dbe",
+            "valid": true
+          }
+        ],
+        "head": "15aba10aeca484a5b04a7144f03bac806554a701",
+        "subject": "T007: Bump the backup manifest schema version to the number of migration files so a backup made by this build restores"
+      },
+      "landed_commit": "aab411c133886dac208d39fc7aee57cb32250dbe",
+      "reasons": [],
+      "task": {
+        "base": "d68e4bbe4d905207d7c2215cceb76910c3e971d2",
+        "id": "T007",
+        "status": "done",
+        "task_file": ".project/tasks/T007-count-migration-0128-in-the-schema-version.md"
       }
     }
   ]
