@@ -3,9 +3,9 @@ id: T003
 title: Add the token-agent ledger, the atomic token keep, the authority policy and the precedent isolation in the store
 wave: 1
 deps: [T002]
-status: pending
-agent: null
-base: null
+status: done
+agent: build_T003
+base: 49a8dd6bac87d2497d013a458bb93baa54b29000
 worktree: null
 task_branch: null
 files:
@@ -72,3 +72,31 @@ Heavy: yes
 ## Log
 
 - 2026-11-18 — created by planner
+- 2026-11-19 — build_T003 preflight clean: every Context/Approach/Interface path exists or is declared, SC9 is INTENT success criterion 9, the Interface contract lines appear verbatim in T002/T004/T006 where exchanged, Verify paths exist.
+- 2026-11-19 — build_T003 implementation: migration 0128 (idempotent: `token_agent_actions` with `kb_id` FK cascade to `knowledge_bases` as `agent_decisions`, bare `owner_id`/`token_id` with no FK, CHECK on `outcome`, index `(kb_id, created_at DESC, id DESC)`; `resolution_reviews.decided_token UUID`). `execution_gate.rs`: `AgentOperation` (19), `AgentRuling`, `AgentOutcome::as_str`, `agent_ruling` (exhaustive match, no wildcard), `agent_policy`. `token_agent_actions.rs` (declared in `lib.rs`): `TokenAgentAction`, `keep_duplicate_pair` (one transaction: `SELECT … FOR UPDATE OF rr` with name/score snapshot, token name from `personal_tokens` by id — missing row is an error, guarded `UPDATE … AND status = 'pending'`, ledger insert, `audit::record_on` on the same connection, commit; no `answer_open`, no `supersede_siblings`, no govern job), `list`, `count`. `governance.rs`: the three `precedents_for` queries and `ledger_search` exclude audit rows whose detail has the key `token_id`; `type_pair_stats` and `decided_before` exclude `decided_token IS NOT NULL`; no other reader in the file treats `actor_id`/`decided_by` on review or audit rows as a person. `resolution.rs` untouched. New top-level test binary `a_token_keep_is_never_human_precedent.rs` with the seven named tests plus `a_pair_the_governor_is_deciding_is_refused_to_a_token_as_to_a_person`; its database tests run serially (the replay takes table locks).
+- 2026-11-19 — build_T003 decision inside Approach bounds: `governance::locked_by_agent` (reused, same `AppError::Conflict` text as `decide_review`) is called before the transaction opens, not inside it — it acquires its own pool connection, and calling it while holding the transaction's connection can starve the pool under concurrent keeps. It returns true only for a pending row of this base, so `NotFound`/`already_decided` precedence is unchanged; a governor lock taken after the check is caught by the status guard, as on the person's path.
+- 2026-11-19 — build_T003 mutation check (temporary, reverted): with the `governance.rs` exclusions disabled, `a_token_keep_changes_no_precedent_no_settlement_and_queues_no_govern_round` and `a_persons_keep_still_counts_beside_a_token_keep` both fail (token keep appears as same-pair precedent, `decided_before` = false, gate keep@0.80 Propose→Apply, type-pair kept +1); with them restored both pass.
+- 2026-11-19 — build_T003 Verify: the guard hook refused the whole command while it contained `bash scripts/check-upstream-numbers.sh 0076 0128` ("bash reads commands from a file or stdin the guard cannot inspect"); that one part was NOT run by me. Every other part ran exactly as written from the worktree root in Git Bash, on database `m001_t003`: both `test -s` pass; `DROP DATABASE IF EXISTS m001_t003 WITH (FORCE)` / `CREATE DATABASE m001_t003` ok; `cargo run -p utopia-store --example migrate` ok; `cargo test -p utopia-store --test a_token_keep_is_never_human_precedent` 8 passed, 0 failed; `cargo test -p utopia-store --test store -- a_governor_reads_the_ledger a_decision_keeps_its_reason_and_the_precedent_carries_it a_batch_decides_like_a_person` 3 passed, 0 failed; the `for t in $T` loop found `... ok` for all ten names; exit 0. After that run one lint-only change (`&mut *tx` → `&mut tx` in the `record_on` call) was made and both `cargo test` commands were rerun on the same database: 8 passed and 3 passed. `cargo clippy -p utopia-store --tests` clean. Result: ready, pending the orchestrator's isolated Verify (which runs the upstream number check).
+- 2026-11-19 — orchestrator Verify (sidecar gsd-path-verify/task-t003-verify): pass, exit 0; output tail:
+  ```
+     Compiling utopia-reason v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t003-verify\crates\utopia-reason)
+     Compiling strum v0.27.2
+     Compiling hyper-util v0.1.20
+     Compiling cron v0.12.1
+     Compiling sqlx-macros-core v0.8.6
+     Compiling sqlx-macros v0.8.6
+     Compiling pdf-extract v0.12.0
+     Compiling utopia-ingest v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t003-verify\crates\utopia-ingest)
+     Compiling tokio-rustls v0.26.5
+     Compiling rustls-platform-verifier v0.6.2
+     Compiling hyper-rustls v0.27.9
+     Compiling reqwest v0.13.1
+     Compiling utopia-llm v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t003-verify\crates\utopia-llm)
+     Compiling utopia-extract v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t003-verify\crates\utopia-extract)
+     Compiling sqlx v0.8.6
+     Compiling pgvector v0.4.2
+     Compiling utopia-core v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t003-verify\crates\utopia-core)
+     Compiling utopia-store v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t003-verify\crates\utopia-store)
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 57.67s
+       Running `C:/Users/Owner/.gsd-path/cargo-target/utopia\debug\examples\migrate.exe`
+  ```

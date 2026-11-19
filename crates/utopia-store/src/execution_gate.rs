@@ -118,6 +118,96 @@ pub fn hold(impact: &Impact) -> Option<Hold> {
     None
 }
 
+/// 令牌 agent 能在 Review 里做的操作（0076 决定 4）。一行对应裁定表的一行；
+/// 这一刀只有 `Keep` 有调用方，其余的行先把裁定写在这里，路径跟着各自那一刀来
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AgentOperation {
+    ConfirmFact,
+    RejectFact,
+    CloseFact,
+    /// 队列里的合并与手动合并是同一行
+    Merge,
+    Keep,
+    RevertMerge,
+    ResolveConflict,
+    /// `pending_facts` 上的点头：章程否决，任何方案里都只能提议
+    PendingNod,
+    Batch,
+    AnswerGovernor,
+    AlignmentPhrase,
+    AlignmentRule,
+    AlignmentKindWord,
+    Errata,
+    OntologyProposal,
+    Mapping,
+    Violation,
+    Defect,
+    ConsistencyRun,
+}
+
+/// 裁定表里的三种说法
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentRuling {
+    /// 直接落地
+    Finalize,
+    /// 过了服务端的闸门才落地；被闸门留下的变成提议
+    FinalizeBehindGate,
+    /// 只能提议，等人答
+    ProposeOnly,
+}
+
+/// 策略对一次调用的回答，也是 `token_agent_actions.outcome` 存的三个值
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentOutcome {
+    Applied,
+    Held,
+    Proposed,
+}
+
+impl AgentOutcome {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AgentOutcome::Applied => "applied",
+            AgentOutcome::Held => "held",
+            AgentOutcome::Proposed => "proposed",
+        }
+    }
+}
+
+/// 所有者 2026-11-18 裁定的那张表（「Option 1: the recommended per-operation table」），
+/// 编进二进制：不是每库的设置，也不由 MCP 客户端、工具注解或 elicitation 执行（0076 决定 3）。
+///
+/// **不写通配分支。** 新加一个操作而不给它裁定，应当编译不过，而不是悄悄落进某一档
+pub fn agent_ruling(op: AgentOperation) -> AgentRuling {
+    use AgentOperation::*;
+    match op {
+        // 只改审核行或可以再裁一次的：分开、kind-word（0014 决定 6 早已对写令牌开放）、
+        // 映射；一致性检查不裁任何一项，只是重算
+        Keep | AlignmentKindWord | Mapping | ConsistencyRun => AgentRuling::Finalize,
+        // 合并有精确的撤销路由，但要过 `hold_for_merge`；撤销只对令牌 agent 自己的合并；
+        // 批量继承每个成员的裁定
+        Merge | RevertMerge | Batch => AgentRuling::FinalizeBehindGate,
+        // 没有撤销路由、单向的状态变更，或者本身就是人对另一个 agent 的检查
+        ConfirmFact | RejectFact | CloseFact | ResolveConflict | PendingNod | AnswerGovernor
+        | AlignmentPhrase | AlignmentRule | Errata | OntologyProposal | Violation | Defect => {
+            AgentRuling::ProposeOnly
+        }
+    }
+}
+
+/// 这一次调用落地、被闸门留下，还是只成为提议。`hold` 是这一行的闸门给的理由
+/// （合并是 `hold_for_merge`）；没有闸门的行不看它
+pub fn agent_policy(op: AgentOperation, hold: Option<&Hold>) -> AgentOutcome {
+    match agent_ruling(op) {
+        AgentRuling::Finalize => AgentOutcome::Applied,
+        AgentRuling::FinalizeBehindGate => match hold {
+            None => AgentOutcome::Applied,
+            Some(_) => AgentOutcome::Held,
+        },
+        AgentRuling::ProposeOnly => AgentOutcome::Proposed,
+    }
+}
+
 /// 身份来源的名字证据属于实体，不只属于它现在显示的本名；混有散文证据也不撤销声明。
 /// 每次要自动合并时重读来源的开关，包括缓存判决和同簇里已合过一侧的后继判决。
 pub async fn hold_for_merge(

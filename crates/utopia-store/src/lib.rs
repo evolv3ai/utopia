@@ -50,6 +50,7 @@ pub mod sources;
 pub mod temporal;
 pub mod test_db;
 pub mod time_mentions;
+pub mod token_agent_actions;
 pub mod tokens;
 pub mod type_bindings;
 pub mod vector_index;
