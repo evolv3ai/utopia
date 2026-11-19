@@ -2,15 +2,26 @@
 
 <!-- Written by the planner role. Executed wave-by-wave by /gsd-path-build. -->
 
-Project verify: `docker exec utopia-db-1 psql -U utopia -d utopia -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS m001_project WITH (FORCE)" -c "CREATE DATABASE m001_project" && export UTOPIA_DATABASE_URL=postgres://utopia:utopia@127.0.0.1:1517/m001_project && cargo run -p utopia-store --example migrate && UTOPIA_TEST_REQUIRE_DB=1 cargo test --workspace && (cd web && pnpm install --frozen-lockfile && pnpm test && pnpm build)`
+Project verify: `docker exec utopia-db-1 psql -U utopia -d utopia -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS m001_project WITH (FORCE)" -c "CREATE DATABASE m001_project" -c "DROP DATABASE IF EXISTS m001_project_store WITH (FORCE)" -c "CREATE DATABASE m001_project_store" && export UTOPIA_DATABASE_URL=postgres://utopia:utopia@127.0.0.1:1517/m001_project && cargo run -p utopia-store --example migrate && UTOPIA_TEST_REQUIRE_DB=1 cargo test --workspace --exclude utopia-store && export UTOPIA_DATABASE_URL=postgres://utopia:utopia@127.0.0.1:1517/m001_project_store && cargo run -p utopia-store --example migrate && UTOPIA_TEST_REQUIRE_DB=1 cargo test -p utopia-store && (cd web && pnpm install --frozen-lockfile && pnpm test && pnpm build)`
 <!-- Run once at ship, in a fresh sidecar worktree checked out at the
      reviewed commit: no node_modules, virtualenv, build output, or untracked
-     env files exist there. It creates its own database `m001_project` on the
-     compose `db` container (`utopia-db-1`, pgvector/pgvector:pg16, published
-     on 127.0.0.1:1517), migrates it, runs the whole Rust workspace with
-     database-backed tests required, then installs, tests and builds the web
-     app. `#[ignore]`d delivery tests stay out. A task Verify must not copy
-     this command. -->
+     env files exist there. It creates its own databases `m001_project` and
+     `m001_project_store` on the compose `db` container (`utopia-db-1`,
+     pgvector/pgvector:pg16, published on 127.0.0.1:1517), migrates each,
+     runs every crate except `utopia-store` against the first and the
+     `utopia-store` crate against the second, all with database-backed tests
+     required, then installs, tests and builds the web app. `#[ignore]`d
+     delivery tests stay out. A task Verify must not copy this command.
+     Amended in the wave 3 patch — Delegated (driver D065), a documented
+     repair of the project Verify: the unmodified upstream test
+     `crates/utopia-store/tests/intake_runs_while_model_work_holds_every_slot.rs`
+     fails with "deadline has elapsed" (10 s) in a database where the
+     `utopia-server` tests already ran, because its worker must first claim
+     their leftover queued `process_document` jobs; it passes on a freshly
+     migrated database and failed the same way at the milestone's base, so
+     the store crate gets its own database. Host precondition: `pg_dump` and
+     `pg_restore` of PostgreSQL 16 are on PATH (the `utopia-cli` restore
+     test calls them against the version 16 server). -->
 
 ## Config
 
@@ -28,6 +39,16 @@ Review depth: full
 
 Goal: Duplicates and Overview end to end for a personal token, then one keep through the shared operation layer and the server-side policy, over the token API and over MCP, shown as "owner via token name" in the Review tab's Agent History section and in the Activity view. The wave touches authorization (token scope and owner role on Review routes and MCP tools) and concurrency (two keeps of one pair).
 Review depth: full
+
+## Wave 3 — patch: final-review finding P001
+
+Goal: Repair the one product defect behind the failed project Verify at reviewed commit `c7db84941a3f8bea4f41365c78fd9b9e83434608` (finding P001, `.project/review/PATCH-FINDINGS.md`): migration 0128 made 114 migration files and the backup manifest's `CURRENT_SCHEMA_VERSION` stayed 113, so the `utopia-cli` guard test and 11 restore tests fail. T007 bumps the constant — the only hand-written copy of that number in the tree — and its Verify proves that no other copy disagrees and that the `utopia-cli` unit tests and restore tests pass against a freshly migrated database. If it fails, the milestone cannot ship and final review does not run again.
+Review depth: verify-only
+<!-- verify-only: not wave 1; a one-literal change with no authentication,
+     authorization, payments, data migration or concurrency in it (no schema
+     or data changes; the restore gate's comparison is untouched), and the
+     task Verify mechanically covers every acceptance criterion. INTENT.md
+     records no request for adversarial review, so `deep` is not allowed. -->
 
 ## Surface contract
 
