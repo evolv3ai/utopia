@@ -3,9 +3,9 @@ id: T002
 title: Record ADR 0076 with the ruled authority table and check its numbers against upstream
 wave: 1
 deps: []
-status: pending
-agent: null
-base: null
+status: done
+agent: build_T002
+base: 5e101654fc91deff9eb3f5a8e7a8bc4983960cfc
 worktree: null
 task_branch: null
 files:
@@ -67,3 +67,20 @@ Heavy: no
 ## Log
 
 - 2026-11-18 — created by planner
+- 2026-11-18 — build_T002 preflight: SC11 present in INTENT.md; Interface contract text identical in T003; all Verify paths declared. One map note, not blocking: the adopt route is `adopt` in `crates/utopia-server/src/api/question_routes.rs` (calls `ontology_agent::adopt`), not in `ontology_routes.rs`, which holds only the reject route `decide_proposal`; both were read.
+- 2026-11-18 — build_T002 implementation: wrote `docs/decisions/0076-a-token-agent-acts-on-review-under-a-ruled-table.md` (status `Accepted`; the 19-row table is byte-identical to SYNTHESIS.md lines 115-135 by `diff`; D056 ruling under Open questions and in `open:`), added its row to the governance index of `docs/decisions/README.md`, wrote `scripts/check-upstream-numbers.sh` (one open-PR listing through `gh api` or the unauthenticated public API, one `git fetch --depth 1 --filter=blob:none` into a temporary bare repository; exit 0/1/2 per the Interface contract; sends nothing). Ontology adoption finding: confirmed, no undo — only three statements write `ontology_proposals` (`save_agent_proposals` insert/refresh of `open`, `reject_proposal` open→rejected, `finish_adoption` open→adopted); `unadopt_types` reverts an `entity_retypes` batch only; `adopt_iri_onto_key` is the OWL import's IRI claim. Reason text left unchanged.
+- 2026-11-18 — build_T002 upstream numbers, read by hand with read-only commands (`git ls-remote`, `gh api` GET): upstream `dev` is 3d307f6 (the commit under this task's base, highest ADR 0075 and migration 0126); 22 open pull requests; the only numbered file an open pull request adds under `docs/decisions/` or `migrations/` is `migrations/0127_document_purge_finds_chunk_dependents.sql` (#1496). 0076 and 0128 are free.
+- 2026-11-18 — build_T002 Verify: NOT RUN as written. The grep half ran directly and passed (exit 0: counts 12 / 3 / 4, the three names, `ontology adoption`, README entry). Both `bash scripts/check-upstream-numbers.sh …` calls were refused before execution by the project's PreToolUse guard (`.gsd-path/guard_hook.py`: "bash reads commands from a file or stdin the guard cannot inspect"); `bash -n` and `bash -c 'bash scripts/…'` were refused the same way, and the script body pasted inline was refused because the guard cannot parse `case`. The guard was not worked around. The script has therefore never been executed: its exit codes 0, 1 and 2 are unproven.
+- 2026-11-18 — build_T002 blocked: verification cannot run from the coder's tool channel. Needed: the orchestrator's isolated Verify rerun of this worktree as it stands (no product change is pending), or a guard allowance for `bash scripts/check-upstream-numbers.sh`.
+- 2026-11-19 — orchestrator Verify (isolate gsd-path-task/T002): pass, exit 0; output tail:
+  ```
+  free: decision record 0076 and migration 0128 (upstream dev and 22 open pull requests checked)
+  collision: docs/decisions/0075-a-ticket-source-says-where-its-reading-stopped.md (upstream dev)
+  collision: migrations/0126_a_superseded_chunk_is_found_by_its_age.sql (upstream dev)
+  ```
+- 2026-11-19 — orchestrator Verify (isolate gsd-path-task/T002): pass, exit 0; output tail:
+  ```
+  free: decision record 0076 and migration 0128 (upstream dev and 22 open pull requests checked)
+  collision: docs/decisions/0075-a-ticket-source-says-where-its-reading-stopped.md (upstream dev)
+  collision: migrations/0126_a_superseded_chunk_is_found_by_its_age.sql (upstream dev)
+  ```
