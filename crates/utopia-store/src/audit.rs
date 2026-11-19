@@ -185,9 +185,16 @@ pub async fn list_for_kb(
            AND ($4::timestamptz IS NULL OR e.created_at >= $4)
            AND ($5::timestamptz IS NULL OR e.created_at < $5)";
 
+    // 经令牌做的动作（0076 决定 8）：detail 里的令牌 id 与名字快照单独回出来，界面写成
+    // 「主人 via 令牌名」。`declared_client` 是请求自己报的 User-Agent——只在带令牌的行上回，
+    // 而且只是展示：它由调用方完全控制，不是验证过的身份
     let rows: Vec<AuditEventView> = sqlx::query_as(&format!(
         "SELECT e.id, e.action, e.target_kind, e.target_id, e.detail,
-                e.actor_id, u.display_name AS actor_name, e.created_at
+                e.actor_id, u.display_name AS actor_name, e.created_at,
+                e.detail->>'token_id' AS token_id,
+                e.detail->>'token_name' AS token_name,
+                CASE WHEN e.detail->>'token_id' IS NOT NULL THEN e.user_agent END
+                    AS declared_client
          FROM audit_events e LEFT JOIN users u ON u.id = e.actor_id
          {WHERE}
          ORDER BY e.created_at DESC, e.id DESC LIMIT $6 OFFSET $7"

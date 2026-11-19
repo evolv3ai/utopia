@@ -447,6 +447,21 @@ pub struct AuditEventView {
     pub actor_id: Option<Uuid>,
     pub actor_name: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// 经个人令牌做的动作才有（0076 决定 8）：detail 里记下的那一枚。三个字段都是
+    /// 「有才序列化」——别的事件、以及共用这个结构的决策台账，形状原样不动。
+    /// 不选这几列的查询读到的是 None（`sqlx(default)`）
+    #[sqlx(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_id: Option<String>,
+    /// 动作那一刻令牌叫什么：存下的快照，令牌改名、撤销都不动它
+    #[sqlx(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_name: Option<String>,
+    /// 调用方**自己报的** User-Agent，只在带令牌的行上回。它是声明，不是验证过的身份：
+    /// 只拿来展示，任何鉴权与策略都不读它
+    #[sqlx(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub declared_client: Option<String>,
 }
 
 /// 账户层"我的知识库"行信息（成员行可空：open 库凭部署身份进入，无矩阵记录）。

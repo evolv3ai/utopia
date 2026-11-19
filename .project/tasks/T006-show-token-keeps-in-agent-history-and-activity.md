@@ -3,9 +3,9 @@ id: T006
 title: Show a token keep as "owner via token name" in Agent History and in Activity
 wave: 2
 deps: [T003, T004]
-status: pending
-agent: null
-base: null
+status: done
+agent: build_T006
+base: 2557a1bba93a94acf119957037c1784cb484fa1a
 worktree: null
 task_branch: null
 files:
@@ -85,3 +85,83 @@ Heavy: yes
 ## Log
 
 - 2026-11-18 — created by planner
+- 2026-11-19 — build_T006 preflight clean: every named path exists or is declared, SC7 and SC8 are in INTENT.md, each Interface contract bullet appears verbatim in the sibling that exchanges it (T003, T004, T005).
+- 2026-11-19 — build_T006 implementation. Store: `token_agent_actions::agent_history` pages the union of `agent_decisions` and `token_agent_actions` by `created_at DESC, id DESC`, takes the governor rows of the page as the matching contiguous slice of `governance::list` (serialized unchanged, no added key; `governance.rs` untouched) and loads ledger rows by id as `{"source":"token",...}` from the stored payload and `token_name` snapshot; `review::counts.agent_rows` now counts both tables (`agent` unchanged); `audit::list_for_kb` fills `token_id`, `token_name` and `declared_client` (the stored User-Agent, only on rows with a token id). Core: `AuditEventView` gains the three optional fields (`sqlx(default)`, serialized only when present; `token_id` is the string stored in detail), so `review_history` keeps its shape. Server: the `agent` arm of `review_routes::list` calls the merged read; tests in `review_attribution_tests.rs` wired by `#[path]` in `review_routes.rs`. `kbs.rs` needed no change (route stays `AuthUser` + Admin). Web: `TokenAgentRow.tsx` (component plus `viaToken`, `tokenOperationLabel`, `declaredClientLabel`), used by the Agent section of `Review.tsx` for `source === "token"` and by `KbActivity` for events with `token_name`; `S.kbset.auditActions` has no new key; strings in en and zh; types in `api.ts`. ADR 0076 status line now `In progress` (keep slice built, migration 0128, open items listed) and README index word updated; authority table unchanged. The status line names the MCP tools `review_list`, `review_item`, `review_keep`, which T005 lands in this same wave.
+- 2026-11-19 — build_T006 Verify, run 1 (exact command, Git Bash, `CARGO_TARGET_DIR=C:/Users/Owner/.gsd-path/cargo-target/utopia-T006`): fail at `pnpm --dir web build` — style guard `raw-control` on two string literals in `TokenAgentRow.test.ts`; the six cargo tests and the three vitest files (17 tests) had passed. Fixed in the test file (regex instead of literals).
+- 2026-11-19 — build_T006 Verify, run 2 (exact command, same environment): pass, exit 0. Database `m001_t006` recreated and migrated; `cargo test -p utopia-server` 6 passed, 0 failed (the five new tests and `a_session_editor_gets_todays_duplicates_overview_keep_merge_and_batch_responses`); `web/node_modules/.bin/vitest run` 3 files, 17 tests passed; `pnpm --dir web build` passed (style guard 156 files, `tsc --noEmit`, `vite build`). No part of Verify was refused by the guard.
+- 2026-11-19 — build_T006 environment note: the heavy lock `C:/Users/Owner/.gsd-path/cargo-target/heavy.lock` was created before run 1, but the pre-tool guard refused its removal (`rmdir`, run alone with the literal path: "destructive target is pipeline state"). It was not worked around, so the lock directory is still present and the orchestrator must remove it.
+- 2026-11-19 — orchestrator Verify (isolate gsd-path-task/T006): fail, exit 1; output tail:
+  ```
+  
+  failures:
+  
+  ---- api::review_routes::attribution_tests::activity_omits_the_declared_client_when_no_user_agent_was_sent stdout ----
+  Error: {"action":"review.keep","actor_id":"01a1f4bd-1e31-7f92-9156-bdf4fc163ff5","actor_name":"Editor","created_at":"2026-11-19T16:56:38.056013Z","detail":{"left":"Ada Lovelace","right":"Ada King","score":0.5,"token_id":"01a1f4bd-2160-7051-b0eb-4cdd867789c5","token_name":"curator","why":"different people"},"id":"01a1f4bd-21ad-7ca2-af09-9aef761ea7ee","target_id":"01a1f4bd-2140-7312-8376-0328c719f4dd","target_kind":"review"}
+  
+  ---- api::review_routes::attribution_tests::activity_returns_token_id_token_name_and_declared_client_for_a_token_keep stdout ----
+  Error: {"action":"review.keep","actor_id":"01a1f4bd-1e2c-7513-bca2-6cfb44917c9c","actor_name":"Editor","created_at":"2026-11-19T16:56:38.201934Z","detail":{"left":"Ada Lovelace","right":"Ada King","score":0.5,"token_id":"01a1f4bd-21f7-7c43-be66-8bd24417095b","token_name":"curator","why":"different people"},"id":"01a1f4bd-223e-7ed3-b76d-6308b379d262","target_id":"01a1f4bd-2190-7583-b70b-b579c313c36f","target_kind":"review"}
+  
+  
+  failures:
+      api::review_routes::attribution_tests::activity_omits_the_declared_client_when_no_user_agent_was_sent
+      api::review_routes::attribution_tests::activity_returns_token_id_token_name_and_declared_client_for_a_token_keep
+  
+  test result: FAILED. 4 passed; 2 failed; 0 ignored; 0 measured; 833 filtered out; finished in 2.08s
+  
+  error: test failed, to rerun pass `-p utopia-server --bin utopia-server`
+     Compiling utopia-store v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\task\T006\crates\utopia-store)
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.96s
+       Running `C:/Users/Owner/.gsd-path/cargo-target/utopia\debug\examples\migrate.exe`
+  ```
+- 2026-11-19 — orchestrator Verify (isolate gsd-path-task/T006): pass, exit 0; output tail:
+  ```
+     Compiling reqwest v0.13.1
+     Compiling utopia-llm v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\task\T006\crates\utopia-llm)
+     Compiling utopia-extract v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\task\T006\crates\utopia-extract)
+     Compiling sqlx v0.8.6
+     Compiling pgvector v0.4.2
+     Compiling utopia-core v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\task\T006\crates\utopia-core)
+     Compiling utopia-store v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\task\T006\crates\utopia-store)
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 05s
+       Running `C:/Users/Owner/.gsd-path/cargo-target/finish-T006\debug\examples\migrate.exe`
+  (node:37300) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:5424) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:28468) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  [33m
+  (!) Some chunks are larger than 500 kB after minification. Consider:
+  - Using dynamic import() to code-split the application
+  - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+  - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+  ```
+- 2026-11-19 — orchestrator regression Verify of T002 (isolate gsd-path-task/T006): pass, exit 0; output tail:
+  ```
+  free: decision record 0076 and migration 0128 (upstream dev and 22 open pull requests checked)
+  collision: docs/decisions/0075-a-ticket-source-says-where-its-reading-stopped.md (upstream dev)
+  collision: migrations/0126_a_superseded_chunk_is_found_by_its_age.sql (upstream dev)
+  ```
+- 2026-11-19 — orchestrator regression Verify of T003 (isolate gsd-path-task/T006): pass, exit 0; output tail:
+  ```
+  test a_token_keep_with_no_token_to_name_changes_nothing ... ok
+  test a_token_keep_changes_no_precedent_no_settlement_and_queues_no_govern_round ... ok
+  test a_pair_the_governor_is_deciding_is_refused_to_a_token_as_to_a_person ... ok
+  test a_token_keep_writes_the_review_row_the_ledger_row_and_the_audit_row_together ... ok
+  test replaying_migration_0128_changes_nothing ... ok
+  
+  test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.55s
+  
+     Compiling utopia-store v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\task\T006\crates\utopia-store)
+      Finished `test` profile [unoptimized + debuginfo] target(s) in 14.51s
+       Running tests\store\main.rs (C:/Users/Owner/.gsd-path/cargo-target/finish-T006\debug\deps\store-97773e81a9073f97.exe)
+  
+  running 3 tests
+  test a_decision_records_why::a_decision_keeps_its_reason_and_the_precedent_carries_it ... ok
+  test a_batch_decides_like_a_person::a_batch_decides_like_a_person ... ok
+  test a_governor_reads_the_ledger::a_governor_reads_the_ledger ... ok
+  
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 358 filtered out; finished in 1.66s
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.35s
+       Running `C:/Users/Owner/.gsd-path/cargo-target/finish-T006\debug\examples\migrate.exe`
+  ```

@@ -212,3 +212,110 @@ pub async fn count(pool: &PgPool, kb_id: Uuid) -> AppResult<i64> {
         .await?;
     Ok(n)
 }
+
+/// 台账的一行在 Agent 一档里的样子（0076 决定 7）。`source: "token"` 把它和治理 agent 的
+/// 行分开——那些行没有这个键。`left` / `right` / `rationale` 取自动作那一刻存下的 payload，
+/// `token_name` 是存下的快照：这里不读 `personal_tokens`，令牌改名、撤销之后照旧
+fn history_row(a: &TokenAgentAction) -> serde_json::Value {
+    serde_json::json!({
+        "source": "token",
+        "id": a.id,
+        "operation": a.operation,
+        "target_kind": a.target_kind,
+        "target_id": a.target_id,
+        "owner_id": a.owner_id,
+        "owner_name": a.owner_name,
+        "token_id": a.token_id,
+        "token_name": a.token_name,
+        "outcome": a.outcome,
+        "left": a.payload.get("left"),
+        "right": a.payload.get("right"),
+        "rationale": a.payload.get("why"),
+        "created_at": a.created_at,
+    })
+}
+
+/// 两张表并在一起的那个顺序：按动作时间，最新的在前。与 `governance::list`、[`list`]
+/// 各自的排序是同一把钥匙，所以并起来之后每一边内部的先后都不变
+const BOTH: &str = "(SELECT 'governor' AS src, id, created_at FROM agent_decisions WHERE kb_id = $1
+          UNION ALL
+          SELECT 'token' AS src, id, created_at FROM token_agent_actions WHERE kb_id = $1) u";
+
+/// Agent 一档的一页：治理 agent 的行加令牌 agent 台账的行，`limit` / `offset` 作用在
+/// 并起来的序列上。
+///
+/// 治理 agent 的行就是 `governance::list` 序列化出来的样子，一个键不多一个键不少——
+/// 所以这里不自己写它的查询，而是算出这一页里它的行在 `governance::list` 里是哪一段
+/// （前面有几条、这一页有几条），原样取那一段。两边排序相同，这一段必然是连续的。
+/// 台账的行按 id 取
+pub async fn agent_history(
+    pool: &PgPool,
+    kb_id: Uuid,
+    limit: i64,
+    offset: i64,
+) -> AppResult<Vec<serde_json::Value>> {
+    // 窗口函数先于 LIMIT / OFFSET 算：每一行都知道排在它前面的治理行有几条
+    let page: Vec<(String, Uuid, i64)> = sqlx::query_as(&format!(
+        "SELECT src, id,
+                count(*) FILTER (WHERE src = 'governor') OVER (
+                    ORDER BY created_at DESC, id DESC
+                    ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS governors_before
+           FROM {BOTH}
+          ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3"
+    ))
+    .bind(kb_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+    let Some(governors_before) = page.first().map(|row| row.2) else {
+        return Ok(Vec::new());
+    };
+
+    let governors = page.iter().filter(|row| row.0 == "governor").count() as i64;
+    let mut governor_rows = std::collections::HashMap::new();
+    if governors > 0 {
+        for d in crate::governance::list(pool, kb_id, governors, governors_before).await? {
+            governor_rows.insert(d.id, serde_json::json!(d));
+        }
+    }
+    let token_ids: Vec<Uuid> = page
+        .iter()
+        .filter(|row| row.0 == "token")
+        .map(|row| row.1)
+        .collect();
+    let mut token_rows = std::collections::HashMap::new();
+    if !token_ids.is_empty() {
+        let actions: Vec<TokenAgentAction> = sqlx::query_as(&format!(
+            "SELECT {COLS} FROM token_agent_actions t LEFT JOIN users u ON u.id = t.owner_id
+              WHERE t.kb_id = $1 AND t.id = ANY($2)"
+        ))
+        .bind(kb_id)
+        .bind(&token_ids)
+        .fetch_all(pool)
+        .await?;
+        for a in &actions {
+            token_rows.insert(a.id, history_row(a));
+        }
+    }
+
+    let mut out = Vec::with_capacity(page.len());
+    for (src, id, _) in &page {
+        let row = if src == "governor" {
+            match governor_rows.remove(id) {
+                Some(row) => Some(row),
+                // 两次读之间治理 agent 又写了一行，那一段就错开一格：这一行按 id 补取，
+                // 仍是 `governance` 自己序列化的样子
+                None => match crate::governance::get(pool, kb_id, *id).await {
+                    Ok(d) => Some(serde_json::json!(d)),
+                    Err(AppError::NotFound) => None,
+                    Err(e) => return Err(e),
+                },
+            }
+        } else {
+            token_rows.remove(id)
+        };
+        out.extend(row);
+    }
+    Ok(out)
+}

@@ -18,6 +18,7 @@ import {
 import { api, type AuditEvent } from "../api";
 import { LANG_NAMES, S } from "../i18n";
 import { toast } from "../toast";
+import { declaredClientLabel, tokenOperationLabel, viaToken } from "./TokenAgentRow";
 import {
   Button,
   Checkbox,
@@ -653,20 +654,34 @@ export function KbActivity({ kbId }: { kbId: string }) {
                 </span>
                 <span className="min-w-0 truncate">
                   <span className="text-ink">
-                    {e.actor_name ??
-                      (e.actor_id
-                        ? S.kbset.deletedUser
-                        : e.action.startsWith("review.")
-                          ? S.kbset.adjudicator
-                          : S.kbset.engine)}
+                    {/* 经令牌做的（0076）：「主人 via 令牌名」。别的行原样 */}
+                    {e.token_name
+                      ? viaToken(e.actor_name, e.token_name)
+                      : (e.actor_name ??
+                        (e.actor_id
+                          ? S.kbset.deletedUser
+                          : e.action.startsWith("review.")
+                            ? S.kbset.adjudicator
+                            : S.kbset.engine))}
                   </span>{" "}
                   <span className="text-ink-2">
-                    {S.kbset.auditActions[e.action] ?? e.action}
+                    {/* 令牌行的动作标签另有一张表：往 auditActions 里加 review.keep
+                        会把人和治理 agent 的行一起改了 */}
+                    {e.token_name
+                      ? tokenOperationLabel(e.action)
+                      : (S.kbset.auditActions[e.action] ?? e.action)}
                   </span>
                   {auditDetailName(e) && (
                     <span className="text-ink-2">
                       {" "}
                       “{auditDetailName(e)}”
+                    </span>
+                  )}
+                  {/* 调用方自己报的 User-Agent：只在令牌行上，而且写明是 declared */}
+                  {e.token_name && e.declared_client && (
+                    <span className="text-fine text-ink-2">
+                      {" · "}
+                      {declaredClientLabel(e.declared_client)}
                     </span>
                   )}
                 </span>

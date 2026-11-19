@@ -21,6 +21,10 @@ mod phrase_tests;
 #[path = "review_conflict_tests.rs"]
 mod conflict_tests;
 
+#[cfg(test)]
+#[path = "review_attribution_tests.rs"]
+mod attribution_tests;
+
 /// 一页多少条。**服务端的默认，不是上限**——前端可以要更少，多则被 clamp 挡住
 pub(super) const REVIEW_PAGE: i64 = 10;
 
@@ -155,8 +159,12 @@ pub async fn list(
         "merges" => {
             json!(utopia_store::resolution::list_merges(&state.pool, kb_id, limit, offset).await?)
         }
-        // agent 的每一笔（0025）：建议、自动裁决与人的回答，最新的在前
-        "agent" => json!(utopia_store::governance::list(&state.pool, kb_id, limit, offset).await?),
+        // agent 的每一笔（0025）：建议、自动裁决与人的回答，最新的在前。令牌 agent 台账的行
+        // 按动作时间并进同一页（0076 决定 7），带 `source: "token"`；治理 agent 的行原样
+        "agent" => json!(
+            utopia_store::token_agent_actions::agent_history(&state.pool, kb_id, limit, offset)
+                .await?
+        ),
         // 认不出的档名当成契约错误报出来，而不是悄悄回空——悄悄回空会让前端
         // 拼错一个字母之后看到「这一档清空了」
         other => {

@@ -2135,6 +2135,16 @@ export const en = {
     agentAsks: "Asks:",
     agentLookups: (n: number) => (n === 1 ? "1 lookup" : `${n} lookups`),
     agentLookedAt: "Looked at",
+    // 令牌 agent 台账的行（0076）：某个人的一枚令牌做的。写法与点头卡片的「via」一致
+    tokenVia: (owner: string, token: string) => `${owner} via ${token}`,
+    tokenOperations: {
+      "review.keep": "kept a duplicate pair apart",
+    } as Record<string, string>,
+    tokenOutcome: {
+      applied: "Applied",
+      held: "Held",
+      proposed: "Proposed",
+    } as Record<string, string>,
     overviewAgent: "Agent",
     overviewAgentOff: "Governance is off for this base.",
     overviewAgentSettings: "Turn it on in settings",
@@ -2549,6 +2559,8 @@ export const en = {
     // actor_id 为空的两种引擎动作：审阅队列里的自动裁决，和其余后台工作
     adjudicator: "AI adjudicator",
     engine: "the engine",
+    // 令牌行上调用方自己报的 User-Agent：是声明，不是验证过的身份，所以写明 declared
+    auditDeclaredClient: (client: string) => `client (declared): ${client}`,
     auditActions: {
       "entity_type.created": "created entity type",
       "entity_type.updated": "updated entity type",

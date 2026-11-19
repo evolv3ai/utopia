@@ -88,7 +88,7 @@ By domain; the domains are the files of [../design/](../design/README.md). **Sta
 | 0027 | [An automatic merge is gated by what it can undo](0027-an-automatic-merge-is-gated-by-what-it-can-undo.md) | Implemented |  |
 | 0028 | [The adjudicator looks before it asks](0028-the-adjudicator-looks-before-it-asks.md) | Implemented |  |
 | 0043 | [Every review queue is governed](0043-every-review-queue-is-governed.md) | Accepted |  |
-| 0076 | [A token agent acts on Review under a ruled table](0076-a-token-agent-acts-on-review-under-a-ruled-table.md) | Accepted |  |
+| 0076 | [A token agent acts on Review under a ruled table](0076-a-token-agent-acts-on-review-under-a-ruled-table.md) | In progress |  |
 
 ### [rules](../design/rules.md)
 

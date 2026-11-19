@@ -87,7 +87,10 @@ pub async fn counts(pool: &PgPool, kb_id: Uuid) -> AppResult<ReviewCounts> {
            (SELECT count(*) FROM entity_merges WHERE kb_id = $1) AS merges,
            (SELECT count(*) FROM agent_decisions
              WHERE kb_id = $1 AND status = 'proposed') AS agent,
-           (SELECT count(*) FROM agent_decisions WHERE kb_id = $1) AS agent_rows,
+           -- Agent 一档的翻页总数：治理 agent 的行加令牌 agent 台账的行（0076 决定 7）。
+           -- 只数前一种的话，最后几行台账翻不到。上面的 agent（徽标）不变
+           ((SELECT count(*) FROM agent_decisions WHERE kb_id = $1)
+             + (SELECT count(*) FROM token_agent_actions WHERE kb_id = $1)) AS agent_rows,
            EXISTS (SELECT 1 FROM jobs j WHERE j.kind = 'govern' AND j.status = 'running'
                      AND j.payload->>'kb_id' = $1::text) AS agent_running,
            (SELECT count(*) FROM resolution_reviews rr
