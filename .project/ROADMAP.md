@@ -13,7 +13,7 @@
 
 Goal: An agent holding a personal token lists Duplicates and Overview and finalizes one keep through the server-side authority policy, over both the token API and MCP, with the action attributed to "owner via token name" in Agent History and Activity.
 Depends on: []
-Surfaces: token-authenticated HTTP API; MCP endpoint; Review tab in the web app (Agent History section); Activity view in the base settings of the web app
+Surfaces: token-authenticated HTTP API, MCP endpoint, Review tab in the web app (Agent History section), Activity view in the base settings of the web app
 Status: active
 Archive: null
 Integrated: null
@@ -72,7 +72,7 @@ Open questions
 
 Goal: An agent holding a personal token lists every one of the thirteen Review sections and reads any listed item's evidence over the token API and MCP, seeing the same items a signed-in editor sees.
 Depends on: [M001]
-Surfaces: token-authenticated HTTP API; MCP endpoint
+Surfaces: token-authenticated HTTP API, MCP endpoint
 Status: pending
 Archive: null
 Integrated: null
@@ -115,7 +115,7 @@ Open questions
 
 Goal: An agent merges, reverts and batches duplicate pairs behind the server gate, a held or propose-only call waits as a proposal that only a signed-in person can answer, and every agent merge can be reverted by the agent or by a person.
 Depends on: [M001, M002]
-Surfaces: token-authenticated HTTP API; MCP endpoint; Review tab in the web app (Agent History, Duplicates and Merges sections)
+Surfaces: token-authenticated HTTP API, MCP endpoint, Review tab in the web app (Agent History, Duplicates and Merges sections)
 Status: pending
 Archive: null
 Integrated: null
@@ -170,7 +170,7 @@ Open questions
 
 Goal: An agent can call every remaining Review operation of the ruled authority table over the token API and MCP, each landing as a finalized change or as a proposal exactly as ruled, completing the program with its full documentation.
 Depends on: [M001, M002, M003]
-Surfaces: token-authenticated HTTP API; MCP endpoint; Review tab in the web app (Agent History and the item cards of each section)
+Surfaces: token-authenticated HTTP API, MCP endpoint, Review tab in the web app (Agent History and the item cards of each section)
 Status: pending
 Archive: null
 Integrated: null

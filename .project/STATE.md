@@ -2,7 +2,7 @@
 pipeline: gsd-path/v2
 project: utopia
 milestone: token-review-skeleton
-phase: roadmap
+phase: plan
                     # inspect only for brownfield; greenfield starts at define
                     # roadmap only in program flow (CHARTER.md exists)
 status: done
@@ -37,3 +37,7 @@ it on completion. If this file and the artifacts disagree, the artifacts win
 - 2026-11-18 — decide — synthesis validated: .project/SYNTHESIS.md
 - 2026-11-18 — roadmap — roadmap started
 - 2026-11-18 — roadmap — program roadmap approved
+- 2026-11-18 — define — definition started
+- 2026-11-18 — define — milestone intent approved
+- 2026-11-18 — plan — planning started
+- 2026-11-18 — plan — plan approved
