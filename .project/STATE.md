@@ -1,15 +1,15 @@
 ---
 pipeline: gsd-path/v2
 project: utopia
-milestone: token-review-reads
-phase: shipped
+milestone: gated-merge-proposals-revert-batch
+phase: plan
                     # inspect only for brownfield; greenfield starts at define
                     # roadmap only in program flow (CHARTER.md exists)
 status: done
-branch: gsd-path/M002
+branch: gsd-path/M003
                     # the router rebinds before any next-milestone file change
                     # the bound branch is never main; ship integrates it there
-archive: .project/archive/002-token-review-reads
+archive: null
 integration_default: direct
 integration: direct
 integration_source: default
@@ -63,3 +63,9 @@ it on completion. If this file and the artifacts disagree, the artifacts win
 - 2026-11-19 — ship — build done; final review pending
 - 2026-11-19 — ship — final gate passed; shipping approval pending
 - 2026-11-19 — shipped — archive preflight passed; shipment recorded
+- 2026-11-19 — inspect — next milestone bound: gsd-path/M003 at base 6c52ce8f8091b18d8713ce8d509fec756644a4f1; previous archive .project/archive/002-token-review-reads, ship dc385d45b5be5947a1a18171c79c9f34b8b2bc80, integration 6c52ce8f8091b18d8713ce8d509fec756644a4f1, branch gsd-path/M002
+- 2026-11-19 — inspect — inspection artifacts passed
+- 2026-11-19 — define — definition started
+- 2026-11-19 — define — milestone intent approved
+- 2026-11-19 — plan — planning started
+- 2026-11-19 — plan — plan approved

@@ -75,7 +75,7 @@ Depends on: [M001]
 Surfaces: token-authenticated HTTP API, MCP endpoint
 Status: shipped
 Archive: .project/archive/002-token-review-reads
-Integrated: null
+Integrated: 6c52ce8f8091b18d8713ce8d509fec756644a4f1
 
 Scope: in
 - Token access, at owner role Viewer and through the handlers the Review tab already uses, to the eleven queue sections (Awaiting your nod, Duplicates, Conflicts, Unconfirmed, Low confidence, Axioms, Ontology, Alignment, Errata, Agent History, Merges), the Overview summary and the Decisions history. No new list route per section.
@@ -116,7 +116,7 @@ Open questions
 Goal: An agent merges, reverts and batches duplicate pairs behind the server gate, a held or propose-only call waits as a proposal that only a signed-in person can answer, and every agent merge can be reverted by the agent or by a person.
 Depends on: [M001, M002]
 Surfaces: token-authenticated HTTP API, MCP endpoint, Review tab in the web app (Agent History, Duplicates and Merges sections)
-Status: pending
+Status: active
 Archive: null
 Integrated: null
 
