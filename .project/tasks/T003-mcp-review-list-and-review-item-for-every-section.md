@@ -3,9 +3,9 @@ id: T003
 title: Serve all thirteen sections through MCP review_list and one listed item of any section through review_item
 wave: 2
 deps: [T001, T002]
-status: pending
-agent: null
-base: null
+status: done
+agent: build_T003
+base: de4bc611154414861b0bac0475ed0f2d2a955066
 worktree: null
 task_branch: null
 files:
@@ -92,3 +92,60 @@ Heavy: yes
 
 - 2026-11-19 — created by planner
 - 2026-11-19 — orchestrator plan-defect repair: the Verify's frozen-path check no longer names `crates/utopia-server/src/api/review_attribution_tests.rs`; T002 changed one assertion in that file under the recorded orchestrator answer (driver D092), so it can no longer equal `904b2a2`. This task still does not edit that file. No other field changed.
+- 2026-11-19 — coder build_T003: ready. Preflight clean (every named path and symbol exists at base `de4bc61` or is declared in `files`; SC2 and SC3 are those numbered items of INTENT; the Interface contract paragraphs shared with T002 match its task file).
+  - Product: `review_ops::item` now has the signature `(state, caller, section: &str, id: &str) -> Result<serde_json::Value, AppError>`. It calls `authorize_read` before any store read, then finds the element in the section's own list: `review_routes::queue_page` in pages of 200 for the eleven queue sections, `audit::review_history` in pages of 100 for `decisions`. The returned object is the list element itself; for `violations` one key `proof` is added (`reasoning::blocked_proof` steps for kind `derived_contradiction`, `null` otherwise). `overview` answers `NotFound`; a name outside the thirteen answers `unknown_queue` (now one helper shared with `list`); an id that is not a uuid is looked for only as an Alignment kind word, compared exactly. `review_tools`: `review_list` routes `overview` to `summary`, `decisions` to `history` with `page`/`per`, every other name to `list` with `limit`/`offset`, and reads only the paging arguments the section takes; `review_item` takes optional `section` (default `duplicates`) and `id` passed through untrimmed; the `review_keep` branch is the M001 statements; both read tools' descriptions and schemas rewritten (`id` of `review_item` no longer `format: uuid`). `serves`, `listed`, `call`'s signature and `mcp.rs` unchanged.
+  - Decisions: (1) list-scan rather than single-row store lookups, so no store module in `files` was edited and no list function changed; cost is one extra page read per 200 items ahead of the one asked for. (2) A uuid id is parsed after trimming, as M001 did; a kind word is not trimmed. (3) `section` of `review_item` is trimmed like `section` of `review_list`; an empty or wrongly cased name is `unknown_queue`.
+  - Tests: new `review_mcp_reads_tests.rs` (declared in `mod.rs`) with the eight named tests of AC1–AC8; the E7 test seeds `f.other_kb` with the same seed script plus one kind word only that base has. `review_mcp_tests.rs`: module comment only (the stale sentence that other sections are refused); no test changed.
+  - Commands, `CARGO_TARGET_DIR` outside the worktree, fresh migrated `m002_t003` and `m002_t003_store`, results read from the test output:
+    - frozen-path check of this Verify (`mcp.rs`, `mcp_tests.rs`, `migrations` against `904b2a2`): exit 0. The 16 named server tests with the Verify's own filter and count: 16 `ok`. The 3 named store tests: 3 passed, 0 failed.
+    - `UTOPIA_TEST_REQUIRE_DB=1 cargo test -p utopia-server` (whole crate): 878 passed, 0 failed, 2 ignored.
+    - Regression, T002's Verify parts: its 19 named tests — 19 passed; T001's 16 named server tests — 16 passed; both `git diff --quiet 904b2a2…` frozen-path checks exit 0; numstat of `review_session_unchanged_tests.rs` is `1 1`. Its `pnpm` install, vitest and web build steps were not rerun (no web path changed).
+    - `cargo fmt --all --check`: exit 0. `cargo clippy -p utopia-server --all-targets`: no warnings.
+  - Guard: nothing refused. `git status --short`: only paths in `files` and this task file.
+  - Open item carried from the Approach, not decided here: INTENT does not rule on an Overview item; `review_item` with `section: "overview"` answers `not_found` as the contract says.
+- 2026-11-19 — orchestrator Verify (sidecar gsd-path-verify/task-t003-verify): pass, exit 0; output tail:
+  ```
+  test api::review_mcp_reads_tests::review_list_returns_what_the_token_api_returns_for_each_of_the_thirteen_sections ... ok
+  test api::review_mcp_reads_tests::review_item_returns_the_listed_items_own_fields_for_one_item_of_each_section ... ok
+  test api::review_mcp_reads_tests::review_list_pages_decisions_by_page_and_per_and_the_queue_sections_by_limit_and_offset ... ok
+  test api::review_mcp_reads_tests::review_item_answers_one_not_found_for_an_unknown_id_another_bases_id_and_an_item_no_longer_waiting ... ok
+  
+  test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 864 filtered out; finished in 5.22s
+  
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.29s
+       Running `C:/Users/Owner/.gsd-path/cargo-target/finish-m002-T003\debug\examples\migrate.exe`
+     Compiling utopia-store v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t003-verify\crates\utopia-store)
+      Finished `test` profile [unoptimized + debuginfo] target(s) in 14.76s
+       Running tests\store\main.rs (C:/Users/Owner/.gsd-path/cargo-target/finish-m002-T003\debug\deps\store-97773e81a9073f97.exe)
+  
+  running 3 tests
+  test a_review_has_a_summary::the_summary_reads_the_three_ledgers_with_one_yardstick ... ok
+  test a_review_page_is_assembled_in_batches::shared_sides_keep_their_summaries_and_the_page_keeps_its_order ... ok
+  test a_page_never_skips_a_row::paging_through_a_batch_sees_every_row_exactly_once ... ok
+  
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 358 filtered out; finished in 5.60s
+  ```
+- 2026-11-19 — orchestrator regression Verify of T002 (supersedes T001) (sidecar gsd-path-verify/task-t003-verify): pass, exit 0; output tail:
+  ```
+       Running `C:/Users/Owner/.gsd-path/cargo-target/finish-m002-T003\debug\examples\migrate.exe`
+      Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s
+       Running tests\store\main.rs (C:/Users/Owner/.gsd-path/cargo-target/finish-m002-T003\debug\deps\store-97773e81a9073f97.exe)
+  
+  running 3 tests
+  test a_review_has_a_summary::the_summary_reads_the_three_ledgers_with_one_yardstick ... ok
+  test a_review_page_is_assembled_in_batches::shared_sides_keep_their_summaries_and_the_page_keeps_its_order ... ok
+  test a_page_never_skips_a_row::paging_through_a_batch_sees_every_row_exactly_once ... ok
+  
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 358 filtered out; finished in 5.55s
+  
+  (node:31720) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:16288) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  [33m
+  (!) Some chunks are larger than 500 kB after minification. Consider:
+  - Using dynamic import() to code-split the application
+  - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+  - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+  ```
+- 2026-11-19 — orchestrator regression Verify of T001 retired: superseded by T002

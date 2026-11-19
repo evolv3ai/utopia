@@ -705,3 +705,6 @@ mod review_token_reads_tests;
 
 #[cfg(test)]
 mod review_mcp_tests;
+
+#[cfg(test)]
+mod review_mcp_reads_tests;

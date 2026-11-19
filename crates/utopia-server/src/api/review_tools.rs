@@ -1,5 +1,9 @@
 //! Review 的三个 MCP 工具（0076 决定 2）：`review_list`、`review_item`、`review_keep`。
 //!
+//! 两个读工具管 Review 的十三档：`review_list` 读一档的一页（十一个列表档、总览、决策台账），
+//! `review_item` 读某一档里列着的一条，违规一档的条目带上它的证明。写的只有 `review_keep`
+//! 一样，这一刀没有多开。
+//!
 //! **这里只做两件事：把参数递给 `review_ops`，把它的回答变成工具结果。** 授权、裁定表、
 //! 台账、审计都在 `review_ops` 里面，REST 的令牌分支调的是同一批函数——所以同一枚令牌
 //! 在两个入口读到的东西相等，被拒绝时拿到的 code 也相等。这里不另做一道检查：
@@ -33,36 +37,62 @@ pub(super) fn serves(name: &str) -> bool {
 /// 工具定义，OpenAI 的形状——`chat::check_call` 认的就是这个形状，参数守卫与别的工具
 /// 共用一份。
 ///
-/// `limit` **不写上下界**：越界的值不是错误，照会话路由的规矩夹到 1 到 200
-/// （`review_ops::list`）。写了 `minimum` 的话，守规矩的客户端会在本地就把 0 拦下
+/// 翻页参数（`limit`、`offset`、`page`、`per`）**都不写上下界**：越界的值不是错误，照会话
+/// 路由的规矩夹（`review_ops::list` 夹到 1 到 200，`review_ops::history` 夹到 1 到 100）。
+/// 写了 `minimum` 的话，守规矩的客户端会在本地就把 0 拦下。
+///
+/// `review_item` 的 `id` **不写 `format: uuid`**：对齐一档的类别词没有 uuid，认的是它的词。
+/// `review_keep` 的 `id` 照旧是 uuid——它只分重复项
 fn definitions() -> Value {
     json!([
         {
             "type": "function",
             "function": {
                 "name": LIST,
-                "description": "Read one section of this knowledge base's Review tab. \
-                    section \"duplicates\" returns one page of pending duplicate pairs as \
-                    {counts, queue, items}; each item carries both entities with their type, \
-                    disambiguator, fact count and top facts, and the governor's open proposal \
-                    if there is one. section \"overview\" returns the Review summary (what is \
-                    waiting, what was decided, health, the governor's recent rows). No other \
-                    section is served yet; asking for one is refused with code unknown_queue.",
+                "description": "Read one section of this knowledge base's Review tab; all \
+                    thirteen sections are served. The eleven queue sections are \"pending\" \
+                    (Awaiting your nod), \"duplicates\", \"conflicts\", \"unconfirmed\", \
+                    \"lowconf\" (Low confidence), \"violations\" (Axioms), \"defects\" \
+                    (Ontology), \"alignment\", \"errata\", \"agent\" (Agent History) and \
+                    \"merges\": each returns one page as {counts, queue, items, total}, paged \
+                    with limit and offset; total is the number of items the section lists over \
+                    all pages, so the last item is at offset total - 1 (counts holds the tab's \
+                    badges, which for some sections is a different number). \"decisions\" \
+                    returns one page of the decision history as {events, total}, paged with \
+                    page and per. \"overview\" returns the Review summary (what is waiting, \
+                    what was decided, health, the governor's recent rows) and takes no paging \
+                    argument. A paging argument the section does not take is ignored. Any \
+                    other section name is refused with code unknown_queue. Reading is all \
+                    these sections offer: nothing listed here is decided by reading it.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "section": {
                             "type": "string",
-                            "description": "\"duplicates\" or \"overview\"."
+                            "description": "One of \"overview\", \"pending\", \"duplicates\", \
+                                \"conflicts\", \"unconfirmed\", \"lowconf\", \"violations\", \
+                                \"defects\", \"alignment\", \"errata\", \"agent\", \
+                                \"decisions\", \"merges\"."
                         },
                         "limit": {
                             "type": "integer",
-                            "description": "Page size for duplicates (default 10). A value \
-                                below 1 is served as 1 and a value above 200 as 200."
+                            "description": "Queue sections only: page size (default 10). A \
+                                value below 1 is served as 1 and a value above 200 as 200."
                         },
                         "offset": {
                             "type": "integer",
-                            "description": "Zero-based start of the duplicates page (default 0)."
+                            "description": "Queue sections only: zero-based start of the page \
+                                (default 0). An offset at or past total returns no items."
+                        },
+                        "page": {
+                            "type": "integer",
+                            "description": "\"decisions\" only: zero-based page number \
+                                (default 0)."
+                        },
+                        "per": {
+                            "type": "integer",
+                            "description": "\"decisions\" only: events per page (default 20). \
+                                A value below 1 is served as 1 and a value above 100 as 100."
                         }
                     },
                     "required": ["section"]
@@ -73,18 +103,34 @@ fn definitions() -> Value {
             "type": "function",
             "function": {
                 "name": ITEM,
-                "description": "Read the evidence on one pending duplicate pair, by the id \
-                    shown in review_list: score, reason, stage, both entities with their type, \
-                    disambiguator, fact count and top facts, and the governor's open proposal. \
-                    An id that is not a pending duplicate pair of this knowledge base is \
-                    refused with code not_found.",
+                "description": "Read one item that review_list lists, by its section and id. \
+                    Returns that item exactly as review_list returns it: for \"duplicates\" \
+                    the pair's score, reason, stage, both entities with their type, \
+                    disambiguator, fact count and top facts, and the governor's open proposal; \
+                    for \"decisions\" the event. For \"violations\" (Axioms) the item also \
+                    carries proof: the proof steps when its kind is derived_contradiction, \
+                    null for any other kind. section is one of the eleven queue sections \
+                    (\"pending\", \"duplicates\", \"conflicts\", \"unconfirmed\", \"lowconf\", \
+                    \"violations\", \"defects\", \"alignment\", \"errata\", \"agent\", \
+                    \"merges\") or \"decisions\". An id that is not listed in that section of \
+                    this knowledge base (unknown, of another knowledge base, or no longer \
+                    waiting there) is refused with code not_found, as is any id with section \
+                    \"overview\", which lists no items. Any other section name is refused \
+                    with code unknown_queue.",
                 "parameters": {
                     "type": "object",
                     "properties": {
+                        "section": {
+                            "type": "string",
+                            "description": "Section the item is listed in. Default \
+                                \"duplicates\"."
+                        },
                         "id": {
                             "type": "string",
-                            "format": "uuid",
-                            "description": "Review id (uuid) of a pair from review_list."
+                            "description": "The item's id from review_list (a uuid; for \
+                                \"decisions\" the event's id, for \"agent\" the row's id). An \
+                                \"alignment\" item of kind kind_word has no id: pass its \
+                                kind_word exactly as listed, same letter case and spacing."
                         }
                     },
                     "required": ["id"]
@@ -251,29 +297,54 @@ pub(super) async fn call(
     };
     let outcome = match name {
         LIST => {
-            // `section` 必填且是字符串，上面的守卫已经看过
+            // `section` 必填且是字符串，上面的守卫已经看过。这里只按档名挑操作，不判它
+            // 认不认得：认不出的名字落到 `review_ops::list`，由它拒绝（`unknown_queue`）
             let section = args["section"].as_str().unwrap_or_default().trim();
-            if section == "overview" {
-                match review_ops::summary(state, caller).await {
+            // 翻页参数只读这一档用的那一组，先看类型再读库。这一档不用的参数不读也不查：
+            // 总览从来不看 `limit`，决策台账同理不看它，列表档不看 `page` / `per`
+            match section {
+                "overview" => match review_ops::summary(state, caller).await {
                     Ok(summary) => serde_json::to_value(summary)
                         .map_err(|e| AppError::Other(anyhow::Error::new(e))),
                     Err(e) => Err(e),
+                },
+                // 决策台账有它自己的 `page` / `per`，回它自己的 `{events, total}`
+                "decisions" => {
+                    let page = match optional_integer(name, &args, "page") {
+                        Ok(v) => v,
+                        Err(refused) => return refused,
+                    };
+                    let per = match optional_integer(name, &args, "per") {
+                        Ok(v) => v,
+                        Err(refused) => return refused,
+                    };
+                    review_ops::history(state, caller, page, per).await
                 }
-            } else {
-                // 翻页参数先看类型再读库；`duplicates` 以外的档名交给 `review_ops::list`
-                // 去拒绝（`unknown_queue`），这里不另判一次
-                let limit = match optional_integer(name, &args, "limit") {
-                    Ok(v) => v,
-                    Err(refused) => return refused,
-                };
-                let offset = match optional_integer(name, &args, "offset") {
-                    Ok(v) => v,
-                    Err(refused) => return refused,
-                };
-                review_ops::list(state, caller, section, None, limit, offset).await
+                _ => {
+                    let limit = match optional_integer(name, &args, "limit") {
+                        Ok(v) => v,
+                        Err(refused) => return refused,
+                    };
+                    let offset = match optional_integer(name, &args, "offset") {
+                        Ok(v) => v,
+                        Err(refused) => return refused,
+                    };
+                    review_ops::list(state, caller, section, None, limit, offset).await
+                }
             }
         }
-        ITEM | KEEP => {
+        ITEM => {
+            // 不给 `section` 就是重复项，与只有这一档时的调用同一个意思
+            let section = match optional_string(name, &args, "section") {
+                Ok(v) => v.map_or("duplicates", str::trim),
+                Err(refused) => return refused,
+            };
+            // `id` 必填且是字符串，守卫看过；**原样递下去**——类别词按存着的样子比，
+            // 是不是 uuid、在不在这一档里，都由 `review_ops::item` 说
+            let id = args["id"].as_str().unwrap_or_default();
+            review_ops::item(state, caller, section, id).await
+        }
+        KEEP => {
             // `format: uuid` 由守卫挡过；这里再解析一次，解析不了同样不执行
             let Some(id) = args["id"]
                 .as_str()
@@ -281,19 +352,11 @@ pub(super) async fn call(
             else {
                 return bad_argument(name, "id", "a uuid returned by review_list");
             };
-            if name == ITEM {
-                match review_ops::item(state, caller, id).await {
-                    Ok(item) => serde_json::to_value(item)
-                        .map_err(|e| AppError::Other(anyhow::Error::new(e))),
-                    Err(e) => Err(e),
-                }
-            } else {
-                let rationale = match optional_string(name, &args, "rationale") {
-                    Ok(v) => v,
-                    Err(refused) => return refused,
-                };
-                review_ops::keep(state, caller, id, rationale).await
-            }
+            let rationale = match optional_string(name, &args, "rationale") {
+                Ok(v) => v,
+                Err(refused) => return refused,
+            };
+            review_ops::keep(state, caller, id, rationale).await
         }
         // `serves` 之外的名字到不了这里；到了也只说没有这个工具，不去碰库
         _ => {

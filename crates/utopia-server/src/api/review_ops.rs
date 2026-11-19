@@ -8,6 +8,7 @@
 //! 会话不走这里：`review_routes` 里会话分支原样跑从前的代码（0076 决定 2）。
 //!
 //! 读的一侧整个开给令牌：十一个列表档、总览、决策台账，以及违规与派生事实的两条证明。
+//! 每一档里列着的一条也能单独取（[`item`]），取到的就是列表里那个对象。
 //! 写的一侧只有「把一对重复项分开」这一样；别的裁决、合并、撤销、批量都还关着——
 //! 读得到「等你点头」不等于能替人点头。
 
@@ -90,6 +91,11 @@ const TOKEN_SECTIONS: [&str; 11] = [
     "merges",
 ];
 
+/// 不在开给令牌的档里的名字：与列表路由同一个 code、同一句话
+fn unknown_queue(section: &str) -> AppError {
+    AppError::invalid("unknown_queue", format!("no review queue named {section}"))
+}
+
 /// 一档的一页。回的东西就是会话拿到的那一页——两边调的是同一个
 /// `review_routes::queue_page`（同一组 store 函数、同一个 clamp、同一个 `total`），这里
 /// 只管授权和「哪些档开给令牌」，档的 `match` 不在这里再写一遍。不在那十一档里的名字
@@ -104,10 +110,7 @@ pub(crate) async fn list(
 ) -> Result<serde_json::Value, AppError> {
     authorize_read(state, caller).await?;
     if !TOKEN_SECTIONS.contains(&section) {
-        return Err(AppError::invalid(
-            "unknown_queue",
-            format!("no review queue named {section}"),
-        ));
+        return Err(unknown_queue(section));
     }
     super::review_routes::queue_page(state, caller.kb_id, section, types, limit, offset).await
 }
@@ -155,20 +158,122 @@ pub(crate) async fn derived_proof(
     Ok(json!({ "proof": proof }))
 }
 
-/// 一对重复项的卡片：与列表里那一条同一个对象（两边的名字、类型、区分语、度数、
-/// 事实摘要，以及开着的建议）。读的检查与 `list` 同一个。
+/// 找一条时每次向列表要的行数：列表档自己的上限，决策台账自己的上限
+const ITEM_SCAN_QUEUE: i64 = 200;
+const ITEM_SCAN_HISTORY: i64 = 100;
+
+/// 这一条是不是要找的那一条。短语、规则和别的档的条目认 `id`；对齐一档的类别词没有
+/// `id`，认它的词——**原样比**，不去空白、不折大小写：库里存的是什么，认的就是什么
+fn is_the_item(section: &str, item: &serde_json::Value, id: &str, uuid: Option<Uuid>) -> bool {
+    if let Some(uuid) = uuid {
+        if item["id"].as_str() == Some(uuid.to_string().as_str()) {
+            return true;
+        }
+    }
+    section == "alignment" && item["kind"] == "kind_word" && item["kind_word"].as_str() == Some(id)
+}
+
+/// 某一档里列着的一条，就是列表里的那个对象（0076）。
 ///
-/// 不是这个库里一对还在等的重复项——认不出的 id、裁过的、别的库的——都是同一个
-/// `NotFound`，不带任何证据
+/// **不另写一条按 id 取的查询，而是到这一档自己的列表里去找**：走的是 [`list`] 走的那个
+/// `queue_page`（决策台账走 [`history`] 走的那个 `audit::review_history`），一页一页翻到
+/// 找着或翻完。这样回来的对象与列表里那一条逐字段相等是构造出来的，不是两处 SQL 碰巧
+/// 写得一样；列表以后多一个字段、换一个判据，这里跟着变。代价是排在后面的条目要多翻
+/// 几页——一档等人的东西是几十上百条，不是几十万条。
+///
+/// 读的检查与 `list` 同一个，**在取任何一行之前**（N3）；回的字段只来自列表，外加违规
+/// 一档的 `proof`——那是证明路由（[`violation_proof`]）本来就回的 `steps`：
+/// `derived_contradiction` 展得开，别的种类是 `null`，不是错误。别的档一个键也不加。
+///
+/// 「没有」只有一种回答：认不出的 id、别的库的 id、已经不在这一档里等着的，都是同一个
+/// `NotFound`，不带证据。`overview` 没有条目，问它要哪一条都是 `NotFound`。十三档以外的
+/// 名字（`mappings` 也算）是 `unknown_queue`。不是 uuid 的 id 只可能是对齐一档的类别词，
+/// 在别的档直接是 `NotFound`，不去读库
 pub(crate) async fn item(
     state: &AppState,
     caller: &ReviewCaller,
-    review_id: Uuid,
-) -> Result<utopia_core::models::ReviewItem, AppError> {
+    section: &str,
+    id: &str,
+) -> Result<serde_json::Value, AppError> {
     authorize_read(state, caller).await?;
-    utopia_store::resolution::pending_review(&state.pool, caller.kb_id, review_id)
-        .await?
-        .ok_or(AppError::NotFound)
+    let uuid = id.trim().parse::<Uuid>().ok();
+    if section == "overview" {
+        return Err(AppError::NotFound);
+    }
+    if section == "decisions" {
+        if uuid.is_none() {
+            return Err(AppError::NotFound);
+        }
+        let mut offset = 0;
+        loop {
+            let (events, _) = utopia_store::audit::review_history(
+                &state.pool,
+                caller.kb_id,
+                ITEM_SCAN_HISTORY,
+                offset,
+            )
+            .await?;
+            let seen = events.len() as i64;
+            // 与 `history` 同一种序列化：先整页变成 JSON，再从里面挑
+            let mut page = json!(events);
+            let found = page.as_array_mut().and_then(|rows| {
+                rows.iter_mut()
+                    .find(|row| is_the_item(section, row, id, uuid))
+                    .map(serde_json::Value::take)
+            });
+            if let Some(event) = found {
+                return Ok(event);
+            }
+            if seen < ITEM_SCAN_HISTORY {
+                return Err(AppError::NotFound);
+            }
+            offset += ITEM_SCAN_HISTORY;
+        }
+    }
+    if !TOKEN_SECTIONS.contains(&section) {
+        return Err(unknown_queue(section));
+    }
+    if uuid.is_none() && section != "alignment" {
+        return Err(AppError::NotFound);
+    }
+    let mut offset = 0;
+    let mut found = loop {
+        let mut page = super::review_routes::queue_page(
+            state,
+            caller.kb_id,
+            section,
+            None,
+            Some(ITEM_SCAN_QUEUE),
+            Some(offset),
+        )
+        .await?;
+        let rows = page["items"].as_array_mut();
+        let seen = rows.as_ref().map_or(0, |rows| rows.len()) as i64;
+        let hit = rows.and_then(|rows| {
+            rows.iter_mut()
+                .find(|row| is_the_item(section, row, id, uuid))
+                .map(serde_json::Value::take)
+        });
+        if let Some(hit) = hit {
+            break hit;
+        }
+        if seen < ITEM_SCAN_QUEUE {
+            return Err(AppError::NotFound);
+        }
+        offset += ITEM_SCAN_QUEUE;
+    };
+    if section == "violations" {
+        // 违规的 id 一定是 uuid：上面是按它找着的
+        let proof = match uuid {
+            Some(violation_id) if found["kind"] == "derived_contradiction" => json!(
+                utopia_store::reasoning::blocked_proof(&state.pool, caller.kb_id, violation_id)
+                    .await?
+            ),
+            _ => serde_json::Value::Null,
+        };
+        found["proof"] = proof;
+    }
+    Ok(found)
 }
 
 /// 审核台的总览，与会话读到的同一个聚合
