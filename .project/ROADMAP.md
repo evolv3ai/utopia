@@ -14,8 +14,8 @@
 Goal: An agent holding a personal token lists Duplicates and Overview and finalizes one keep through the server-side authority policy, over both the token API and MCP, with the action attributed to "owner via token name" in Agent History and Activity.
 Depends on: []
 Surfaces: token-authenticated HTTP API, MCP endpoint, Review tab in the web app (Agent History section), Activity view in the base settings of the web app
-Status: active
-Archive: null
+Status: shipped
+Archive: .project/archive/001-token-review-skeleton
 Integrated: null
 
 Scope: in
