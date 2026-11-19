@@ -183,6 +183,9 @@ impl FromRequestParts<AppState> for AuthUser {
 /// 按推送时的 `external_id` 读回一篇文档（#1276）也是文档原件，开给令牌的理由写在决定 7。
 /// 分块检索（#1271）同样按决定 7 开给令牌。
 ///
+/// Review 的三条也收令牌（0076）：读重复项、读总览、把一对重复项分开。令牌在那三条里
+/// 走 `api::review_ops`，会话照旧；Review 其余的路由仍是 `AuthUser`。
+///
 /// 令牌只收窄：`pat` 在的时候，路由先问 [`Self::require_write`] 或
 /// [`Self::reaches`]，角色照旧由 `require_kb` 与工作区角色判。
 pub struct SessionOrToken {
@@ -229,27 +232,39 @@ impl SessionOrToken {
     ///
     /// 两种拒绝各带 code：它们都是「换一枚令牌就行」，与角色不够的 403 不是一回事
     pub fn require_write(&self, kb_id: Option<Uuid>) -> Result<(), AppError> {
-        let Some(pat) = &self.pat else {
-            return Ok(());
-        };
-        if !pat.can_write() {
-            return Err(AppError::CodedForbidden {
-                code: "token_read_only",
-                message: "This token is read-only; issue one with the write scope".into(),
-            });
+        match &self.pat {
+            Some(pat) => require_token_write(pat, kb_id),
+            None => Ok(()),
         }
-        let in_scope = match kb_id {
-            Some(kb_id) => pat.covers(kb_id),
-            None => pat.kb_ids.is_none(),
-        };
-        if !in_scope {
-            return Err(AppError::CodedForbidden {
-                code: "token_kb_out_of_scope",
-                message: "This token reaches only the knowledge bases it lists".into(),
-            });
-        }
-        Ok(())
     }
+}
+
+/// 一枚令牌准不准往这个库里写：先看 scope，再看 `kb_ids`，顺序是契约的一部分
+/// （只读又够不着的令牌答 `token_read_only`）。
+///
+/// 从 [`SessionOrToken::require_write`] 里拆出来，是因为 Review 的共享操作层（0076）
+/// 手里拿的是已经解出来的令牌，不是提取器；两处问的必须是同一句话、回同一个 code
+pub(crate) fn require_token_write(
+    pat: &utopia_store::tokens::Authenticated,
+    kb_id: Option<Uuid>,
+) -> Result<(), AppError> {
+    if !pat.can_write() {
+        return Err(AppError::CodedForbidden {
+            code: "token_read_only",
+            message: "This token is read-only; issue one with the write scope".into(),
+        });
+    }
+    let in_scope = match kb_id {
+        Some(kb_id) => pat.covers(kb_id),
+        None => pat.kb_ids.is_none(),
+    };
+    if !in_scope {
+        return Err(AppError::CodedForbidden {
+            code: "token_kb_out_of_scope",
+            message: "This token reaches only the knowledge bases it lists".into(),
+        });
+    }
+    Ok(())
 }
 
 /// 生成一条 JWT 签名密钥：32 字节 CSPRNG，hex 编码成 64 个字符。

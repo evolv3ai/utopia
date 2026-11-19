@@ -189,6 +189,37 @@ That gate is why the tool can be served at all. An agent reads documents in the 
 
 The Review card names the agent, not only the person: several clients can share one owner's identity, and "which one said this" is most of what a reviewer has to go on. Never claim to a user that a fact was added — say the sentence was recorded and its facts await confirmation.
 
+## Review over the token API
+
+A token can also call three of the Review tab's own HTTP routes. They are the routes the browser uses — same URLs, same handlers — so an agent reads what a signed-in editor sees. All are under `/api/v1` and take `Authorization: Bearer utp_pat_…`.
+
+| Route | What it does | Who may call it |
+|---|---|---|
+| `GET /kbs/{kb_id}/review?queue=duplicates` | One page of the Duplicates section, as `{"counts", "queue", "items"}`. Optional `types` (`any`, `same`, `conflict`), `limit` (default 10, served as 1 to 200) and `offset` (default 0). `counts` and the order of `items` are the ones a session gets for the same request; an empty section is `"items": []` with zero counts, not an error | Any token (`read` or `write`) that reaches the base, with an owner who is at least a viewer |
+| `GET /kbs/{kb_id}/review/summary` | The Overview summary: what is waiting, what was decided, the base's health, the governor's recent rows | The same |
+| `POST /kbs/{kb_id}/review/{review_id}` with `{"action": "keep", "rationale": "…"}` | Keeps one pending duplicate pair apart. `rationale` is optional (a string or `null`). Answers `{"ok": true, "outcome": "applied", "action_id": "<uuid>"}` | A `write` token that reaches the base, with an owner who is at least an editor |
+
+A keep made with a token is applied at once and is recorded three ways in one transaction: the pair is marked kept by the token's owner through that token, a row is written to the token-agent ledger (`action_id` is its id), and an audit row is written with the owner as actor plus the token's id and the name it had at that moment. If any of the three cannot be written, the keep fails and the pair stays in the queue. A token's keep is **not** treated as a person's decision: the governor does not read it as precedent, it starts no governor round, and a governor proposal open on the pair stays open for a person to answer.
+
+Refusals carry a stable `code` beside the `error` message where one is listed:
+
+| Status | Code | When |
+|---|---|---|
+| 401 | none | The token is unknown, revoked or expired; or the route is one of the Review routes that take a signed-in session only (see below) |
+| 404 | none | On the two reads: the token's knowledge-base list excludes the base, or its owner cannot open it. The answer is the same as for a base that does not exist, and carries no item, count or summary. On the keep: no pair with that id in this base |
+| 422 | `unknown_queue` | A token asks the list for any section other than `duplicates`. No items are returned |
+| 422 | `unknown_type_filter` | `types` is not `any`, `same` or `conflict` |
+| 403 | `token_read_only` | A `read` token calls the keep route |
+| 403 | `token_kb_out_of_scope` | A `write` token whose knowledge-base list excludes the base calls the keep route |
+| 403 | `token_owner_below_editor` | The token's owner is below editor in the base |
+| 403 | `token_operation_not_open` | A `write` token of an editor sends any action other than `keep` (for example `merge`) to the decision route. Nothing is written |
+| 409 | `already_decided` | The pair was decided before this call: a repeated call, a lost race, or a person decided it first |
+| 409 | none | The governor is deciding this pair right now; nothing was decided, so try again after its proposal |
+
+Scope is checked before the owner's role, so a `read` token whose owner is a viewer gets `token_read_only`. A refusal changes nothing: the pair stays as it was and no ledger or audit row is written.
+
+**Not open to tokens.** The other eleven Review sections cannot be listed with a token. Merge, manual merge, merge revert and batch decisions are not open either: `merge` on the decision route answers `token_operation_not_open`, and the batch (`POST /kbs/{kb_id}/review/batch`, whatever its action — a batch of keeps included), revert (`POST /kbs/{kb_id}/merges/{merge_id}/revert`) and manual-merge (`POST /kbs/{kb_id}/entities/merge`) routes take a session only and answer a token with 401. Every other Review route — confirming or rejecting facts, answering the governor, the nod on what `remember` recorded — is also session only. A signed-in person's requests and responses on all of these routes are unchanged.
+
 ## Try it from a shell
 
 List the tools:

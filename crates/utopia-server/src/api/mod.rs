@@ -19,6 +19,7 @@ pub mod oidc_routes;
 mod ontology_regression_routes;
 pub(crate) mod ontology_routes;
 mod question_routes;
+mod review_ops;
 mod review_routes;
 mod rig_model;
 mod rule_expression_input;
@@ -688,3 +689,9 @@ mod token_read_tests;
 
 #[cfg(test)]
 mod rule_expression_tests;
+
+#[cfg(test)]
+mod review_session_unchanged_tests;
+
+#[cfg(test)]
+mod review_token_api_tests;

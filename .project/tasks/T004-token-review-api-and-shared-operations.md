@@ -3,9 +3,9 @@ id: T004
 title: Open Duplicates, Overview and keep to personal tokens over the HTTP API through one shared operation layer
 wave: 2
 deps: [T003]
-status: pending
-agent: null
-base: null
+status: done
+agent: build_T004
+base: 1d344230f43acf7c40bec3005851bb12405705d5
 worktree: null
 task_branch: null
 files:
@@ -79,3 +79,30 @@ Heavy: yes
 ## Log
 
 - 2026-11-18 — created by planner
+- 2026-11-19 — build_T004 preflight at base 1d34423: every named path exists or is declared; SC2 and SC6 are items 2 and 6 of INTENT `## Success criteria`; the `review_ops` and token-open-routes contract lines appear verbatim in T005 (and the session-test line in T005 and T006); `execution_gate` and `token_agent_actions` symbols exist as described.
+- 2026-11-19 — build_T004 implementation. `review_session_unchanged_tests.rs` was written first and passed against the untouched handlers (1 passed) before any extractor changed. Then: new `api/review_ops.rs` (`ReviewCaller`, `list`, `summary`, `keep`, plus `pub(crate) authorize_write` and `not_open` used by the token branch of `decide`); `list`, `summary` and `decide` in `review_routes.rs` take `SessionOrToken` and branch on `caller.pat` — the session branch is the former body unchanged, the token branch calls `review_ops`; `REVIEW_PAGE` became `pub(super)` so both branches share the default page; `auth.rs` gained `pub(crate) fn require_token_write(&Authenticated, Option<Uuid>)`, and `SessionOrToken::require_write` now delegates to it (same checks, same codes); `mod.rs` declares `review_ops` and the two test modules; `web/src/docs/mcp.md` gained the section "Review over the token API". `review_ops::keep` calls `state.emit_review` and never `after_human_decision`. No other handler changed extractor; `mcp.rs` is untouched (`git diff --stat` on it is empty). The shared test fixture `Fx` lives in `review_session_unchanged_tests.rs` and is reused by `review_token_api_tests.rs`.
+- 2026-11-19 — build_T004 note for the reviewer (no file of this task can change it): ADR 0076 decision 12 says token merge, manual merge, revert and batch are "answered `token_operation_not_open`". This task, PLAN.md Surface contract and AC5 fix 401 on the batch, merge-revert and manual-merge routes (they keep `AuthUser`), and `token_operation_not_open` only for a non-keep action on the decision route. Implemented and documented as the task states; decision 1 and decision 6 of the ADR match the implementation. The ADR parenthetical is looser than the built behaviour and may want a wording fix by its owner.
+- 2026-11-19 — build_T004 Verify: ran the task's Verify command exactly as written, from `D:\utopia` in Git Bash, in one invocation (the guard refused no part). Database `m001_t004` dropped, created and migrated; `cargo test -p utopia-server` filtered to the eleven names: `test result: ok. 11 passed; 0 failed; 0 ignored; 823 filtered out`; every name printed `... ok`; exit 0. Also ran, outside Verify: `token_read_tests token_setup_tests phrase_tests conflict_tests auth::` (25 passed, 0 failed), `cargo clippy -p utopia-server --all-targets` (no warnings), `cargo fmt -p utopia-server -- --check` (clean).
+- 2026-11-19 — orchestrator Verify (sidecar gsd-path-verify/task-t004-verify): pass, exit 0; output tail:
+  ```
+  test api::review_token_api_tests::an_empty_duplicates_section_reads_the_same_for_a_token_and_a_session ... ok
+  test api::review_token_api_tests::a_write_token_of_an_editor_keeps_a_pair_over_the_api ... ok
+  test api::review_token_api_tests::a_token_asking_for_another_section_is_refused_with_unknown_queue ... ok
+  test api::review_token_api_tests::a_token_keep_over_the_api_starts_no_govern_round ... ok
+  test api::review_token_api_tests::a_token_whose_kb_ids_exclude_the_base_gets_404_on_review_reads ... ok
+  test api::review_token_api_tests::a_refused_token_merge_revert_or_batch_leaves_the_graph_equal ... ok
+  test api::review_token_api_tests::a_keep_over_the_api_is_refused_with_its_code ... ok
+  test api::review_token_api_tests::a_read_token_of_a_viewer_lists_duplicates_and_overview_as_a_session_editor_sees_them ... ok
+  test api::review_session_unchanged_tests::a_session_editor_gets_todays_duplicates_overview_keep_merge_and_batch_responses ... ok
+  test api::review_token_api_tests::a_token_receives_duplicates_in_the_session_order ... ok
+  
+  test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 823 filtered out; finished in 1.98s
+     Compiling utopia-llm v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t004-verify\crates\utopia-llm)
+     Compiling utopia-reason v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t004-verify\crates\utopia-reason)
+     Compiling utopia-ingest v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t004-verify\crates\utopia-ingest)
+     Compiling utopia-core v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t004-verify\crates\utopia-core)
+     Compiling utopia-extract v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t004-verify\crates\utopia-extract)
+     Compiling utopia-store v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t004-verify\crates\utopia-store)
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.37s
+       Running `C:/Users/Owner/.gsd-path/cargo-target/utopia\debug\examples\migrate.exe`
+  ```
