@@ -2101,6 +2101,22 @@ pub async fn low_confidence_facts(
     Ok(rows)
 }
 
+/// [`low_confidence_facts`] 翻到底一共多少行（0076：列表响应里的 `total`）。WHERE 是列表
+/// 自己的那一句，**没有** `derived_by_rule IS NULL`：列表列出推出来的事实，这里就数它们。
+/// `counts.lowconf`（徽标）不数推出来的，两个数因此可以不等
+pub async fn low_confidence_facts_total(pool: &PgPool, kb_id: Uuid, below: f32) -> AppResult<i64> {
+    Ok(sqlx::query_scalar(
+        "SELECT count(*)
+         FROM facts f
+         JOIN entities s ON s.id = f.subject_id
+         WHERE f.kb_id = $1 AND f.invalidated_at IS NULL AND f.confidence < $2",
+    )
+    .bind(kb_id)
+    .bind(below)
+    .fetch_one(pool)
+    .await?)
+}
+
 /// "证据全部停留在旧版"的现行事实（S3 第三刀：文档新版没再确认的知识）。
 /// 判定纯派生自 chunk 存活性——认领机制保证未变段落的证据不被误伤；
 /// 绝不自动删除（没再提 ≠ 不成立），删除/闭合权在 Review 的人手里。
@@ -2142,6 +2158,21 @@ pub async fn stale_facts(
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+/// [`stale_facts`] 翻到底一共多少行（0076：列表响应里的 `total`）。判据与列表同一套
+/// （`review::unconfirmed_fact`，列表的 WHERE 是它逐句展开的样子），内连接主语实体也照列表
+pub async fn stale_facts_total(pool: &PgPool, kb_id: Uuid) -> AppResult<i64> {
+    Ok(sqlx::query_scalar(&format!(
+        "SELECT count(*)
+         FROM facts f
+         JOIN entities s ON s.id = f.subject_id
+         WHERE f.kb_id = $1 AND f.invalidated_at IS NULL AND {unconfirmed}",
+        unconfirmed = crate::review::unconfirmed_fact(),
+    ))
+    .bind(kb_id)
+    .fetch_one(pool)
+    .await?)
 }
 
 /// 人工确认低置信事实：置信度提到 1.0。

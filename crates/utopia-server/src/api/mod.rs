@@ -698,4 +698,13 @@ mod review_session_unchanged_tests;
 mod review_token_api_tests;
 
 #[cfg(test)]
+mod review_totals_tests;
+
+#[cfg(test)]
+mod review_token_reads_tests;
+
+#[cfg(test)]
 mod review_mcp_tests;
+
+#[cfg(test)]
+mod review_mcp_reads_tests;

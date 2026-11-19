@@ -232,6 +232,17 @@ pub async fn list(
     .await?)
 }
 
+/// [`list`] 翻到底一共多少行（0076：列表响应里的 `total`）。数的是列表自己那条查询的行，
+/// 不是 `pending_facts` 的行数：列表内连接了主语实体与分块，连接丢掉的行这里也不数
+pub async fn total(pool: &PgPool, kb_id: Uuid) -> AppResult<i64> {
+    Ok(sqlx::query_scalar(&format!(
+        "SELECT count(*) FROM ({VIEW_SELECT} WHERE p.kb_id = $1) listed"
+    ))
+    .bind(kb_id)
+    .fetch_one(pool)
+    .await?)
+}
+
 /// 一句记忆抽出的全部待确认项——对话里那张卡片按这个取。
 pub async fn for_chunk(
     pool: &PgPool,

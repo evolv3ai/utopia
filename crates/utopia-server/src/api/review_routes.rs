@@ -26,7 +26,7 @@ mod conflict_tests;
 mod attribution_tests;
 
 /// 一页多少条。**服务端的默认，不是上限**——前端可以要更少，多则被 clamp 挡住
-pub(super) const REVIEW_PAGE: i64 = 10;
+const REVIEW_PAGE: i64 = 10;
 
 /// 事实快照（决策台账用）：reject 后事实从图里消失，台账必须自包含展示文本。
 /// 一律在动作执行前取。
@@ -79,8 +79,9 @@ pub struct ReviewQuery {
 /// 内容只回当前那一档的一页。切换分档或翻页各发一次请求，代价是多几次往返，
 /// 换来的是**数字不再骗人**，而且一个有十万条待办的库也翻得到底。
 ///
-/// 个人令牌也能读（0076）：令牌走 `review_ops::list`，这一刀只开 `duplicates` 一档；
-/// 会话照旧跑下面这一段
+/// 个人令牌也能读（0076）：令牌走 `review_ops::list`，Review 的十一个分档都开，`mappings`
+/// 不是分档、仍只给会话；会话照旧过下面的 `require_kb`。两边过了检查拿的都是
+/// [`queue_page`] 的那一页
 pub async fn list(
     State(state): State<AppState>,
     caller: SessionOrToken,
@@ -104,66 +105,103 @@ pub async fn list(
         ));
     }
     require_kb(&state, &user, kb_id, Role::Viewer).await?;
-    let counts = utopia_store::review::counts(&state.pool, kb_id).await?;
     let queue = q.queue.as_deref().unwrap_or("duplicates");
-    // 上限挡住「limit=1000000 把库拖垮」，同时留出足够一页的余量
-    let limit = q.limit.unwrap_or(REVIEW_PAGE).clamp(1, 200);
-    let offset = q.offset.unwrap_or(0).max(0);
+    Ok(Json(
+        queue_page(&state, kb_id, queue, q.types.as_deref(), q.limit, q.offset).await?,
+    ))
+}
 
-    let items = match queue {
+/// 一档的一页：计数、档名、这一页的条目，以及这一档翻到底一共多少行（`total`，0076）。
+///
+/// **这里不做授权。** 会话那一段先过 `require_kb`，令牌那一段先过 `review_ops` 的读检查，
+/// 两边过了才到这里——档的 `match` 只写这一处，两个入口拿到的是同一页。
+///
+/// `counts` 是左栏的徽标，键和值都不动。它里面与档同名的键在三档上不是列表的行数：
+/// `alignment` 不数蕴含规则，`agent` 是开着的建议数，`lowconf` 不数推出来的事实。按它
+/// 翻页，最后几行翻不到。`total` 另算：每一档用列表自己的 FROM / JOIN / WHERE 数一遍，
+/// 连接丢掉的行不数，所以翻到 `offset = total` 正好是空页
+pub(super) async fn queue_page(
+    state: &AppState,
+    kb_id: Uuid,
+    queue: &str,
+    types: Option<&str>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+) -> Result<serde_json::Value, utopia_core::AppError> {
+    let pool = &state.pool;
+    let counts = utopia_store::review::counts(pool, kb_id).await?;
+    // 上限挡住「limit=1000000 把库拖垮」，同时留出足够一页的余量
+    let limit = limit.unwrap_or(REVIEW_PAGE).clamp(1, 200);
+    let offset = offset.unwrap_or(0).max(0);
+
+    let (items, total) = match queue {
         // 记忆抽出、等人点头的事实（0015）。排第一：它是人自己说的话
-        "pending" => json!(utopia_store::pending::list(&state.pool, kb_id, limit, offset).await?),
-        "duplicates" => json!(
-            utopia_store::resolution::list_reviews(
-                &state.pool,
-                kb_id,
-                utopia_store::resolution::TypeFilter::parse(q.types.as_deref())?,
-                limit,
-                offset,
-            )
-            .await?
+        "pending" => (
+            json!(utopia_store::pending::list(pool, kb_id, limit, offset).await?),
+            utopia_store::pending::total(pool, kb_id).await?,
         ),
-        "conflicts" => {
-            json!(utopia_store::temporal::list_conflicts(&state.pool, kb_id, limit, offset).await?)
-        }
-        "unconfirmed" => {
-            json!(utopia_store::graph::stale_facts(&state.pool, kb_id, limit, offset).await?)
-        }
-        "lowconf" => json!(
-            utopia_store::graph::low_confidence_facts(
-                &state.pool,
-                kb_id,
-                utopia_store::review::LOW_CONFIDENCE_BELOW,
-                limit,
-                offset,
+        "duplicates" => {
+            let types = utopia_store::resolution::TypeFilter::parse(types)?;
+            (
+                json!(
+                    utopia_store::resolution::list_reviews(pool, kb_id, types, limit, offset)
+                        .await?
+                ),
+                utopia_store::resolution::list_reviews_total(pool, kb_id, types).await?,
             )
-            .await?
-        ),
-        "mappings" => {
-            json!(utopia_store::mappings::proposed(&state.pool, kb_id, limit, offset).await?)
         }
+        "conflicts" => (
+            json!(utopia_store::temporal::list_conflicts(pool, kb_id, limit, offset).await?),
+            utopia_store::temporal::list_conflicts_total(pool, kb_id).await?,
+        ),
+        "unconfirmed" => (
+            json!(utopia_store::graph::stale_facts(pool, kb_id, limit, offset).await?),
+            utopia_store::graph::stale_facts_total(pool, kb_id).await?,
+        ),
+        "lowconf" => {
+            let below = utopia_store::review::LOW_CONFIDENCE_BELOW;
+            (
+                json!(
+                    utopia_store::graph::low_confidence_facts(pool, kb_id, below, limit, offset)
+                        .await?
+                ),
+                utopia_store::graph::low_confidence_facts_total(pool, kb_id, below).await?,
+            )
+        }
+        "mappings" => (
+            json!(utopia_store::mappings::proposed(pool, kb_id, limit, offset).await?),
+            utopia_store::mappings::proposed_total(pool, kb_id).await?,
+        ),
         // 对齐器两票不一致的签名与类别词（#725 对齐队列，0044 决定 3）
-        "alignment" => {
-            json!(utopia_store::alignment_queue::list(&state.pool, kb_id, limit, offset).await?)
-        }
+        "alignment" => (
+            json!(utopia_store::alignment_queue::list(pool, kb_id, limit, offset).await?),
+            utopia_store::alignment_queue::total(pool, kb_id).await?,
+        ),
         // 勘误 agent 留给人的动作（0044 决定 7）：闸门拦下的撤、改、加
-        "errata" => json!(utopia_store::errata::held(&state.pool, kb_id, limit, offset).await?),
-        "violations" => {
-            json!(
-                utopia_store::reasoning::open_violations(&state.pool, kb_id, limit, offset).await?
-            )
-        }
-        "defects" => {
-            json!(utopia_store::reasoning::open_defects(&state.pool, kb_id, limit, offset).await?)
-        }
-        "merges" => {
-            json!(utopia_store::resolution::list_merges(&state.pool, kb_id, limit, offset).await?)
-        }
+        "errata" => (
+            json!(utopia_store::errata::held(pool, kb_id, limit, offset).await?),
+            utopia_store::errata::held_total(pool, kb_id).await?,
+        ),
+        "violations" => (
+            json!(utopia_store::reasoning::open_violations(pool, kb_id, limit, offset).await?),
+            utopia_store::reasoning::open_violations_total(pool, kb_id).await?,
+        ),
+        "defects" => (
+            json!(utopia_store::reasoning::open_defects(pool, kb_id, limit, offset).await?),
+            utopia_store::reasoning::open_defects_total(pool, kb_id).await?,
+        ),
+        "merges" => (
+            json!(utopia_store::resolution::list_merges(pool, kb_id, limit, offset).await?),
+            utopia_store::resolution::list_merges_total(pool, kb_id).await?,
+        ),
         // agent 的每一笔（0025）：建议、自动裁决与人的回答，最新的在前。令牌 agent 台账的行
         // 按动作时间并进同一页（0076 决定 7），带 `source: "token"`；治理 agent 的行原样
-        "agent" => json!(
-            utopia_store::token_agent_actions::agent_history(&state.pool, kb_id, limit, offset)
-                .await?
+        "agent" => (
+            json!(
+                utopia_store::token_agent_actions::agent_history(pool, kb_id, limit, offset)
+                    .await?
+            ),
+            utopia_store::token_agent_actions::agent_history_total(pool, kb_id).await?,
         ),
         // 认不出的档名当成契约错误报出来，而不是悄悄回空——悄悄回空会让前端
         // 拼错一个字母之后看到「这一档清空了」
@@ -171,16 +209,16 @@ pub async fn list(
             return Err(utopia_core::AppError::invalid(
                 "unknown_queue",
                 format!("no review queue named {other}"),
-            )
-            .into())
+            ))
         }
     };
 
-    Ok(Json(json!({
+    Ok(json!({
         "counts": counts,
         "queue": queue,
         "items": items,
-    })))
+        "total": total,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -757,12 +795,22 @@ fn default_history_per() -> i64 {
 }
 
 /// 决策台账：review 域的审计事件，服务端分页。
+///
+/// 个人令牌也能读（0076），走 `review_ops::history`，拿到的是同一个 `{events, total}`；
+/// 会话照旧跑下面这一段
 pub async fn history(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    caller: SessionOrToken,
     Path(kb_id): Path<Uuid>,
     Query(q): Query<HistoryQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    let user = caller.user;
+    if let Some(token) = caller.pat {
+        let caller = ReviewCaller { user, token, kb_id };
+        return Ok(Json(
+            review_ops::history(&state, &caller, Some(q.page), Some(q.per)).await?,
+        ));
+    }
     require_kb(&state, &user, kb_id, Role::Viewer).await?;
     let per = q.per.clamp(1, 100);
     let page = q.page.max(0);

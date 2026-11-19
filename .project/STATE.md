@@ -1,18 +1,18 @@
 ---
 pipeline: gsd-path/v2
 project: utopia
-milestone: token-review-skeleton
+milestone: token-review-reads
 phase: shipped
                     # inspect only for brownfield; greenfield starts at define
                     # roadmap only in program flow (CHARTER.md exists)
 status: done
-branch: gsd-path/M001
+branch: gsd-path/M002
                     # the router rebinds before any next-milestone file change
                     # the bound branch is never main; ship integrates it there
-archive: .project/archive/001-token-review-skeleton
-integration_default: direct # direct | pull-request | external-landing; project setting
-integration: direct # current milestone; may override the default before build
-integration_source: default # default | milestone; preserves override provenance
+archive: .project/archive/002-token-review-reads
+integration_default: direct
+integration: direct
+integration_source: default
 default_branch: dev # origin default branch; initialization records it once, nothing changes it
 ---
 
@@ -47,6 +47,19 @@ it on completion. If this file and the artifacts disagree, the artifacts win
 - 2026-11-19 — plan — patch plan reopened
 - 2026-11-19 — plan — patch plan approved
 - 2026-11-19 — build — build started
+- 2026-11-19 — ship — build done; final review pending
+- 2026-11-19 — ship — final gate passed; shipping approval pending
+- 2026-11-19 — shipped — archive preflight passed; shipment recorded
+- 2026-11-19 — inspect — next milestone M002 token-review-reads bound on gsd-path/M002 at base 904b2a20380719553896160aa05d0af4f3a561ce; previous archive .project/archive/001-token-review-skeleton, ship 647c8678ae41dd0ff7e1ed98ddf3f351ad180902, integration 904b2a20380719553896160aa05d0af4f3a561ce, previous branch gsd-path/M001
+- 2026-11-19 — inspect — inspection artifacts passed
+- 2026-11-19 — define — definition started
+- 2026-11-19 — define — milestone intent approved
+- 2026-11-19 — plan — planning started
+- 2026-11-19 — plan — plan approved
+- 2026-11-19 — build — build started
+- 2026-11-19 — build — plan defect repaired: T002 files gain review_totals_tests.rs for one transitional assertion (orchestrator answer, driver D091)
+- 2026-11-19 — build — plan defect repaired: T002 files gain review_attribution_tests.rs, T002 supersedes T001 Verify and carries its checks (orchestrator answer, driver D092)
+- 2026-11-19 — build — plan defect repaired: T003 Verify no longer freezes review_attribution_tests.rs, which T002 changed under driver D092
 - 2026-11-19 — ship — build done; final review pending
 - 2026-11-19 — ship — final gate passed; shipping approval pending
 - 2026-11-19 — shipped — archive preflight passed; shipment recorded

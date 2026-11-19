@@ -2614,6 +2614,8 @@ export const api = {
       queue: ReviewQueue;
       /** 只有当前这一档的一页。类型按档不同，调用处按 queue 收窄 */
       items: unknown[];
+      /** 这一档的列表翻到底一共多少行（0076）。`counts` 里同名的键是徽标，三档上与它不等 */
+      total: number;
     }>(
       `/api/v1/kbs/${kbId}/review?queue=${queue}&limit=${limit}&offset=${offset}&types=${types}`,
     ),

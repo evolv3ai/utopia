@@ -1,0 +1,151 @@
+---
+id: T003
+title: Serve all thirteen sections through MCP review_list and one listed item of any section through review_item
+wave: 2
+deps: [T001, T002]
+status: done
+agent: build_T003
+base: de4bc611154414861b0bac0475ed0f2d2a955066
+worktree: null
+task_branch: null
+files:
+  - crates/utopia-server/src/api/review_tools.rs
+  - crates/utopia-server/src/api/review_ops.rs
+  - crates/utopia-server/src/api/mod.rs
+  - crates/utopia-server/src/api/review_mcp_reads_tests.rs
+  - crates/utopia-server/src/api/review_mcp_tests.rs
+  - crates/utopia-store/src/pending.rs
+  - crates/utopia-store/src/resolution.rs
+  - crates/utopia-store/src/temporal.rs
+  - crates/utopia-store/src/temporal/conflicts.rs
+  - crates/utopia-store/src/graph.rs
+  - crates/utopia-store/src/reasoning.rs
+  - crates/utopia-store/src/alignment_queue.rs
+  - crates/utopia-store/src/errata.rs
+  - crates/utopia-store/src/token_agent_actions.rs
+  - crates/utopia-store/src/audit.rs
+---
+
+# T003 — Serve all thirteen sections through MCP review_list and one listed item of any section through review_item
+
+## Context
+
+The MCP endpoint (`POST /api/v1/kbs/{kb_id}/mcp`) has three Review tools from M001 in `crates/utopia-server/src/api/review_tools.rs`: `review_list` (sections `duplicates` and `overview`), `review_item` (one pending duplicate pair by id) and `review_keep`. The settled design is one implementation for REST and MCP: the tool layer only maps arguments to `review_ops` and turns its answer into a tool result, and a refused call carries the REST code (`review_tools::refusal` already does this, with `not_found` for a 404). T002 opened the eleven queue sections, the Decisions history and the violation proof in `review_ops`. This task makes `review_list` cover all thirteen sections and `review_item` return one listed item of any section. Rulings that bind (INTENT Edge coverage, driver D071–D073): `review_list` for `decisions` takes the Decisions route's own `page` and `per` and returns its `{events, total}`, the other list sections take `limit` and `offset`, `overview` takes neither; `review_item` takes a `section` and an `id`, `section` omitted means `duplicates` as in M001; it returns the list item's own fields for every section, plus the proof steps for an Axioms item of kind `derived_contradiction` and a null proof for an Axioms item of another kind; an id that is not listed in the named section of this base answers not found with no evidence. No tool is added and no write becomes reachable.
+
+## Approach
+
+- `review_list`: `section` `overview` goes to `review_ops::summary` as today; `decisions` goes to `review_ops::history` with the optional integers `page` and `per`; every other name goes to `review_ops::list` with the optional integers `limit` and `offset`, which serves the eleven queue sections and refuses `mappings` and unknown names with `unknown_queue`. Do not judge the section name a second time in the tool layer. An argument a section does not take is not applied to it, as `overview` already ignores `limit` and `offset` in M001; a paging argument of the wrong JSON type for the section that takes it stays the plain-text argument error `optional_integer` gives. The input schema keeps no `minimum`/`maximum` on any paging argument: out-of-range values are clamped by `review_ops`, not refused.
+- `review_item`: arguments `section` (optional string, default `duplicates`) and `id` (required string). The schema of `id` can no longer say `format: uuid`: an Alignment kind word is identified by its word. For every section but an Alignment kind word the id is the `id` field of the list item (a uuid); a string that is not a uuid can only name a kind word, and anywhere else it is not found. An Agent History row is identified by its `id` whichever source it has (governor row or ledger row). A kind word is compared exactly as stored: no trimming, no case folding.
+- Add the shared operation in `review_ops` (replace or widen M001's `item`; the name and signature are yours, the tool layer is its only caller). It authorizes with `authorize_read` first, then returns the one object that `review_ops::list` returns for that item in that section (for `decisions`, the event object `review_ops::history` returns), or `AppError::NotFound`. The object must equal the list element field for field. Two ways are acceptable: find the element in the section's own list (through `queue_page` / the history read, page by page), or a single-row store lookup that reuses the list's own row assembly, as `resolution::pending_review` reuses `assemble_reviews`. A lookup that rebuilds the row with its own SQL and can drift from the list is not acceptable. The store modules of the list queues and `audit.rs` are in `files` for that purpose; do not change any list function, its order or its fields.
+- Axioms (`violations`): the returned object is the list item plus one key `proof`. For kind `derived_contradiction` `proof` is the `steps` value of `review_ops::violation_proof` for that id; for any other kind `proof` is `null` and the call is not an error. No other section's item gains a key: an Ontology (`defects`) item is exactly its list fields.
+- Not found is one answer: an id that is unknown, belongs to another base, or names an item no longer waiting in that section all give the same `not_found` tool error with no evidence field. `overview` lists no items, so `review_item` with `section: "overview"` answers `not_found` for any id by the same rule (recorded as an open item: INTENT does not rule on an Overview item). A `section` outside the thirteen, `mappings` included, is refused with `unknown_queue`.
+- N3 (judgment prohibition, SC3). Must not: return through `review_item` or an opened proof read anything a signed-in Viewer of that base could not read through the existing routes. Detail: the reviewer checks that every item and proof read passes the same reader check as the list (owner at least Viewer, base inside `kb_ids`) and returns only fields the session routes already return for that item. So the item operation calls `authorize_read` before any store read, takes its fields from the list and the proof route only, and adds no field of its own.
+- N4 (judgment prohibition, SC1). Must not: make any Review write other than the M001 keep reachable by a token. Detail: the reviewer checks that this milestone adds no token branch to a write handler and no MCP write tool, and that reading "Awaiting your nod" gives a token no way to nod. `review_tools::serves`, `listed` and the `review_keep` branch are not widened; the tool set stays `review_list`, `review_item`, `review_keep`; reading a `pending` item returns its fields and nothing that decides it.
+- `crates/utopia-server/src/api/mcp.rs` is not edited: `review_tools::call` keeps its signature, and the endpoint's HTTP 403 for a token whose `kb_ids` exclude the base is vetoed from change. Nothing goes into `chat::tools_schema` or `tools::dispatch`.
+- Rewrite the two read tools' descriptions and argument descriptions in `review_tools::definitions` to say what is served now (all thirteen sections by their keys, which paging arguments each takes, `total`, `section` and `id` of `review_item`, the `proof` key). They are English, user-facing text. The prose documentation in `web/src/docs/mcp.md` is T004's.
+- Tests go in the new `crates/utopia-server/src/api/review_mcp_reads_tests.rs`, declared in `mod.rs`, through the router as `review_mcp_tests.rs` does (`tools/list`, `tools/call`), on a base seeded with `seed_every_section`. In `review_mcp_tests.rs` change only what the new argument shape forces (for example an assertion on the `id` schema); the M001 tests named in Verify must keep passing, and `review_list_refuses_mappings_and_an_unknown_section_with_unknown_queue` stays as T002 left it.
+- Conventions (bind this task): explanatory code comments in Chinese that say why, updating the module comments that say only Duplicates is served; test functions named as sentences; user-facing error strings in English with a stable `code`; ADR 0076 covers these tools and is amended by T004; no migration; one behaviour-sentence commit subject with a DCO `Signed-off-by`; `cargo fmt` clean in the files this task lists and no formatting of files it does not; nothing is sent to `deeplethe/utopia` or a deployed instance.
+
+## Interface contract
+
+- `crate::api::review_routes::queue_page` (file `crates/utopia-server/src/api/review_routes.rs`): `pub(super) async fn queue_page(state: &AppState, kb_id: Uuid, queue: &str, types: Option<&str>, limit: Option<i64>, offset: Option<i64>) -> Result<serde_json::Value, utopia_core::AppError>`. It does no authorization. For the twelve list queues `pending`, `duplicates`, `conflicts`, `unconfirmed`, `lowconf`, `mappings`, `alignment`, `errata`, `violations`, `defects`, `merges`, `agent` it returns `{"counts": <ReviewCounts>, "queue": "<queue>", "items": [...], "total": <integer>}`: `counts` and `items` are what the session list route returns at commit `904b2a2` for the same arguments (limit default 10, clamped to 1..=200; offset floored at 0; `types` applies to `duplicates` only), and `total` is the number of rows that queue's list returns over all pages for the same `types`. Any other queue name returns `AppError::invalid("unknown_queue", "no review queue named <queue>")`.
+- Section seed: file `crates/utopia-server/src/api/review_totals_tests.rs`, `pub(super) async fn seed_every_section(f: &super::review_session_unchanged_tests::Fx) -> anyhow::Result<()>`. After it returns, base `f.kb` holds at least two listed items in each of `pending`, `duplicates`, `conflicts`, `unconfirmed`, `lowconf`, `violations`, `defects`, `errata`, `merges` and `agent`, at least one proposed mapping, and in `alignment` at least two phrases, one kind word and two proposed implication rules, one of which is last in the list order; `lowconf` holds at least one derived fact (`derived_by_rule` not null) and one that is not; `violations` holds one item of kind `derived_contradiction` for which `utopia_store::reasoning::blocked_proof` returns at least one step and one item of another kind; `agent` holds at least one governor row and exactly one token row, a keep made with a write token of `f.editor`; the Decisions history holds at least two events. Base `f.other_kb` is not touched.
+- `crate::api::review_ops` reads (file `crates/utopia-server/src/api/review_ops.rs`), each authorizing inside itself and returning `AppError::NotFound` when the owner is not at least Viewer of the base or the token's `kb_ids` exclude it: `pub(crate) async fn list(state: &AppState, caller: &ReviewCaller, section: &str, types: Option<&str>, limit: Option<i64>, offset: Option<i64>) -> Result<serde_json::Value, AppError>` returns `{"counts","queue","items","total"}` for the eleven sections `pending`, `duplicates`, `conflicts`, `unconfirmed`, `lowconf`, `violations`, `defects`, `alignment`, `errata`, `agent`, `merges` and `AppError::invalid("unknown_queue", ..)` for `mappings` and every other name; `pub(crate) async fn history(state: &AppState, caller: &ReviewCaller, page: Option<i64>, per: Option<i64>) -> Result<serde_json::Value, AppError>` returns `{"events": [...], "total": <integer>}` as `GET /review/history` returns it to a session (`page` default 0, floored at 0; `per` default 20, clamped to 1..=100); `pub(crate) async fn violation_proof(state: &AppState, caller: &ReviewCaller, violation_id: Uuid) -> Result<serde_json::Value, AppError>` returns `{"steps": <array or null>}` as `GET /violations/{violation_id}/proof` returns it to a session; `summary` is unchanged from M001.
+- Token-open Review reads, all under `/api/v1` with `Authorization: Bearer utp_pat_…`, any scope, owner at least Viewer: `GET /kbs/{kb_id}/review?queue=<one of the eleven sections>` (optional `types` for `duplicates`, `limit`, `offset`), `GET /kbs/{kb_id}/review/summary`, `GET /kbs/{kb_id}/review/history?page=&per=`, `GET /kbs/{kb_id}/violations/{violation_id}/proof`, `GET /kbs/{kb_id}/derived/{derived_id}/proof`. Refusals: 401 for a dead or revoked token; 404 when the owner is below Viewer or the token's `kb_ids` exclude the base; 422 with code `unknown_queue` on the list route for `mappings` or any name that is not one of the eleven.
+- MCP Review read tools (file `crates/utopia-server/src/api/review_tools.rs`), listed for every token that reaches the base with an owner at least Viewer. `review_list` takes `section` (required string: `overview`, `decisions` or one of the eleven queue sections), `limit` and `offset` (optional integers, queue sections only) and `page` and `per` (optional integers, `decisions` only); its `structuredContent` is the token API's body for that section — `{"counts","queue","items","total"}`, the Overview summary object, or `{"events","total"}`. `review_item` takes `section` (optional string, default `duplicates`; `decisions` or one of the eleven queue sections) and `id` (required string: the item's `id`, or the word of an Alignment kind word, compared exactly as stored); its `structuredContent` is that item exactly as the list returns it, and for section `violations` the same object plus `proof` (the proof steps for kind `derived_contradiction`, `null` for any other kind). Tool errors (`isError: true`, `structuredContent` `{"code","message"}`): `unknown_queue` for a section outside the thirteen, `mappings` included; `not_found` for an id not listed in that section of this base, and for any id with section `overview`. No Review tool is added; `review_keep` is unchanged.
+
+## Intent coverage
+
+- SC2
+- SC3
+
+## Acceptance criteria
+
+1. SC2: test `review_list_returns_what_the_token_api_returns_for_each_of_the_thirteen_sections` — on the seeded base and for one read token of a Viewer, the `structuredContent` of `review_list` equals the token API's body for each of the eleven queue sections (same `limit` and `offset`), for `overview` (`GET /review/summary`) and for `decisions` (`GET /review/history`), with at least one item in every list.
+2. E6 (held-out; ruling: over MCP, `review_list` for section `decisions` takes the Decisions route's own `page` and `per` and returns its `{events, total}`; the other list sections take `limit` and `offset`; `overview` takes neither): test `review_list_pages_decisions_by_page_and_per_and_the_queue_sections_by_limit_and_offset` shows `review_list` with `section: "decisions"`, `page: 1`, `per: 1` equal to `GET /review/history?page=1&per=1`, with keys `events` and `total` only; a queue section with `limit: 1`, `offset: 1` equal to the token API's response for those values; `overview` equal to the summary with and without paging arguments; and `per: 0` and `per: 1000` served as the route serves them, not refused.
+3. SC3: test `review_item_returns_the_listed_items_own_fields_for_one_item_of_each_section` — for one listed item of each of the eleven queue sections and of `decisions`, `review_item` with that `section` and the item's identifier returns an object equal to that item in the token API's list response (for `violations`, equal once `proof` is set aside), which in turn equals the item the signed-in editor's list returns; all three Alignment kinds (phrase, kind word, rule) and both Agent History sources are covered.
+4. E8 (held-out; ruling: `review_item` returns the list item's own fields for every section; an Axioms item of kind `derived_contradiction` also carries its proof steps; an Axioms item of another kind carries a null proof and is not an error; an Ontology item returns its list fields): test `review_item_carries_proof_steps_for_a_derived_contradiction_and_a_null_proof_for_another_kind` shows `proof` equal to `steps` of `GET /violations/{id}/proof` with the same token and non-empty for the seeded `derived_contradiction` item, `proof: null` without `isError` for an Axioms item of another kind, and for an Ontology item exactly the keys of its list item.
+5. E7 (held-out; ruling: `review_item` for an id that is not listed in the named section of this base — unknown, belonging to another base, or no longer waiting — answers not found with no evidence, the same for all three): test `review_item_answers_one_not_found_for_an_unknown_id_another_bases_id_and_an_item_no_longer_waiting` shows, for every queue section and `decisions`, equal tool results (`isError: true`, code `not_found`, no item field) for a made-up id and for an id listed in that section of another base, and the same result for an item that has left its section (a decided duplicate pair, a decided violation, a decided Alignment item at least). An id of one section asked under another section is also `not_found`.
+6. E9 (held-out; ruling: `review_item` takes a `section` and an `id`; `section` omitted means `duplicates` as in M001; an Alignment kind-word item is identified by its word, compared exactly as stored; an Agent History row is identified by its row id whichever source it has): test `review_item_defaults_to_duplicates_and_finds_a_kind_word_by_its_exact_word_and_an_agent_row_by_its_row_id` shows a pair found with `section` omitted; a kind word found by its stored word and `not_found` for the same word in another letter case or with a space added; a governor row and a ledger row each found by `id` under `section: "agent"`.
+7. Test `review_item_refuses_mappings_and_an_unknown_section_with_unknown_queue`: `review_item` with `section: "mappings"` and with a made-up section is a tool error with code `unknown_queue`; with `section: "overview"` it is `not_found`.
+8. Test `the_mcp_endpoint_offers_no_review_tool_beyond_list_item_and_keep`: `tools/list` for a read token of a Viewer names exactly `review_list` and `review_item` among tools whose name starts with `review_`, and for a write token of an editor exactly those two and `review_keep`. `crates/utopia-server/src/api/mcp.rs` is unchanged from `904b2a2`.
+9. The M001 tests pass: `review_list_returns_what_the_token_api_returns_for_duplicates_and_overview`, `review_item_returns_the_evidence_on_the_pairs_card`, `review_item_answers_one_not_found_for_an_unknown_id_and_another_bases_id`, `review_list_serves_a_page_size_below_1_as_1_and_above_200_as_200`, `a_token_whose_kb_ids_exclude_the_base_reads_no_review_data_over_mcp`, `review_keep_is_listed_only_to_a_write_token_of_an_editor`, `the_chat_assistant_is_offered_no_review_tool`, `refused_and_executed_calls_are_each_audited_once`.
+10. The tool descriptions in `review_tools.rs` name the thirteen sections, the paging arguments of each kind of section, `total`, and `section`, `id` and `proof` of `review_item`, and no longer say that only two sections are served; `cargo fmt --all --check` reports nothing in the files this task lists.
+
+## Verify
+
+```bash
+set -o pipefail && test -s crates/utopia-server/src/api/review_mcp_reads_tests.rs && git diff --quiet 904b2a20380719553896160aa05d0af4f3a561ce -- crates/utopia-server/src/api/mcp.rs crates/utopia-server/src/api/mcp_tests.rs migrations && docker exec utopia-db-1 psql -U utopia -d utopia -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS m002_t003 WITH (FORCE)" -c "CREATE DATABASE m002_t003" -c "DROP DATABASE IF EXISTS m002_t003_store WITH (FORCE)" -c "CREATE DATABASE m002_t003_store" && export UTOPIA_DATABASE_URL=postgres://utopia:utopia@127.0.0.1:1517/m002_t003 && cargo run -p utopia-store --example migrate && UTOPIA_TEST_REQUIRE_DB=1 cargo test -p utopia-server -- review_list_returns_what_the_token_api_returns_for_each_of_the_thirteen_sections review_list_pages_decisions_by_page_and_per_and_the_queue_sections_by_limit_and_offset review_item_returns_the_listed_items_own_fields_for_one_item_of_each_section review_item_carries_proof_steps_for_a_derived_contradiction_and_a_null_proof_for_another_kind review_item_answers_one_not_found_for_an_unknown_id_another_bases_id_and_an_item_no_longer_waiting review_item_defaults_to_duplicates_and_finds_a_kind_word_by_its_exact_word_and_an_agent_row_by_its_row_id review_item_refuses_mappings_and_an_unknown_section_with_unknown_queue the_mcp_endpoint_offers_no_review_tool_beyond_list_item_and_keep review_list_returns_what_the_token_api_returns_for_duplicates_and_overview review_item_returns_the_evidence_on_the_pairs_card review_item_answers_one_not_found_for_an_unknown_id_and_another_bases_id review_list_serves_a_page_size_below_1_as_1_and_above_200_as_200 a_token_whose_kb_ids_exclude_the_base_reads_no_review_data_over_mcp review_keep_is_listed_only_to_a_write_token_of_an_editor the_chat_assistant_is_offered_no_review_tool refused_and_executed_calls_are_each_audited_once 2>&1 | tee /dev/stderr | grep -c -E "(review_list_returns_what_the_token_api_returns_for_each_of_the_thirteen_sections|review_list_pages_decisions_by_page_and_per_and_the_queue_sections_by_limit_and_offset|review_item_returns_the_listed_items_own_fields_for_one_item_of_each_section|review_item_carries_proof_steps_for_a_derived_contradiction_and_a_null_proof_for_another_kind|review_item_answers_one_not_found_for_an_unknown_id_another_bases_id_and_an_item_no_longer_waiting|review_item_defaults_to_duplicates_and_finds_a_kind_word_by_its_exact_word_and_an_agent_row_by_its_row_id|review_item_refuses_mappings_and_an_unknown_section_with_unknown_queue|the_mcp_endpoint_offers_no_review_tool_beyond_list_item_and_keep|review_list_returns_what_the_token_api_returns_for_duplicates_and_overview|review_item_returns_the_evidence_on_the_pairs_card|review_item_answers_one_not_found_for_an_unknown_id_and_another_bases_id|review_list_serves_a_page_size_below_1_as_1_and_above_200_as_200|a_token_whose_kb_ids_exclude_the_base_reads_no_review_data_over_mcp|review_keep_is_listed_only_to_a_write_token_of_an_editor|the_chat_assistant_is_offered_no_review_tool|refused_and_executed_calls_are_each_audited_once) \.\.\. ok" | grep -qx 16 && export UTOPIA_DATABASE_URL=postgres://utopia:utopia@127.0.0.1:1517/m002_t003_store && cargo run -p utopia-store --example migrate && UTOPIA_TEST_REQUIRE_DB=1 cargo test -p utopia-store --test store -- the_summary_reads_the_three_ledgers_with_one_yardstick shared_sides_keep_their_summaries_and_the_page_keeps_its_order paging_through_a_batch_sees_every_row_exactly_once 2>&1 | tee /dev/stderr | grep -c -E "(the_summary_reads_the_three_ledgers_with_one_yardstick|shared_sides_keep_their_summaries_and_the_page_keeps_its_order|paging_through_a_batch_sees_every_row_exactly_once) \.\.\. ok" | grep -qx 3
+```
+<!-- Runs in a fresh sidecar worktree at the landed commit with nothing
+     installed. It creates and migrates its own databases `m002_t003` (server
+     tests) and `m002_t003_store` (store tests, run because this task may add
+     single-row lookups to store modules) on the compose Postgres. The
+     orchestrator's environment supplies an empty `CARGO_TARGET_DIR` outside
+     the worktree and PostgreSQL 16 client tools on PATH. The tests are named
+     twice on purpose: once as filters, once in the check that every one of
+     them reported `ok`. -->
+
+Heavy: yes
+
+## Log
+
+- 2026-11-19 — created by planner
+- 2026-11-19 — orchestrator plan-defect repair: the Verify's frozen-path check no longer names `crates/utopia-server/src/api/review_attribution_tests.rs`; T002 changed one assertion in that file under the recorded orchestrator answer (driver D092), so it can no longer equal `904b2a2`. This task still does not edit that file. No other field changed.
+- 2026-11-19 — coder build_T003: ready. Preflight clean (every named path and symbol exists at base `de4bc61` or is declared in `files`; SC2 and SC3 are those numbered items of INTENT; the Interface contract paragraphs shared with T002 match its task file).
+  - Product: `review_ops::item` now has the signature `(state, caller, section: &str, id: &str) -> Result<serde_json::Value, AppError>`. It calls `authorize_read` before any store read, then finds the element in the section's own list: `review_routes::queue_page` in pages of 200 for the eleven queue sections, `audit::review_history` in pages of 100 for `decisions`. The returned object is the list element itself; for `violations` one key `proof` is added (`reasoning::blocked_proof` steps for kind `derived_contradiction`, `null` otherwise). `overview` answers `NotFound`; a name outside the thirteen answers `unknown_queue` (now one helper shared with `list`); an id that is not a uuid is looked for only as an Alignment kind word, compared exactly. `review_tools`: `review_list` routes `overview` to `summary`, `decisions` to `history` with `page`/`per`, every other name to `list` with `limit`/`offset`, and reads only the paging arguments the section takes; `review_item` takes optional `section` (default `duplicates`) and `id` passed through untrimmed; the `review_keep` branch is the M001 statements; both read tools' descriptions and schemas rewritten (`id` of `review_item` no longer `format: uuid`). `serves`, `listed`, `call`'s signature and `mcp.rs` unchanged.
+  - Decisions: (1) list-scan rather than single-row store lookups, so no store module in `files` was edited and no list function changed; cost is one extra page read per 200 items ahead of the one asked for. (2) A uuid id is parsed after trimming, as M001 did; a kind word is not trimmed. (3) `section` of `review_item` is trimmed like `section` of `review_list`; an empty or wrongly cased name is `unknown_queue`.
+  - Tests: new `review_mcp_reads_tests.rs` (declared in `mod.rs`) with the eight named tests of AC1–AC8; the E7 test seeds `f.other_kb` with the same seed script plus one kind word only that base has. `review_mcp_tests.rs`: module comment only (the stale sentence that other sections are refused); no test changed.
+  - Commands, `CARGO_TARGET_DIR` outside the worktree, fresh migrated `m002_t003` and `m002_t003_store`, results read from the test output:
+    - frozen-path check of this Verify (`mcp.rs`, `mcp_tests.rs`, `migrations` against `904b2a2`): exit 0. The 16 named server tests with the Verify's own filter and count: 16 `ok`. The 3 named store tests: 3 passed, 0 failed.
+    - `UTOPIA_TEST_REQUIRE_DB=1 cargo test -p utopia-server` (whole crate): 878 passed, 0 failed, 2 ignored.
+    - Regression, T002's Verify parts: its 19 named tests — 19 passed; T001's 16 named server tests — 16 passed; both `git diff --quiet 904b2a2…` frozen-path checks exit 0; numstat of `review_session_unchanged_tests.rs` is `1 1`. Its `pnpm` install, vitest and web build steps were not rerun (no web path changed).
+    - `cargo fmt --all --check`: exit 0. `cargo clippy -p utopia-server --all-targets`: no warnings.
+  - Guard: nothing refused. `git status --short`: only paths in `files` and this task file.
+  - Open item carried from the Approach, not decided here: INTENT does not rule on an Overview item; `review_item` with `section: "overview"` answers `not_found` as the contract says.
+- 2026-11-19 — orchestrator Verify (sidecar gsd-path-verify/task-t003-verify): pass, exit 0; output tail:
+  ```
+  test api::review_mcp_reads_tests::review_list_returns_what_the_token_api_returns_for_each_of_the_thirteen_sections ... ok
+  test api::review_mcp_reads_tests::review_item_returns_the_listed_items_own_fields_for_one_item_of_each_section ... ok
+  test api::review_mcp_reads_tests::review_list_pages_decisions_by_page_and_per_and_the_queue_sections_by_limit_and_offset ... ok
+  test api::review_mcp_reads_tests::review_item_answers_one_not_found_for_an_unknown_id_another_bases_id_and_an_item_no_longer_waiting ... ok
+  
+  test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 864 filtered out; finished in 5.22s
+  
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.29s
+       Running `C:/Users/Owner/.gsd-path/cargo-target/finish-m002-T003\debug\examples\migrate.exe`
+     Compiling utopia-store v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t003-verify\crates\utopia-store)
+      Finished `test` profile [unoptimized + debuginfo] target(s) in 14.76s
+       Running tests\store\main.rs (C:/Users/Owner/.gsd-path/cargo-target/finish-m002-T003\debug\deps\store-97773e81a9073f97.exe)
+  
+  running 3 tests
+  test a_review_has_a_summary::the_summary_reads_the_three_ledgers_with_one_yardstick ... ok
+  test a_review_page_is_assembled_in_batches::shared_sides_keep_their_summaries_and_the_page_keeps_its_order ... ok
+  test a_page_never_skips_a_row::paging_through_a_batch_sees_every_row_exactly_once ... ok
+  
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 358 filtered out; finished in 5.60s
+  ```
+- 2026-11-19 — orchestrator regression Verify of T002 (supersedes T001) (sidecar gsd-path-verify/task-t003-verify): pass, exit 0; output tail:
+  ```
+       Running `C:/Users/Owner/.gsd-path/cargo-target/finish-m002-T003\debug\examples\migrate.exe`
+      Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s
+       Running tests\store\main.rs (C:/Users/Owner/.gsd-path/cargo-target/finish-m002-T003\debug\deps\store-97773e81a9073f97.exe)
+  
+  running 3 tests
+  test a_review_has_a_summary::the_summary_reads_the_three_ledgers_with_one_yardstick ... ok
+  test a_review_page_is_assembled_in_batches::shared_sides_keep_their_summaries_and_the_page_keeps_its_order ... ok
+  test a_page_never_skips_a_row::paging_through_a_batch_sees_every_row_exactly_once ... ok
+  
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 358 filtered out; finished in 5.55s
+  
+  (node:31720) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:16288) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  [33m
+  (!) Some chunks are larger than 500 kB after minification. Consider:
+  - Using dynamic import() to code-split the application
+  - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+  - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+  ```
+- 2026-11-19 — orchestrator regression Verify of T001 retired: superseded by T002

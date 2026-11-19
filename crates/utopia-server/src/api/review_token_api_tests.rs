@@ -292,57 +292,6 @@ async fn a_token_receives_duplicates_in_the_session_order() -> anyhow::Result<()
 }
 
 #[tokio::test]
-async fn a_token_asking_for_another_section_is_refused_with_unknown_queue() -> anyhow::Result<()> {
-    let Some(f) = Fx::new(false).await? else {
-        return Ok(());
-    };
-    let result = async {
-        let kb = f.kb;
-        f.pair("Zhang Wei", "Zhang Wei").await?;
-        let (_, read) = f.token(f.viewer, "reader", "read", None).await?;
-        let (_, write) = f.token(f.editor, "writer", "write", None).await?;
-        for queue in ["pending", "agent", "merges"] {
-            let path = format!("/kbs/{kb}/review?queue={queue}");
-            for token in [&read, &write] {
-                let (status, body) = f.call(token, "GET", &path, None).await?;
-                anyhow::ensure!(
-                    status == StatusCode::UNPROCESSABLE_ENTITY,
-                    "{queue}: {status} {body}"
-                );
-                anyhow::ensure!(body["code"] == "unknown_queue", "{queue}: {body}");
-                anyhow::ensure!(
-                    body.get("items").is_none() && body.get("counts").is_none(),
-                    "{queue}: {body}"
-                );
-            }
-            // 会话照旧拿得到这一档
-            let (status, body) = f.call(&f.editor_session, "GET", &path, None).await?;
-            anyhow::ensure!(
-                status == StatusCode::OK && body["queue"] == queue && body["items"].is_array(),
-                "session {queue}: {status} {body}"
-            );
-        }
-        // 够不着的库先答 404：不告诉它那里有哪些档
-        let (_, excluded) = f
-            .token(f.viewer, "excluded", "read", Some(&[f.other_kb]))
-            .await?;
-        let (status, _) = f
-            .call(
-                &excluded,
-                "GET",
-                &format!("/kbs/{kb}/review?queue=pending"),
-                None,
-            )
-            .await?;
-        anyhow::ensure!(status == StatusCode::NOT_FOUND, "{status}");
-        Ok(())
-    }
-    .await;
-    f.cleanup().await?;
-    result
-}
-
-#[tokio::test]
 async fn a_refused_token_merge_revert_or_batch_leaves_the_graph_equal() -> anyhow::Result<()> {
     let Some(f) = Fx::new(false).await? else {
         return Ok(());

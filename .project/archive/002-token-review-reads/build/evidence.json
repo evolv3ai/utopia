@@ -1,0 +1,104 @@
+{
+  "canonical_project_dir": ".project",
+  "command": "verify-landed",
+  "head": "7e75853fa0a4b5ed5c03f340a35e612e18648ff7",
+  "project_dir": ".project",
+  "tasks": [
+    {
+      "classification": "proven-landed",
+      "command": "reconcile",
+      "history": {
+        "branch": "gsd-path/M002",
+        "candidates": [
+          {
+            "base": "be4db4d4fd239a1aa875bb2712ac4ee16c8a9b56",
+            "commit": "5f1d8c842caa0e00f92cb20a383bdcf1408f6c91",
+            "valid": true
+          }
+        ],
+        "head": "7e75853fa0a4b5ed5c03f340a35e612e18648ff7",
+        "subject": "T001: Carry the true section total on every Review list response, break Alignment ties by identifier, and seed all thirteen sections"
+      },
+      "landed_commit": "5f1d8c842caa0e00f92cb20a383bdcf1408f6c91",
+      "reasons": [],
+      "task": {
+        "base": "be4db4d4fd239a1aa875bb2712ac4ee16c8a9b56",
+        "id": "T001",
+        "status": "done",
+        "task_file": ".project/tasks/T001-section-totals-alignment-tie-break-and-section-seed.md"
+      }
+    },
+    {
+      "classification": "proven-landed",
+      "command": "reconcile",
+      "history": {
+        "branch": "gsd-path/M002",
+        "candidates": [
+          {
+            "base": "a30b7463819caf8e2d9e364143488314c52dd953",
+            "commit": "c133deebf8480dd4cfe9817fbd60c729e6cfc824",
+            "valid": true
+          }
+        ],
+        "head": "7e75853fa0a4b5ed5c03f340a35e612e18648ff7",
+        "subject": "T002: Open the eleven queue sections, the Decisions history and both proof reads to personal tokens over the HTTP API"
+      },
+      "landed_commit": "c133deebf8480dd4cfe9817fbd60c729e6cfc824",
+      "reasons": [],
+      "task": {
+        "base": "a30b7463819caf8e2d9e364143488314c52dd953",
+        "id": "T002",
+        "status": "done",
+        "task_file": ".project/tasks/T002-token-api-reads-of-every-section-and-both-proofs.md"
+      }
+    },
+    {
+      "classification": "proven-landed",
+      "command": "reconcile",
+      "history": {
+        "branch": "gsd-path/M002",
+        "candidates": [
+          {
+            "base": "de4bc611154414861b0bac0475ed0f2d2a955066",
+            "commit": "41ee3b9249fea740fe1e91e607c8d7f59bab7bbb",
+            "valid": true
+          }
+        ],
+        "head": "7e75853fa0a4b5ed5c03f340a35e612e18648ff7",
+        "subject": "T003: Serve all thirteen sections through MCP review_list and one listed item of any section through review_item"
+      },
+      "landed_commit": "41ee3b9249fea740fe1e91e607c8d7f59bab7bbb",
+      "reasons": [],
+      "task": {
+        "base": "de4bc611154414861b0bac0475ed0f2d2a955066",
+        "id": "T003",
+        "status": "done",
+        "task_file": ".project/tasks/T003-mcp-review-list-and-review-item-for-every-section.md"
+      }
+    },
+    {
+      "classification": "proven-landed",
+      "command": "reconcile",
+      "history": {
+        "branch": "gsd-path/M002",
+        "candidates": [
+          {
+            "base": "3a8c696d5e7b86959c0be69b4fbb172e41698d5d",
+            "commit": "8f3739fb7f479d62307c19885b84f57f814722c0",
+            "valid": true
+          }
+        ],
+        "head": "7e75853fa0a4b5ed5c03f340a35e612e18648ff7",
+        "subject": "T004: Document the full Review read surface for tokens and amend ADR 0076 with it and with the three docs-audit corrections"
+      },
+      "landed_commit": "8f3739fb7f479d62307c19885b84f57f814722c0",
+      "reasons": [],
+      "task": {
+        "base": "3a8c696d5e7b86959c0be69b4fbb172e41698d5d",
+        "id": "T004",
+        "status": "done",
+        "task_file": ".project/tasks/T004-document-the-read-surface-and-amend-adr-0076.md"
+      }
+    }
+  ]
+}
