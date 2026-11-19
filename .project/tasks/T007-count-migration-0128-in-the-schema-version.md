@@ -3,9 +3,9 @@ id: T007
 title: Bump the backup manifest schema version to the number of migration files so a backup made by this build restores
 wave: 3
 deps: []
-status: pending
-agent: null
-base: null
+status: done
+agent: build_T007
+base: d68e4bbe4d905207d7c2215cceb76910c3e971d2
 worktree: null
 task_branch: null
 files:
@@ -74,3 +74,28 @@ Heavy: yes
 ## Log
 
 - 2026-11-19 — created by planner (patch mode, finding P001)
+- 2026-11-19 — build_T007: preflight clean at base d68e4bbe (114 `*.sql` files in `migrations/`; one `CURRENT_SCHEMA_VERSION: u32` literal under `crates/`, at `crates/utopia-cli/src/main.rs:85`; no other hand-written copy found). Implementation: changed the literal `113` to `114` on that line; comment, guard test, restore gate and `tests/restore.rs` untouched.
+- 2026-11-19 — build_T007: Verify ran as one piece in Git Bash from `D:\utopia`, text as written, preceded by `export PATH="/c/Users/Owner/.gsd-path/tools/pg16/pgsql/bin:$PATH"` and followed by `; echo "VERIFY_EXIT=$?"`; the guard hook did not refuse it. Result: pass, exit 0. Database `m001_t007` created and migrated; `cargo test -p utopia-cli --bin utopia` 15 passed, 0 failed (`schema_version_policy_compares_against_current ... ok`); `cargo test -p utopia-cli --test restore` 13 passed, 0 failed (`real_postgres_backup_and_restore_require_force_and_preserve_files_on_sql_failure ... ok`); no "is newer than this binary's" in the output.
+- 2026-11-19 — orchestrator Verify (sidecar gsd-path-verify/task-t007-verify): pass, exit 0; output tail:
+  ```
+     Compiling chardetng v1.0.0
+     Compiling base64 v0.23.1
+     Compiling sha2 v0.11.0
+     Compiling utopia-reason v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t007-verify\crates\utopia-reason)
+     Compiling cron v0.12.1
+     Compiling strum v0.27.2
+     Compiling pdf-extract v0.12.0
+     Compiling utopia-ingest v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t007-verify\crates\utopia-ingest)
+     Compiling tokio-rustls v0.26.5
+     Compiling rustls-platform-verifier v0.6.2
+     Compiling hyper-rustls v0.27.9
+     Compiling reqwest v0.13.1
+     Compiling utopia-llm v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t007-verify\crates\utopia-llm)
+     Compiling utopia-extract v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t007-verify\crates\utopia-extract)
+     Compiling sqlx v0.8.6
+     Compiling pgvector v0.4.2
+     Compiling utopia-core v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t007-verify\crates\utopia-core)
+     Compiling utopia-store v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t007-verify\crates\utopia-store)
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 18s
+       Running `C:/Users/Owner/.gsd-path/cargo-target/finish-T007\debug\examples\migrate.exe`
+  ```
