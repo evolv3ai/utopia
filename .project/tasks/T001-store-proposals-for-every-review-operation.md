@@ -3,9 +3,9 @@ id: T001
 title: Let the ledger hold a proposal or an applied row for every Review operation
 wave: 1
 deps: []
-status: pending
-agent: null
-base: null
+status: done
+agent: build_T001
+base: ffc917e09abd27267fabfabebb6d8901838e60a0
 worktree: null
 task_branch: null
 files:
@@ -66,3 +66,36 @@ Heavy: yes
 ## Log
 
 - 2026-11-20 — created by planner
+- 2026-11-20 — coder build_T001: preflight clean (every path in Context, Approach and the Interface contract exists at base `ffc917e` or is declared in `files`; `## Intent coverage` owns no SC; the T001 contract paragraphs are present in the sibling task files; the Verify paths exist or are declared).
+- 2026-11-20 — coder build_T001: implemented. `crates/utopia-store/src/token_agent_actions.rs`: `Proposal`, `propose` (calls the unchanged private `land_proposal` with outcome `proposed`, reason `propose_only`), `record_applied` (caller's connection, no audit row), `token_audit_detail`, `open_proposals_for`; `history_row` adds `target_label`, `action` and `queued` only when they have a value; the one existing `AgentProposalView` literal sets `action: None`. New `crates/utopia-store/src/review_targets.rs`: `TargetState`, `target_state`, `fingerprint`, `target_label`, `ontology_proposal_id`, read-only and scoped by base. `crates/utopia-store/src/lib.rs`: `pub mod review_targets`. `crates/utopia-core/src/models.rs`: `AgentProposalView.action` and `ReviewCounts.agent_token_proposals`, both skipped when unset or zero. `crates/utopia-store/src/review.rs`: the count of open token proposals (outcome `held` or `proposed`, state null). New test file `crates/utopia-store/tests/a_token_proposal_waits_for_a_person.rs` with the six tests the Verify names. No migration, no dependency, no `AgentOperation` or `AppError` variant, no M003 function changed.
+- 2026-11-20 — coder build_T001: readings taken where the contract leaves a detail open (none changes a signature). (1) `ontology.proposal`: a proposal that is open but not proposed by the ontology agent is `Missing` (the adopt path reads only agent-proposed rows); a non-open one is `Decided`. (2) `violation.decide`: "the fact the request names" is, for `fact_retracted`, `reasoning::pick_retraction(left, right, path, request.fact_id)` (so a single-fact violation needs no `fact_id`), and for `fact_closed` the violation's left fact, as the person's handler closes; a request that names no usable fact reads `Open` and is left to body validation. (3) "has an end" is `valid_to IS NOT NULL`, the person's close route's own check. (4) Fingerprint shapes: conflict `{"old_fact_id", "new_fact_id"}`; ontology proposal the stored `payload`. (5) `alignment.kind_word`, `consistency.check`, `inference.run` (no proposal): `Open` when `target_id` is the base id, else `Missing`. (6) An unknown operation string is an `AppError::Other`, not a guessed state. (7) `target_label` returns `NotFound` for a target outside the base; for `alignment.kind_word` it reads the word from `request["kind_word"]` (the word is in the route path, not in the request struct) and falls back to `kind word`. (8) `token_audit_detail` adds exactly `token_id`, `token_name`, `action_id` (no `batch_id`); `propose`'s audit detail carries `batch_id` too when the `TokenWrite` has one, as `land_proposal` does. (9) `agent_token_proposals` counts every open token proposal of the base, M003 `held` merge proposals included.
+- 2026-11-20 — coder build_T001: commands run in the primary worktree with `CARGO_TARGET_DIR=C:/Users/Owner/.gsd-path/cargo-target/coder-m004`, own databases `m004_t001_dev_store` and `m004_t001_dev` (created, migrated with `cargo run -p utopia-store --example migrate`, both "数据库迁移完成"), `UTOPIA_TEST_REQUIRE_DB=1`:
+  - `cargo test -p utopia-store --test a_token_proposal_waits_for_a_person` → first run 5 passed, 1 failed (a test-ordering mistake in `a_target_state_is_read_from_typed_rows_for_every_operation`: it checked targets after later steps had decided them); fixed in the test; final run `test result: ok. 6 passed; 0 failed`, all six named tests `... ok`.
+  - `cargo test -p utopia-store --test a_token_merge_is_gated_recorded_and_undone --test a_token_keep_is_never_human_precedent --test a_second_migration_run_changes_no_schema` → `ok. 10 passed`, `ok. 8 passed`, `ok. 1 passed`; 0 failed.
+  - `cargo check -p utopia-server --all-targets` → Finished, exit 0.
+  - `cargo test -p utopia-server -- review_totals_tests:: review_routes::attribution_tests:: review_token_reads_tests::` (on `m004_t001_dev`) → `test result: ok. 26 passed; 0 failed; 890 filtered out`.
+  - `cargo fmt --all --check` → first run reported diffs in the two new files; ran `cargo fmt --all` (only this task's files changed); check exit 0.
+  - `cargo clippy --workspace --all-targets -- -D warnings` (the CI lint) → first run one `unnecessary_lazy_evaluations` error in `history_row`; fixed; exit 0.
+  - The full Verify command itself was not run (it names the orchestrator's databases); every step of it was run as above against the coder's databases.
+- 2026-11-20 — orchestrator Verify (sidecar gsd-path-verify/task-t001-verify): pass, exit 0; output tail:
+  ```
+  test api::review_token_reads_tests::a_token_cannot_nod_and_every_review_write_outside_the_ruled_table_answers_401 ... ok
+  test api::review_totals_tests::a_session_list_response_differs_from_before_only_by_the_added_total_key ... ok
+  test api::review_token_reads_tests::a_token_paging_alignment_with_equal_timestamps_visits_each_waiting_item_exactly_once ... ok
+  test api::review_totals_tests::the_alignment_low_confidence_and_agent_totals_follow_the_list_while_counts_keep_their_values ... ok
+  test api::review_token_reads_tests::a_token_asking_for_mappings_or_an_unknown_section_is_refused_with_unknown_queue ... ok
+  test api::review_token_reads_tests::a_dead_token_gets_401_and_an_excluded_token_gets_404_on_the_api_and_403_on_the_mcp_endpoint ... ok
+  test api::review_totals_tests::alignment_items_with_one_timestamp_are_each_listed_once_across_pages ... ok
+  test api::review_totals_tests::a_token_reading_duplicates_receives_the_same_total_as_a_session ... ok
+  test api::review_totals_tests::an_empty_queue_has_total_0_and_an_offset_past_the_end_returns_no_items_with_the_true_total ... ok
+  test api::review_routes::attribution_tests::agent_history_merges_ledger_rows_by_action_time_and_keeps_governor_order ... ok
+  test api::review_totals_tests::the_seed_puts_items_in_every_one_of_the_thirteen_sections ... ok
+  test api::review_token_reads_tests::a_read_token_of_a_viewer_lists_each_of_the_thirteen_sections_as_a_session_editor_sees_them ... ok
+  test api::review_totals_tests::the_total_of_every_list_queue_is_the_number_of_rows_its_pages_return ... ok
+  test api::review_token_reads_tests::a_token_receives_each_sections_items_in_the_session_order ... ok
+  test api::review_token_reads_tests::a_tokens_total_counts_the_listed_rows_and_counts_keep_their_values ... ok
+  test api::review_token_reads_tests::a_token_whose_kb_ids_exclude_the_base_gets_404_on_every_review_read ... ok
+  test api::review_token_reads_tests::a_token_page_size_is_clamped_and_an_offset_at_or_past_the_total_returns_no_items ... ok
+  
+  test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 890 filtered out; finished in 14.86s
+  ```

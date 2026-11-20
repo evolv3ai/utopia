@@ -1090,12 +1090,17 @@ pub struct ReviewItem {
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentProposalView {
     pub id: Uuid,
-    /// review.merge | merge.manual | merge.revert
+    /// 台账的操作名：review.merge | merge.manual | merge.revert，以及 Review 其余各档的
+    /// 操作（fact.confirm、conflict.resolve、defect.decide……）
     pub operation: String,
     pub reason: Option<String>,
     pub owner_name: Option<String>,
     pub token_name: String,
     pub created_at: DateTime<Utc>,
+    /// 提议要做的那个动作（payload 里的 `action`：confirm、reject、close……）。合并与撤回的
+    /// 提议没有这一项，**没有就不出这个键**——它们的形状与从前一个键不差
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
 }
 
 /// 一次合并是哪枚令牌做的（0076）：台账上那一行落地的合并。合并日志的 `merged_by_name`
@@ -1631,6 +1636,14 @@ pub struct ReviewCounts {
     pub agent_running: bool,
     /// 等 agent 看的对：等人的重复对里还没有建议的
     pub agent_queue: i64,
+    /// 令牌 agent 留下、还等着人答的提议（0076）。Agent 一档的徽标把它加在 `agent` 旁边。
+    /// **零的时候不出这个键**：没有令牌提议的库，这份计数与从前一个键不差
+    #[serde(skip_serializing_if = "is_zero")]
+    pub agent_token_proposals: i64,
+}
+
+fn is_zero(n: &i64) -> bool {
+    *n == 0
 }
 
 /// agent 的一笔（0025）：看了哪一对、想怎么办、凭什么、人怎么答的。
