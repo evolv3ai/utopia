@@ -155,7 +155,13 @@ pub async fn precedents_for(
 }
 
 /// 这个库对这种类型对的习惯：人合了多少、分了多少、合了又撤回多少。
-/// 令牌裁的一对（`decided_token` 不为空）不是人的习惯，不数
+/// 令牌裁的一对（`decided_token` 不为空）不是人的习惯，不数。
+///
+/// **令牌 agent 合的、又由令牌撤回的那一次合并，不算撤回**（0076）：从头到尾没有人
+/// 表过态，把它数进来就是令牌的动作在抬治理 agent 的线。认法照台账：合并是令牌 agent
+/// 做的 = 有一行 `review.merge` / `merge.manual`、`applied`、`merge_id` 指着它；是令牌
+/// 撤的 = 有一行 `merge.revert`、`applied`、`merge_id` 指着它。人撤回令牌的合并照旧数——
+/// 那是人说「这一类合错了」
 async fn type_pair_stats(
     pool: &PgPool,
     kb_id: Uuid,
@@ -181,7 +187,16 @@ async fn type_pair_stats(
          JOIN entities s ON s.id = m.source_id
          JOIN entities t ON t.id = m.target_id
          WHERE m.kb_id = $1 AND m.reverted_at IS NOT NULL
-           AND ((s.type_id = $2 AND t.type_id = $3) OR (s.type_id = $3 AND t.type_id = $2))",
+           AND ((s.type_id = $2 AND t.type_id = $3) OR (s.type_id = $3 AND t.type_id = $2))
+           AND NOT (
+               EXISTS (SELECT 1 FROM token_agent_actions made
+                        WHERE made.kb_id = m.kb_id AND made.merge_id = m.id
+                          AND made.outcome = 'applied'
+                          AND made.operation IN ('review.merge', 'merge.manual'))
+               AND EXISTS (SELECT 1 FROM token_agent_actions undone
+                            WHERE undone.kb_id = m.kb_id AND undone.merge_id = m.id
+                              AND undone.outcome = 'applied'
+                              AND undone.operation = 'merge.revert'))",
     )
     .bind(kb_id)
     .bind(ta)

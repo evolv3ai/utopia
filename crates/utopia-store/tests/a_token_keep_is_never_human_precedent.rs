@@ -337,23 +337,28 @@ async fn replaying_migration_0128_changes_nothing() -> anyhow::Result<()> {
     let _serial = SERIAL.lock().await;
     let pool = PgPool::connect(&url).await?;
 
-    // 库是迁移过的（`test_db` 的约定）：0128 建的表与列已经在，形状就是约定的那样
-    assert_eq!(
-        columns(&pool, "token_agent_actions").await?,
-        [
-            "id uuid NOT NULL",
-            "kb_id uuid NOT NULL",
-            "operation text NOT NULL",
-            "target_kind text NOT NULL",
-            "target_id uuid NOT NULL",
-            "owner_id uuid NOT NULL",
-            "token_id uuid NOT NULL",
-            "token_name text NOT NULL",
-            "outcome text NOT NULL",
-            "payload jsonb NOT NULL",
-            "created_at timestamp with time zone NOT NULL",
-        ]
-    );
+    // 库是迁移过的（`test_db` 的约定）：0128 建的表与列已经在，形状就是约定的那样。
+    // 后来的迁移（0129 起）会给这张台账加列，所以这里问的是「0128 建的每一列都在」，
+    // 不是「只有这些列」
+    let ledger = columns(&pool, "token_agent_actions").await?;
+    for column in [
+        "id uuid NOT NULL",
+        "kb_id uuid NOT NULL",
+        "operation text NOT NULL",
+        "target_kind text NOT NULL",
+        "target_id uuid NOT NULL",
+        "owner_id uuid NOT NULL",
+        "token_id uuid NOT NULL",
+        "token_name text NOT NULL",
+        "outcome text NOT NULL",
+        "payload jsonb NOT NULL",
+        "created_at timestamp with time zone NOT NULL",
+    ] {
+        assert!(
+            ledger.contains(&column.to_string()),
+            "token_agent_actions lacks the 0128 column `{column}`: {ledger:#?}"
+        );
+    }
     assert!(
         columns(&pool, "resolution_reviews")
             .await?

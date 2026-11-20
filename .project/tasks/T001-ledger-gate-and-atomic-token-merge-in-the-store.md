@@ -3,9 +3,9 @@ id: T001
 title: Burn down the store risks: ledger columns by migration 0129, the token merge gate with six holds, a token merge and revert atomic with their ledger and audit rows, and the precedent rule
 wave: 1
 deps: []
-status: pending
-agent: null
-base: null
+status: done
+agent: build_T001
+base: a09261beb61a29ea8fb9f1d59f6416af523dda36
 worktree: null
 task_branch: null
 files:
@@ -81,3 +81,26 @@ Heavy: yes
 - 2026-11-19 — failure window of the token revert. `resolution::revert_merge` owns its transaction, so the revert and its ledger and audit rows are not one transaction (holding a second transaction open while it takes another connection is the pool-starvation pattern). Order: token name read first; revert commits; then one transaction writes the ledger row and the `merge.revert` audit row under an advisory lock, retried 3 times, then surfaced as an error saying the merge was reverted but its rows were not written. If the process dies between the two: the merge is reverted, its applied merge row reads `undone`, there is no `merge.revert` ledger or audit row, `type_pair_stats` counts it as a revert (the governor's bar only rises), and a repeated token revert answers `already_decided`.
 - 2026-11-19 — commands and results (cargo target `C:/Users/Owner/.gsd-path/cargo-target/coder-m003`). Verify on fresh `m003_t001_store`: migrate ok; `cargo test -p utopia-cli` 15 + 13 passed, 0 failed; `cargo check -p utopia-server --all-targets` finished clean; `--test a_token_merge_is_gated_recorded_and_undone` 9 passed, 1 failed (the E12 test above) — the Verify does not pass; `--test a_token_keep_is_never_human_precedent` 8 passed, `--test a_second_migration_run_changes_no_schema` 1 passed; the six named `--test store` tests each `... ok`. Whole `UTOPIA_TEST_REQUIRE_DB=1 cargo test -p utopia-store --no-fail-fast` on fresh `m003_t001_whole_store`: 526 passed, 1 failed (the same E12 test), 4 ignored. Whole `cargo test -p utopia-server --no-fail-fast` on fresh `m003_t001_whole_server`: 878 passed, 0 failed, 2 ignored. `cargo fmt --all --check` clean. `cargo clippy -p utopia-store -p utopia-cli -p utopia-server --all-targets`: no warnings. No guard refusal. Databases created: `m003_t001_scratch`, `m003_t001_store`, `m003_t001_whole_store`, `m003_t001_whole_server` (left in place).
 - 2026-11-19 — orchestrator: coder returned `blocked` on E12 (see NEEDS-ORCHESTRATOR above). Ruling Delegated (driver D116): the edge is corrected through the build recovery contract (define corrections, then plan repair); `resolution::revert_merge` stays unchanged. The coder's uncommitted work is held in a Git stash (`T001 coder work held during build recovery`) and is restored when the task is dispatched again. Task returned to `pending` with null dispatch metadata.
+- 2026-11-19 — coder (`build_T001`), second dispatch on base `a09261b`, E12 as corrected by INTENT C1. Changed only the test file `a_token_merge_is_gated_recorded_and_undone.rs`: new helper `assert_restored` — `facts`, `entities` without `updated_at` and `fact_evidence` compared for equality; for `typed_fact_sources` no prior row may be missing and the added rows must be exactly one, the link (earlier-recorded typed fact, the deduplicated duplicate's statement) that the seed names in `Rich::copied_link`; it fails on any other added row, on a missing prior row, and when the link is absent. Used after the revert and after the second revert, for the queue merge and the manual merge; the seed is unchanged (both sides hold the same typed fact, each with its own statement link). The rest of the test (revert row, `undone` read not stored, audit row, second revert `already_decided`) is now reached and passes. No non-test code touched; `resolution::revert_merge` unchanged. Assumption 4 holds under the corrected edge. Results: Verify on fresh `m003_t001_store` — migrate ok; `cargo test -p utopia-cli` 15 + 13 passed; `cargo check -p utopia-server --all-targets` clean; the ten named tests 10 passed, 0 failed; `a_token_keep_is_never_human_precedent` 8 passed; `a_second_migration_run_changes_no_schema` 1 passed; the six named `--test store` tests counted 6 `... ok`. After that run one assertion message string was tidied (no logic change); the whole-crate run below covers the final file. Whole `UTOPIA_TEST_REQUIRE_DB=1 cargo test -p utopia-store --no-fail-fast` on fresh `m003_t001_whole_store`: 527 passed, 0 failed, 4 ignored. Server crate not rerun (no non-test change since 878 passed, 0 failed). `cargo fmt --all --check` clean; `cargo clippy -p utopia-store -p utopia-cli -p utopia-server --all-targets` no warnings. No guard refusal.
+- 2026-11-20 — orchestrator Verify (sidecar gsd-path-verify/task-t001-verify): pass, exit 0; output tail:
+  ```
+  test a_second_keep_of_a_decided_pair_answers_already_decided ... ok
+  test a_token_keep_writes_the_review_row_the_ledger_row_and_the_audit_row_together ... ok
+  test replaying_migration_0128_changes_nothing ... ok
+  
+  test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.58s
+  
+     Compiling utopia-store v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t001-verify\crates\utopia-store)
+      Finished `test` profile [unoptimized + debuginfo] target(s) in 18.47s
+       Running tests\store\main.rs (C:/Users/Owner/.gsd-path/cargo-target/finish-m003-T001\debug\deps\store-97773e81a9073f97.exe)
+  
+  running 6 tests
+  test a_name_is_a_fact::merging_moves_names_and_reverting_brings_them_back ... ok
+  test merge_direction_counts_live_facts_in_each_base::merge_direction_counts_live_facts_in_each_base ... ok
+  test history_shows_the_merge_itself::history_carries_the_merge_and_its_direction ... ok
+  test a_timeline_holds_whatever_the_order::a_revert_restores_both_timelines_a_merge_rewrote ... ok
+  test an_automatic_merge_is_gated_by_what_it_can_undo::a_merge_that_would_leave_the_graph_is_held ... ok
+  test a_signature_holds_on_every_path::a_merge_that_breaks_the_signature_is_recorded ... ok
+  
+  test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 355 filtered out; finished in 0.89s
+  ```
