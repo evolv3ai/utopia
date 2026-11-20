@@ -1,10 +1,11 @@
 //! Review 的 MCP 工具（0076 决定 2）：`review_list`、`review_item`、`review_keep`、
-//! `review_merge`。
+//! `review_merge`、`review_revert`。
 //!
 //! 两个读工具管 Review 的十三档：`review_list` 读一档的一页（十一个列表档、总览、决策台账），
 //! `review_item` 读某一档里列着的一条，违规一档的条目带上它的证明。写的有两样：
 //! `review_keep` 把一对分开；`review_merge` 合并队列里的一对或手动指定的两个实体，
-//! 先过服务端的闸门，被留下的不落地、只留一条等人答的提议。**没有哪个工具能答提议。**
+//! 先过服务端的闸门，被留下的不落地、只留一条等人答的提议；`review_revert` 撤回一次
+//! 合并——令牌 agent 做的直接撤，人或治理 agent 做的只留提议。**没有哪个工具能答提议。**
 //!
 //! **这里只做两件事：把参数递给 `review_ops`，把它的回答变成工具结果。** 授权、裁定表、
 //! 台账、审计都在 `review_ops` 里面，REST 的令牌分支调的是同一批函数——所以同一枚令牌
@@ -31,15 +32,16 @@ const LIST: &str = "review_list";
 const ITEM: &str = "review_item";
 const KEEP: &str = "review_keep";
 const MERGE: &str = "review_merge";
+const REVERT: &str = "review_revert";
 
 /// 这个名字归不归这里管。归这里的，`mcp.rs` 不再拿它去问 `is_exposed`
 pub(super) fn serves(name: &str) -> bool {
-    matches!(name, LIST | ITEM | KEEP | MERGE)
+    matches!(name, LIST | ITEM | KEEP | MERGE | REVERT)
 }
 
 /// 写工具：只列给写得了的调用方，标注里 `readOnlyHint` 是 false
 fn writes(name: &str) -> bool {
-    matches!(name, KEEP | MERGE)
+    matches!(name, KEEP | MERGE | REVERT)
 }
 
 /// 工具定义，OpenAI 的形状——`chat::check_call` 认的就是这个形状，参数守卫与别的工具
@@ -55,6 +57,10 @@ fn writes(name: &str) -> bool {
 /// `review_merge` **没有必填参数**：要么给 `id`（队列里的一对），要么给 `source` 与
 /// `target`（两个实体）。两种给法是哪一种、给全了没有，由 [`call`] 看——`required`
 /// 表达不了「二选一」
+///
+/// `review_revert` 的说明**不许把撤回说成完全复原**（0076）：它只把图放回去，合并还在时
+/// 推出的派生、记下的违规、导出的东西、答出去的话都不收回；没有类型的存活方留着拿到的
+/// 类型，存活的事实留着抄给它的陈述来源。这三句写在说明里，对面的 agent 读得到
 fn definitions() -> Value {
     json!([
         {
@@ -226,6 +232,46 @@ fn definitions() -> Value {
                     }
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": REVERT,
+                "description": "Revert one merge, named by its merge_id (from the result of \
+                    review_merge, or from review_list with section \"merges\"). A merge that a \
+                    token agent made on this knowledge base, through this token or another, is \
+                    reverted at once and recorded under the token's owner and the token's \
+                    name; the result is {ok, outcome: \"applied\", action_id, merge_id}. A \
+                    merge that a person or the governor made is not reverted by a token: \
+                    nothing is changed, the call waits as a proposal that only a signed-in \
+                    person can answer in the Review tab, and the result is {ok, outcome: \
+                    \"proposed\", action_id, reason, explanation} with reason merge_by_person, \
+                    merge_by_governor or breaker. Repeating such a call returns the same \
+                    proposal with code already_proposed. No tool answers a proposal. A revert \
+                    restores graph state only and does not recall derivations, violations, \
+                    exports or answers drawn while the merge was live. Two differences from \
+                    the state before the merge remain: a target that had no type before the \
+                    merge keeps the type it took, and a surviving fact keeps the statement \
+                    links the merge copied onto it. A merge that was already reverted is \
+                    refused with code already_decided; a merge id that is unknown, or of \
+                    another knowledge base, with code not_found.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "merge_id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "description": "Merge id (uuid): merge_id in the result of \
+                                review_merge, or the id of an item of the \"merges\" section."
+                        },
+                        "rationale": {
+                            "type": "string",
+                            "description": "Optional: one sentence on why the merge was wrong."
+                        }
+                    },
+                    "required": ["merge_id"]
+                }
+            }
         }
     ])
 }
@@ -236,6 +282,10 @@ fn annotations(name: &str) -> Value {
         KEEP => json!({ "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false }),
         // 合并改事实与实体：落地的那一次不是只添不改
         MERGE => json!({ "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false }),
+        // 撤回同样改事实与实体；第二次是 `already_decided`，不是同一个结果再来一遍
+        REVERT => {
+            json!({ "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false })
+        }
         _ => json!({ "readOnlyHint": true }),
     }
 }
@@ -272,7 +322,7 @@ fn bad_argument(name: &str, key: &str, expected: &str) -> ToolResult {
     ToolResult::new(
         format!(
             "{name} needs `{key}` to be {expected}, and it was not, so the call was not run. \
-             Call it again with `{key}` corrected, or leave it out."
+            Call it again with `{key}` corrected, or leave it out."
         ),
         Step::new("tool", name, format!("invalid {key}"))
             .invalid(key)
@@ -463,8 +513,8 @@ pub(super) async fn call(
                     return ToolResult::new(
                         format!(
                             "{name} needs either `id` (a pending duplicate pair) or both \
-                             `source` and `target` (two entity ids), and not both forms, so \
-                             the call was not run. Call it again with one of the two."
+                            `source` and `target` (two entity ids), and not both forms, so \
+                            the call was not run. Call it again with one of the two."
                         ),
                         Step::new("tool", name, "invalid arguments")
                             .invalid("id")
@@ -473,6 +523,21 @@ pub(super) async fn call(
                     .error()
                 }
             }
+        }
+        REVERT => {
+            // `format: uuid` 由守卫挡过；这里再解析一次，解析不了同样不执行
+            let Some(merge_id) = args["merge_id"]
+                .as_str()
+                .and_then(|s| s.trim().parse::<Uuid>().ok())
+            else {
+                return bad_argument(name, "merge_id", "a uuid returned by another review tool");
+            };
+            let rationale = match optional_string(name, &args, "rationale") {
+                Ok(v) => v,
+                Err(refused) => return refused,
+            };
+            // 与 REST 的撤回路由同一个操作：直接撤还是只留提议，由它里面的规则说
+            review_ops::revert_merge(state, caller, merge_id, rationale, None).await
         }
         // `serves` 之外的名字到不了这里；到了也只说没有这个工具，不去碰库
         _ => {

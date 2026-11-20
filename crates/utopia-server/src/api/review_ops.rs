@@ -9,9 +9,10 @@
 //!
 //! 读的一侧整个开给令牌：十一个列表档、总览、决策台账，以及违规与派生事实的两条证明。
 //! 每一档里列着的一条也能单独取（[`item`]），取到的就是列表里那个对象。
-//! 写的一侧开了两样：「把一对重复项分开」（[`keep`]），和过了服务端闸门的合并——
-//! 队列里的一对（[`merge_pair`]）与手动指定源和目标（[`merge_entities`]）。闸门留下的
-//! 合并什么都不改，只留一条等人答的提议。别的裁决、撤销、批量都还关着——
+//! 写的一侧开了三样：「把一对重复项分开」（[`keep`]）；过了服务端闸门的合并——
+//! 队列里的一对（[`merge_pair`]）与手动指定源和目标（[`merge_entities`]），闸门留下的
+//! 合并什么都不改，只留一条等人答的提议；撤回一次合并（[`revert_merge`]）——令牌 agent
+//! 做的合并直接撤，人或治理 agent 做的只留提议。别的裁决、批量都还关着——
 //! 读得到「等你点头」不等于能替人点头。
 
 use serde_json::json;
@@ -366,6 +367,14 @@ fn explanation(action: &TokenAgentAction) -> String {
         "breaker" => {
             "this token only proposes merges and reverts on this knowledge base for now".to_string()
         }
+        // 撤回的两种「只能提议」不是闸门说的，是「这次合并是谁做的」说的
+        "merge_by_person" => {
+            "a person made this merge, and a token does not revert a person's merge".to_string()
+        }
+        "merge_by_governor" => {
+            "the governor made this merge, and a token does not revert the governor's merge"
+                .to_string()
+        }
         _ => match hold_said(action) {
             Some(hold) if hold.code() == reason => hold.explain(),
             _ => format!("the server gate held this call ({reason})"),
@@ -377,8 +386,9 @@ fn explanation(action: &TokenAgentAction) -> String {
     )
 }
 
-/// 一次令牌合并的回答（0076）。落地：`merge_id`，提交之后的某一步失败了再带
-/// `follow_up_error`——合并已经在了，所以仍是 200 与 `applied`，不报成失败。
+/// 一次令牌合并或撤回的回答（0076）。落地：`merge_id`（合并：做出的那一次；撤回：撤掉的
+/// 那一次），提交之后的某一步失败了再带 `follow_up_error`——合并（撤回）已经在了，所以
+/// 仍是 200 与 `applied`，不报成失败。
 /// 留成提议：`reason`（稳定的 code）与 `explanation`；撞上的是一条已经开着的提议时带
 /// `code: already_proposed`，`action_id` 就是那一条的
 fn merge_answer(done: &TokenWriteOutcome) -> serde_json::Value {
@@ -440,6 +450,37 @@ pub(crate) async fn merge_entities(
         &token_write(caller, rationale, None),
         source,
         target,
+    )
+    .await?;
+    state.emit_review(caller.kb_id);
+    Ok(merge_answer(&done))
+}
+
+/// 经令牌撤回一次合并（0076）。
+///
+/// 授权在这里；「直接撤还是只留提议」在 `token_agent_actions::revert_merge` 里面：台账上
+/// 是令牌 agent 做的合并（哪一枚令牌都行）直接撤，人做的、治理 agent 做的只留一条提议
+/// （`merge_by_person` / `merge_by_governor`），图不动。
+///
+/// **不调 `governance::after_revert`**：那是人撤回治理 agent 的合并时记一笔、看保险丝的
+/// 地方。令牌的撤回不动保险丝——它撤得动的只有令牌 agent 自己的合并，治理 agent 的合并
+/// 它只能提议。也不调 `resolution::revert_merge`：那是人的路，这里只经 store 的令牌入口。
+///
+/// 撤回只把图放回去：合并还在的那段时间里据它推出的派生事实、记下的违规、导出去的
+/// 东西、答出去的话，都不收回；合并前没有类型的存活方留着它拿到的类型，存活的事实留着
+/// 合并抄给它的陈述来源（工具说明里写着同样的话）。`batch_id` 是成批调用的号，单笔为 None
+pub(crate) async fn revert_merge(
+    state: &AppState,
+    caller: &ReviewCaller,
+    merge_id: Uuid,
+    rationale: Option<&str>,
+    batch_id: Option<Uuid>,
+) -> Result<serde_json::Value, AppError> {
+    authorize_write(state, caller).await?;
+    let done = utopia_store::token_agent_actions::revert_merge(
+        &state.pool,
+        &token_write(caller, rationale, batch_id),
+        merge_id,
     )
     .await?;
     state.emit_review(caller.kb_id);

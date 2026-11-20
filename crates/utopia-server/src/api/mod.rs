@@ -711,3 +711,6 @@ mod review_mcp_reads_tests;
 
 #[cfg(test)]
 mod review_token_merge_tests;
+
+#[cfg(test)]
+mod review_token_revert_tests;

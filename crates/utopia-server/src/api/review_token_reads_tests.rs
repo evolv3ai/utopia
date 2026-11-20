@@ -1046,7 +1046,8 @@ async fn a_read_token_of_a_viewer_reads_both_proof_routes_as_a_session_does() ->
 }
 
 #[tokio::test]
-async fn a_token_cannot_nod_and_no_review_write_but_keep_answers_a_token() -> anyhow::Result<()> {
+async fn a_token_cannot_nod_and_every_review_write_outside_the_ruled_table_answers_401(
+) -> anyhow::Result<()> {
     let Some(f) = Fx::new(false).await? else {
         return Ok(());
     };
@@ -1133,10 +1134,6 @@ async fn a_token_cannot_nod_and_no_review_write_but_keep_answers_a_token() -> an
             ),
             (
                 format!("/kbs/{kb}/facts/{}/reject", Uuid::now_v7()),
-                json!({}),
-            ),
-            (
-                format!("/kbs/{kb}/merges/{}/revert", Uuid::now_v7()),
                 json!({}),
             ),
         ];

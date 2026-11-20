@@ -691,11 +691,50 @@ pub async fn reject_fact(
     Ok(Json(json!({ "ok": true })))
 }
 
+/// 令牌撤回时可以带的那一句理由。会话不读请求体
+#[derive(Deserialize, Default)]
+struct TokenRevertBody {
+    #[serde(default)]
+    rationale: Option<String>,
+}
+
+/// 撤回一次合并。写令牌也能撤（0076）：令牌走 `review_ops::revert_merge`——令牌 agent
+/// 做的合并直接撤，人或治理 agent 做的只留一条提议，不碰保险丝；它在进下面这一段之前
+/// 就离开了处理函数。会话照旧跑下面这一段。
+///
+/// 请求体按原始字节收下：会话从来不带请求体、也不读它，这里不能因为换了提取器就开始
+/// 挑它的毛病。只有令牌那一支去解析——空的就是没有理由，`{"rationale": "…"}` 是理由
 pub async fn revert_merge(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    caller: SessionOrToken,
     Path((kb_id, merge_id)): Path<(Uuid, Uuid)>,
+    body: axum::body::Bytes,
 ) -> ApiResult<Json<serde_json::Value>> {
+    let user = caller.user;
+    if let Some(token) = caller.pat {
+        let caller = ReviewCaller { user, token, kb_id };
+        let body = if body.iter().all(u8::is_ascii_whitespace) {
+            TokenRevertBody::default()
+        } else {
+            match serde_json::from_slice::<TokenRevertBody>(&body) {
+                Ok(body) => body,
+                Err(_) => {
+                    // 先说「你写不了」，再说「你写错了」：与别的令牌写入同一个次序
+                    review_ops::authorize_write(&state, &caller).await?;
+                    return Err(utopia_core::AppError::invalid(
+                        "invalid_body",
+                        "The request body must be empty or a JSON object such as \
+                          {\"rationale\": \"why\"}",
+                    )
+                    .into());
+                }
+            }
+        };
+        return Ok(Json(
+            review_ops::revert_merge(&state, &caller, merge_id, body.rationale.as_deref(), None)
+                .await?,
+        ));
+    }
     require_kb(&state, &user, kb_id, Role::Editor).await?;
     let snap: Option<(String, String)> = sqlx::query_as(
         "SELECT s.canonical_name, t.canonical_name

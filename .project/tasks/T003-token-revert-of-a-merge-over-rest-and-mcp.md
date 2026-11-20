@@ -3,9 +3,9 @@ id: T003
 title: A write token of an editor reverts a token agent's merge over the token API and MCP, and its revert of a person's or the governor's merge waits as a proposal
 wave: 2
 deps: [T002]
-status: pending
-agent: null
-base: null
+status: done
+agent: build_T003
+base: 8c5293e6323e159317e07dc7cc85501ddcea3b77
 worktree: null
 task_branch: null
 files:
@@ -68,3 +68,30 @@ Heavy: yes
 ## Log
 
 - 2026-11-19 — created by planner
+- 2026-11-19 — coder (`build_T003`), work done on base `8c5293e`. Preflight clean: every named path and symbol exists, SC5 is item 5 of INTENT.md, the five Interface contract paragraphs are identical in every sibling that carries them (the REST revert paragraph in T004 to T007, the MCP paragraph in T002, T005 and T007). `review_ops.rs`: `revert_merge(state, caller, merge_id, rationale: Option<&str>, batch_id: Option<Uuid>)`, `pub(crate) async`, `Result<serde_json::Value, AppError>`; it calls `authorize_write`, builds `TokenWrite` (`breaker: false`), calls `token_agent_actions::revert_merge`, calls `state.emit_review` and shapes the answer with the existing `merge_answer` (applied: `ok`, `outcome`, `action_id`, `merge_id`, plus `follow_up_error` only when the store reports one; proposed: `reason`, `explanation`, and `code` `already_proposed` on a repeat). It calls neither `governance::after_revert` nor `resolution::revert_merge`. `explanation` now has its own clause for `merge_by_person` and `merge_by_governor` (left by T002). `review_routes.rs`: `revert_merge` takes `SessionOrToken`; a token caller returns from `review_ops::revert_merge` before the first session statement; the session statements are unchanged in text and order. `review_tools.rs`: `review_revert` (`merge_id` required, uuid; optional `rationale`) in `serves`, `definitions`, `annotations` (`readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: false`), the write filter and `call`; its description carries the Interface contract sentence word for word. `mod.rs`: declares `review_token_revert_tests`. No store file touched.
+- 2026-11-19 — decisions. (1) The handler takes the request body as raw `Bytes`, not `Json`: a session caller sends no body today and the handler never read one, so the session branch does not start rejecting bodies. The token branch parses it: empty or whitespace is no rationale, `{"rationale": …}` is the rationale, anything unparseable is 422 with code `invalid_body` after `authorize_write` (so a read token still hears `token_read_only`). `invalid_body` is not in the Interface contract's refusal list and no test asserts it; T007 may document it or the orchestrator may ask for another answer. (2) T005 adds `batch_id` to `review_revert`; until then the schema has `required: ["merge_id"]`, which T005 must relax. (3) Tests changed as the Approach names: in `a_token_refused_on_merge_manual_merge_revert_or_batch_leaves_the_graph_equal` the revert entry left the 401 list and joined the loop that expects 403 `token_read_only` (read token) and 403 `token_owner_below_editor` (Viewer's write token), the two batch 401 entries, the graph-equal check and the empty-ledger check untouched; `a_token_cannot_nod_and_no_review_write_but_keep_answers_a_token` renamed to `a_token_cannot_nod_and_every_review_write_outside_the_ruled_table_answers_401` with only the `/merges/{id}/revert` entry removed; in `the_mcp_endpoint_offers_exactly_the_review_tools_the_ruled_table_opens` `review_revert` added to the write token's list and to the not-read-only expectation. No other test function renamed or removed; no earlier Verify names the renamed function.
+- 2026-11-19 — new tests, `review_token_revert_tests.rs` (five, on `Fx`; seeds by direct insert, store functions or the API, no model job): the five names of the Verify. The E12 test repeats the store seed that exercises the leftover link (two typed facts of one relation with their own statements and evidence, moved facts, a cross fact, different profiles), runs a queue merge reverted over REST and a manual merge reverted over MCP, requires the merge to have changed all four parts, and compares by C1: `facts`, `entities` without `updated_at` and `fact_evidence` equal; `typed_fact_sources` loses no row and gains exactly the one copied statement link; all entities of the base are typed. The E14 test also has a signed-in editor revert a token-made merge through the same route (body `{"ok": true}`, audit detail with `source` and `target` only, no ledger row) and the token then hears 409 `already_decided`. The governor's merge is seeded with `resolution::merge_entities` and no `merged_by`, as T002's tests do.
+- 2026-11-19 — reviewer observation of wave 1 (a person's revert and a token's revert of one merge at once can both run `resolution::revert_merge`): it stands. Nothing inside this task's files narrows it without changing the session branch or the store: a lock taken in `review_ops` would have to be held on one connection across the store call, which opens its own (the pool-starvation pattern `keep_duplicate_pair` documents), and the session branch would not take it. No test asserts the outcome of that race.
+- 2026-11-19 — commands and results (cargo target `C:/Users/Owner/.gsd-path/cargo-target/coder-m003`, shim and `psql` 16 first on PATH). Task Verify in full on fresh `m003_t003`, on the final files: migrate ok; the eight named tests `8 passed; 0 failed`, counted 8 `... ok`; the four modules `31 passed; 0 failed` (`review_session_unchanged_tests` unedited, passing); exit 0. Whole `UTOPIA_TEST_REQUIRE_DB=1 cargo test -p utopia-server --no-fail-fast` on fresh `m003_t003_whole_server`, final files: `893 passed; 0 failed; 2 ignored` (888 before plus the five new), so every test T002's Verify names still passes. `cargo fmt --all --check` clean. `cargo clippy -p utopia-server --all-targets`: no warnings. Databases created: `m003_t003`, `m003_t003_whole_server` (left in place). `git status --short`: the eight paths of `files` and this task file, nothing else. Guard refusals: none.
+- 2026-11-20 — orchestrator Verify (sidecar gsd-path-verify/task-t003-verify): pass, exit 0; output tail:
+  ```
+  test api::review_token_reads_tests::a_token_cannot_nod_and_every_review_write_outside_the_ruled_table_answers_401 ... ok
+  test api::review_token_reads_tests::a_token_asking_for_mappings_or_an_unknown_section_is_refused_with_unknown_queue ... ok
+  test api::review_token_reads_tests::agent_history_read_by_a_token_names_the_owner_and_the_token_of_a_keep_beside_governor_rows ... ok
+  test api::review_token_api_tests::a_token_receives_duplicates_in_the_session_order ... ok
+  test api::review_token_reads_tests::a_token_paging_alignment_with_equal_timestamps_visits_each_waiting_item_exactly_once ... ok
+  test api::review_token_reads_tests::a_read_token_of_a_viewer_lists_each_of_the_thirteen_sections_as_a_session_editor_sees_them ... ok
+  test api::review_mcp_reads_tests::review_item_refuses_mappings_and_an_unknown_section_with_unknown_queue ... ok
+  test api::review_token_reads_tests::an_empty_section_reads_as_an_empty_list_with_total_0_for_a_token_as_for_a_session ... ok
+  test api::review_token_reads_tests::agent_history_without_a_token_action_reads_governor_rows_only_and_a_ledger_row_keeps_its_stored_token_name ... ok
+  test api::review_token_reads_tests::a_token_receives_each_sections_items_in_the_session_order ... ok
+  test api::review_mcp_reads_tests::review_list_returns_what_the_token_api_returns_for_each_of_the_thirteen_sections ... ok
+  test api::review_mcp_reads_tests::review_item_returns_the_listed_items_own_fields_for_one_item_of_each_section ... ok
+  test api::review_token_reads_tests::a_tokens_total_counts_the_listed_rows_and_counts_keep_their_values ... ok
+  test api::review_token_reads_tests::a_token_whose_kb_ids_exclude_the_base_gets_404_on_every_review_read ... ok
+  test api::review_mcp_reads_tests::review_list_pages_decisions_by_page_and_per_and_the_queue_sections_by_limit_and_offset ... ok
+  test api::review_mcp_reads_tests::review_item_answers_one_not_found_for_an_unknown_id_another_bases_id_and_an_item_no_longer_waiting ... ok
+  test api::review_token_reads_tests::a_token_page_size_is_clamped_and_an_offset_at_or_past_the_total_returns_no_items ... ok
+  
+  test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 864 filtered out; finished in 16.23s
+  ```
