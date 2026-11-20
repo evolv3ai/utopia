@@ -22,7 +22,14 @@ role unchanged as the ceiling; any token lists a workspace's bases; a token limi
 creates no base. These routes, document content, eight graph reads (entity search, detail,
 history, fact evidence, overview, neighbourhood, ontology, a class's instances; Viewer suffices,
 `kb_ids` answers 404), a document's extractions, the base's export (its `kb.exported` row
-names the token) and chunk search take `SessionOrToken`; apart from MCP, every other route is session-only [0014 d6, d7]. `ingest_token` on a source is a different kind: plaintext, push-only [0014].
+names the token) and chunk search take `SessionOrToken`. So do the Review routes ADR 0076 opened
+to tokens, each under its ruling in that record's authority table: the Review reads, the open
+ontology proposals and the mappings; keep, merge, revert and batch on duplicate pairs; the mapping
+decision and the consistency and inference runs, which finalize; and every other Review decision,
+which a token only proposes, plus two token-only propose routes for the nod and the governor's
+answer. `web/src/docs/mcp.md` lists each route, its ruling and its refusal codes [0076]. Apart from
+MCP and those routes, the remaining routes are session-only, among them the nod, the governor's own
+decision route, both proposal answer routes and Activity [0014 d6, d7; 0076]. `ingest_token` on a source is a different kind: plaintext, push-only [0014].
 
 **A client reads a pushed document back by its `external_id`.**
 `GET /kbs/{id}/sources/{sid}/documents/by-external-id?external_id=…` finds an `api` or `statements`

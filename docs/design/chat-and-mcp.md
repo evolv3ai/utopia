@@ -88,8 +88,14 @@ lose; the prefix compares against the key `pushed_key` builds (#1271).
 in `pending_facts`; the assistant says the sentence is recorded and its statements will be shown
 for confirmation; the card grows into the conversation on the SSE `pending` event, showing the
 sentence above the statements with phrase, time words and qualifiers; a nod writes an open
-statement through the extraction path [0015, #735]. Over MCP an external agent can therefore only
-propose [0015 d6].
+statement through the extraction path [0015, #735]. Through `remember` over MCP an external agent
+therefore only proposes statements; the nod stays a person's [0015 d6].
+
+**Review over MCP.** The Review tools live in `crates/utopia-server/src/api/review_tools.rs` and are
+served over MCP only, not in chat: four reads and sixteen writes, each under its ruling in ADR
+0076's authority table (four on duplicate pairs and merges, nine that only propose and change
+nothing until a signed-in editor approves them, three that finalize). They are described, with
+every argument, answer and refusal code, in the MCP documentation, `web/src/docs/mcp.md` [0076].
 
 **MCP.** Streamable HTTP at `POST /api/v1/kbs/{kb_id}/mcp`, JSON responses, a personal token per
 person with scope read or write and a base list, every call re-authenticated and audited [0014].

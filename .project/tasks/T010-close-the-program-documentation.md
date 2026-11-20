@@ -3,9 +3,9 @@ id: T010
 title: Make ADR 0076 and the API and MCP documentation match every opened Review route and tool
 wave: 5
 deps: [T009]
-status: pending
-agent: null
-base: null
+status: done
+agent: build_T010
+base: 94cf203759b3c81ea1435c93328ca4aa526b7dce
 worktree: null
 task_branch: null
 files:
@@ -74,3 +74,34 @@ Heavy: yes
 ## Log
 
 - 2026-11-20 — created by planner
+- 2026-11-20 — coder (build_T010). Changes, each checked against landed code (api/mod.rs routes, review_ops, review_tools.rs, mcp.rs, review_routes.rs, mapping_routes.rs, store history_row, Review.tsx):
+  - `web/src/docs/mcp.md`: intro and Review-over-MCP counts now twenty tools (4 reads, 16 writes: 4 duplicate/merge, 9 propose only, 3 finalize); 14 tool rows in the tools table and in the Review-over-MCP table with arguments, callers and answers; `counts.agent_token_proposals`; Agent History operations, `target_label`, `action`, `queued`; `agent_proposals` item key; who may call (no "four write tools"); `mcp.tool_called` on every call; errors table extended with every new code; annotations; token API intro with the three rulings, route table of 7 reads and 22 writes each with its ruling; new sections "Propose-only operations" (per-route operation, action codes, refusals, target key, not counted), "The two token-only routes" (`token_required`, `invalid_body`), "Finalized operations" (mapping, runs, kind word, limit, known limits); Proposals: answer body `job_id`/`queued`/`fact_id`, approval as the person, `ontology_proposal.rejected`, superseded rules, refusal keeps proposal open, no sweep; limit and breaker scope; refusal codes table; "What stays closed" rewritten (answer routes, nod route, GET review/pending, governor route, Activity).
+  - ADR 0076: status line `open:` part updated (dated clause for the remaining Review writes); item 39 — `## Numbers` names 0129 beside 0128, citing the 2026-11-20 revision; item 40 — last open question reworded in place to the store and HTTP precedent tests and "no full govern round with a model was run after a token write", citing the revision; new list-form "Revision 2026-11-20 (the remaining Review writes, no migration)" under `## Status history` (old `open:` quoted, propose-only rows, answering, no-migration target key, typed stale-target read, two token entries and `token_required`, finalized rows, 14 MCP tools incl. `review_pending_fact`/`review_governor`, corrected MCP refusal reading, known limits). Authority table untouched: 12/3/4 rows.
+  - item 41 — `docs/design/access-and-audit.md`: "every other route is session-only" replaced by the 0076 token Review routes and their rulings, naming `web/src/docs/mcp.md`, and the remaining session-only routes.
+  - item 42 — `docs/design/chat-and-mcp.md`: "can therefore only propose" scoped to `remember`; new "Review over MCP" paragraph naming `crates/utopia-server/src/api/review_tools.rs`, served over MCP only, described in `web/src/docs/mcp.md`.
+  - Correction to brief wording (N11): approve/decline buttons are in the Agent History section (single and bulk, Review.tsx `answerAgentProposal(s)`); item cards show `AgentProposalChips` only. Documented that way.
+  - Known limits stated only where confirmed in code: run_check ledger/audit after the run; kind-word audit best effort after commit; refused approval leaves proposal open, no sweep; `mcp.tool_called` on every Review MCP call incl. refused.
+  - Checks: Verify greps and absence checks (run as an equivalent Python check; the guard refuses running the Verify line from a script file) — all present/absent as required, table counts 12/3/4; DB `m004_t010_dev` dropped/created; `cargo run -p utopia-store --example migrate` — completed; `UTOPIA_TEST_REQUIRE_DB=1 cargo test -p utopia-server -- every_corpus_md_file_is_indexed` — 1 passed (`... ok` once); `pnpm install --frozen-lockfile` — done; `pnpm test` — 56 files, 417 passed; `pnpm build` — built.
+  - Unconfirmed claims: none recorded.
+- 2026-11-20 — orchestrator Verify (sidecar gsd-path-verify/task-t010-verify): pass, exit 0; output tail:
+  ```
+     Compiling argon2 v0.5.3
+     Compiling tracing-subscriber v0.3.23
+     Compiling jsonwebtoken v10.4.0
+     Compiling wiremock v0.6.5
+     Compiling oxrdfio v0.2.5
+     Compiling sqlparser v0.62.0
+     Compiling axum-extra v0.10.3
+     Compiling object_store v0.14.1
+     Compiling tantivy-jieba v0.20.0
+     Compiling utopia-search v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t010-verify\crates\utopia-search)
+     Compiling rig-agent v0.42.0
+     Compiling utopia-server v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t010-verify\crates\utopia-server)
+      Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 13s
+       Running unittests src\main.rs (C:/Users/Owner/.gsd-path/cargo-target/finish-m004-T010\debug\deps\utopia_server-0a73fc6c26d41d5f.exe)
+  
+  running 1 test
+  test docs_corpus::tests::every_corpus_md_file_is_indexed ... ok
+  
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 976 filtered out; finished in 0.03s
+  ```
