@@ -20,7 +20,9 @@
 //! 违规的裁决（[`propose_violation`]）、勘误的回答（[`propose_errata`]）、对齐一档的短语
 //! 与规则（[`propose_alignment_phrase`]、[`propose_alignment_rule`]）也是；本体提案不在
 //! Review 的列表里，它的读（[`ontology_proposals`]）与拒绝、采纳的提议（[`propose_ontology`]）
-//! 走的是它自己的那几条路由。
+//! 走的是它自己的那几条路由。等点头的事实（[`propose_pending`]）与治理 agent 的一笔
+//! （[`propose_governor`]）也只留提议，而且不从人的路由进：令牌走它自己的两条 `…/propose`
+//! 路由，人的点头与回答治理的路由照旧只收会话。
 //! 裁定表里「直接落地」的另外三行也在这里：语义层映射的读（[`mappings`]）与决定
 //! （[`decide_mapping`]）、一致性检查与物化推导（[`run_check`]）——都过限速、落地时留一行
 //! `applied`；类别词的决定（[`decide_kind_word`]）从前就直接落地，补上了台账行，不限速。
@@ -1110,6 +1112,136 @@ pub(crate) async fn propose_alignment_rule(
         request,
         Some(if approve { "approve" } else { "reject" }),
         None,
+    )
+    .await
+}
+
+// ───────────────────── 令牌自己的两个入口：等点头的事实、治理的一笔（0076） ─────────────────────
+//
+// 这两种提议**不从人的路由进**。替一条等点头的事实点头是宪章否决的（令牌不许经任何一条
+// 路径确认或否决它），治理的那条回答路由又是「以人的身份合并、分开、撤回一对」的第二条
+// 路——所以人的三条路由（点头、按句取、答治理）照旧只收会话，令牌走它自己的两条 `…/propose`
+// 路由，会话调这两条拿到的是 [`token_required`]。下面两个函数与别的「只能提议」的函数
+// 一个样：什么都不改，只留一条提议；批准时跑的是人自己的那段代码（`review_routes`）
+
+/// 这两条路由只收个人令牌：会话来的（没有令牌的调用方）答 403 `token_required`，什么都
+/// 不做。登录的人点头、答治理走的是他自己的路由
+pub(crate) fn token_required() -> AppError {
+    AppError::CodedForbidden {
+        code: "token_required",
+        message: "This route takes a personal token: it only leaves a proposal. A signed-in \
+                  person decides on the item's own route."
+            .into(),
+    }
+}
+
+/// 经令牌提议对一条等点头的事实点头或摇头：**只留提议**（裁定表的 PendingNod 一行）。
+/// `pending_facts` 那一行一个字节都不动，不落事实、不记拒绝、不排任务；等登录的人在 Review
+/// 里答，批准时那一次点头是这个人的（`review_routes`）。**这里没有、也不许有一条路径替令牌
+/// 点头**（宪章否决，N4）。
+///
+/// 次序是契约：写的检查；请求体（`action` 只能是 confirm / reject，否则 `unknown_action`，
+/// 与人的点头路由同一个 code、同一句话）；目标（这个库里没有这一条——认不出的 id、别的库
+/// 的、已经点过头的——是 404；等点头的事实没有「定了」这一态，点过头行就没了）；留提议。
+/// 哪一步没过都一行不写。一条等点头的事实上只有一条开着的提议，确认还是否决都算它：
+/// 第二次调用拿到的是那一条加 `already_proposed`
+pub(crate) async fn propose_pending(
+    state: &AppState,
+    caller: &ReviewCaller,
+    pending_id: Uuid,
+    action: &str,
+) -> Result<serde_json::Value, AppError> {
+    authorize_write(state, caller).await?;
+    let action: &'static str = match action {
+        "confirm" => "confirm",
+        "reject" => "reject",
+        other => {
+            return Err(AppError::invalid(
+                "unknown_action",
+                format!("action must be confirm or reject, got {other}"),
+            ))
+        }
+    };
+    let request = json!({ "action": action });
+    target_open(state, caller, "pending.nod", pending_id, &request).await?;
+    land_proposal(
+        state,
+        caller,
+        AgentOperation::PendingNod,
+        "pending.nod",
+        "pending_fact",
+        pending_id,
+        &pending_id.to_string(),
+        request,
+        Some(action),
+        None,
+    )
+    .await
+}
+
+/// 经令牌提议怎么回答治理 agent 的一笔：**只留提议**（裁定表的 AnswerGovernor 一行）。
+/// 治理的那一行、它指着的那一对、保险丝都不动，不排治理任务；等登录的人在 Review 里答，
+/// 批准时跑的是人回答治理的那段代码（`review_routes`），以这个人的身份、不带令牌的理由。
+/// `action` 是 merge / keep / revert。
+///
+/// 次序是契约：写的检查；目标（这个库里没有这一笔是 404；已经有人答过，或者建议还开着
+/// 而它指着的那一对已经不等人了，是 `already_decided`）；要读这一笔才知道的检查，与人的
+/// 路由同一组判据、同一个 code——动作对不上这一笔的状态是 `agent_answer`，撤一笔没有
+/// 合并可撤的是 `not_a_merge`；留提议。哪一步没过都一行不写。
+///
+/// 存下的请求体只有 `action`：令牌写的理由留在提议上（`why`），**不进请求体**——批准时
+/// 解回来的请求体里就没有理由可传，它成不了这个人的话
+pub(crate) async fn propose_governor(
+    state: &AppState,
+    caller: &ReviewCaller,
+    decision_id: Uuid,
+    action: &str,
+    rationale: Option<&str>,
+) -> Result<serde_json::Value, AppError> {
+    authorize_write(state, caller).await?;
+    let request = json!({ "action": action });
+    target_open(state, caller, "governor.answer", decision_id, &request).await?;
+    // 目标开着：这一笔在这个库里。下面只读它，不改
+    let (status, decided, merge_id): (String, String, Option<Uuid>) = sqlx::query_as(
+        "SELECT status, action, merge_id FROM agent_decisions WHERE id = $1 AND kb_id = $2",
+    )
+    .bind(decision_id)
+    .bind(caller.kb_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    // 与 `review_routes::governor_answer` 的那个 `match` 同一组情形
+    let action: &'static str = match (status.as_str(), action) {
+        ("proposed", "merge") => "merge",
+        ("proposed", "keep") => "keep",
+        ("applied", "revert") => {
+            if merge_id.is_none() {
+                return Err(AppError::invalid(
+                    "not_a_merge",
+                    "Only an applied merge can be reverted; a pair kept apart can be merged instead.",
+                ));
+            }
+            "revert"
+        }
+        ("applied", "merge") if decided == "keep" => "merge",
+        (status, action) => {
+            return Err(AppError::invalid(
+                "agent_answer",
+                format!("cannot {action} an agent decision that is {status}"),
+            ))
+        }
+    };
+    land_proposal(
+        state,
+        caller,
+        AgentOperation::AnswerGovernor,
+        "governor.answer",
+        "agent_decision",
+        decision_id,
+        &decision_id.to_string(),
+        request,
+        Some(action),
+        rationale,
     )
     .await
 }

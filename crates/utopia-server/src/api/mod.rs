@@ -541,6 +541,11 @@ pub fn router(state: AppState, cfg: &AppConfig) -> Router {
             "/kbs/{id}/review/agent/{decision_id}",
             post(review_routes::agent_answer),
         )
+        // 令牌提议怎么回答治理的一笔（0076）：只收令牌、只留提议；上面那条照旧只收会话
+        .route(
+            "/kbs/{id}/review/agent/{decision_id}/propose",
+            post(review_routes::propose_governor),
+        )
         // 人答令牌 agent 的提议（0076）：单条与批量，只收会话
         .route(
             "/kbs/{id}/review/agent-proposals",
@@ -563,6 +568,12 @@ pub fn router(state: AppState, cfg: &AppConfig) -> Router {
         .route(
             "/kbs/{id}/review/pending/{pending_id}",
             post(review_routes::decide_pending),
+        )
+        // 令牌提议对一条等点头的事实点头或摇头（0076）：只收令牌、只留提议；点头的那条
+        // 路由照旧只收会话
+        .route(
+            "/kbs/{id}/review/pending/{pending_id}/propose",
+            post(review_routes::propose_pending),
         )
         .route("/kbs/{id}/review/{review_id}", post(review_routes::decide))
         // 对齐队列（#725）：人定签名的属性与方向、类别词的类
@@ -776,6 +787,13 @@ mod review_token_kind_word_tests;
 
 #[cfg(test)]
 mod review_token_ontology_tests;
+
+// 令牌自己的两个入口（0076）：等点头的事实、治理的一笔
+#[cfg(test)]
+mod review_token_pending_tests;
+
+#[cfg(test)]
+mod review_token_governor_tests;
 
 // 开着的提议挂在各档的条目上、左栏的数、Agent History 说出目标（0076）
 #[cfg(test)]

@@ -16,6 +16,9 @@
 //! 都不改，只留一条等人答的提议。本体提案不在那十三档里，另有两个工具：
 //! `review_ontology_list` 读还开着的本体提案（会话在本体页上看到的那一份），
 //! `review_ontology` 提议拒绝或采纳其中一条。
+//! 还有两个只能提议的工具不照人的路由进，走的是令牌自己的两条 `…/propose` 路由的那两个
+//! 操作：`review_pending_fact`（提议对一条等点头的事实点头或摇头——**它点不了头**，那一行
+//! 一个字节都不动）与 `review_governor`（提议怎么回答治理 agent 的一笔）。
 //! 裁定表里直接落地的三行各有一个工具：`review_mapping`（对一条语义层映射表态，
 //! `review_mapping_list` 读得到它们）、`review_check`（跑一致性检查或物化推导）、
 //! `review_kind_word`（定一个类别词的类）——这三个调用当场生效，不等人答。
@@ -61,6 +64,8 @@ const MAPPING_LIST: &str = "review_mapping_list";
 const MAPPING: &str = "review_mapping";
 const CHECK: &str = "review_check";
 const KIND_WORD: &str = "review_kind_word";
+const PENDING_FACT: &str = "review_pending_fact";
+const GOVERNOR: &str = "review_governor";
 
 /// 这个名字归不归这里管。归这里的，`mcp.rs` 不再拿它去问 `is_exposed`
 pub(super) fn serves(name: &str) -> bool {
@@ -83,6 +88,8 @@ pub(super) fn serves(name: &str) -> bool {
             | MAPPING
             | CHECK
             | KIND_WORD
+            | PENDING_FACT
+            | GOVERNOR
     )
 }
 
@@ -103,6 +110,8 @@ fn writes(name: &str) -> bool {
             | MAPPING
             | CHECK
             | KIND_WORD
+            | PENDING_FACT
+            | GOVERNOR
     )
 }
 
@@ -748,6 +757,98 @@ fn definitions() -> Value {
         {
             "type": "function",
             "function": {
+                "name": PENDING_FACT,
+                "description": "Propose that a person confirm or reject one remembered sentence \
+                    that waits for a person's nod, an item of the \"pending\" (Awaiting your \
+                    nod) section of review_list. The call changes nothing: the pending fact \
+                    stays exactly as it is, no fact is written and none is rejected, and the \
+                    call waits as a proposal, recorded under the token's owner and the token's \
+                    name, that a signed-in editor answers in the Review tab. A token never \
+                    gives the nod: only when that person approves the proposal is the sentence \
+                    confirmed or rejected, as that person's own nod, and the item's card shows \
+                    that a token proposed the answer beside who remembered the sentence. The \
+                    result is {ok, outcome: \"proposed\", action_id, reason: \
+                    \"propose_only\", explanation}. A pending fact carries one open proposal: \
+                    repeating the call, with either action, while it is open returns the same \
+                    proposal with code already_proposed. An action other than confirm or \
+                    reject is refused with code unknown_action; an id that is unknown, of \
+                    another knowledge base, or of a sentence a person has already nodded or \
+                    rejected, with code not_found. If a person answers the sentence before the \
+                    proposal, approving the proposal changes nothing and closes it as \
+                    superseded. Proposals do not count toward the limit on finalized writes. \
+                    No tool answers a proposal.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "description": "Pending fact id (uuid) of an item of the \
+                                \"pending\" section from review_list."
+                        },
+                        "action": {
+                            "type": "string",
+                            "description": "\"confirm\" to propose that the person confirm \
+                                the sentence, \"reject\" to propose that the person reject it."
+                        }
+                    },
+                    "required": ["id", "action"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": GOVERNOR,
+                "description": "Propose that a person respond to one decision of the governor, \
+                    a governor row of the \"agent\" (Agent History) section of review_list (a \
+                    row without a source field): \"merge\" or \"keep\" on a suggestion that \
+                    is still proposed, \"revert\" on a merge the governor applied, or \
+                    \"merge\" on a pair the governor kept apart. The call changes nothing: the \
+                    governor's decision, the pair, every entity and fact, and the governor's \
+                    fuse stay as they are, no governing round is started, and the call waits \
+                    as a proposal, recorded under the token's owner and the token's name, that \
+                    a signed-in editor answers in the Review tab; only when that person \
+                    approves the proposal is the governor's decision settled, as that person's \
+                    own response and precedent. rationale is kept on the proposal for the \
+                    person to read and is never recorded as the person's reason. The result is \
+                    {ok, outcome: \"proposed\", action_id, reason: \"propose_only\", \
+                    explanation}. A governor decision carries one open proposal: repeating the \
+                    call while it is open returns the same proposal with code \
+                    already_proposed. An action that does not fit the decision's status is \
+                    refused with code agent_answer, and a revert of a decision that made no \
+                    merge with code not_a_merge; a decision a person already settled, or a \
+                    suggestion whose pair no longer waits, with code already_decided; an id \
+                    that is unknown, or of another knowledge base, with code not_found. If the \
+                    decision is settled before the proposal is, approving the proposal changes \
+                    nothing and closes it as superseded. Proposals do not count toward the \
+                    limit on finalized writes. No tool answers a proposal.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "description": "Decision id (uuid) of a governor row of the \
+                                \"agent\" section from review_list."
+                        },
+                        "action": {
+                            "type": "string",
+                            "description": "\"merge\", \"keep\" or \"revert\"."
+                        },
+                        "rationale": {
+                            "type": "string",
+                            "description": "Optional: why you propose this. Shown with the \
+                                proposal; never recorded as the person's reason."
+                        }
+                    },
+                    "required": ["id", "action"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": ONTOLOGY_LIST,
                 "description": "Read the open ontology proposals of this knowledge base: the \
                     classes, relations and attributes the ontology agent proposes to add, and \
@@ -1033,7 +1134,8 @@ fn annotations(name: &str) -> Value {
         }
         // 只能提议的工具：这一次调用什么都不改，只留一条提议——不是只读（台账多一行），
         // 也不破坏什么
-        DEFECT | FACT | CONFLICT | VIOLATION | ERRATA | ALIGNMENT | ONTOLOGY => {
+        DEFECT | FACT | CONFLICT | VIOLATION | ERRATA | ALIGNMENT | ONTOLOGY | PENDING_FACT
+        | GOVERNOR => {
             json!({ "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false })
         }
         // 直接落地的三个工具：映射的状态当场就改，运行当场就跑（清掉、作废旧的行），
@@ -1624,6 +1726,39 @@ pub(super) async fn call(
                 Err(refused) => return refused,
             };
             review_ops::decide_kind_word(state, caller, kind_word, class).await
+        }
+        PENDING_FACT => {
+            // 参数是令牌那条 `…/propose` 路由的 id 与请求体的 `action`。动作认不认得、那一条
+            // 还在不在都由操作说（`unknown_action`、not found）。这里只有提议这一条路：
+            // 没有哪个参数能让它点头
+            let Some(id) = args["id"]
+                .as_str()
+                .and_then(|s| s.trim().parse::<Uuid>().ok())
+            else {
+                return bad_argument(name, "id", "a uuid returned by review_list");
+            };
+            let Some(action) = args["action"].as_str() else {
+                return bad_argument(name, "action", "\"confirm\" or \"reject\"");
+            };
+            review_ops::propose_pending(state, caller, id, action).await
+        }
+        GOVERNOR => {
+            // 参数是令牌那条 `…/propose` 路由的 id 与请求体的字段。动作对不对得上这一笔的
+            // 状态由操作说（`agent_answer`，与人的路由同一个 code）
+            let Some(id) = args["id"]
+                .as_str()
+                .and_then(|s| s.trim().parse::<Uuid>().ok())
+            else {
+                return bad_argument(name, "id", "a uuid returned by review_list");
+            };
+            let Some(action) = args["action"].as_str() else {
+                return bad_argument(name, "action", "\"merge\", \"keep\" or \"revert\"");
+            };
+            let rationale = match optional_string(name, &args, "rationale") {
+                Ok(v) => v,
+                Err(refused) => return refused,
+            };
+            review_ops::propose_governor(state, caller, id, action, rationale).await
         }
         // `serves` 之外的名字到不了这里；到了也只说没有这个工具，不去碰库
         _ => {

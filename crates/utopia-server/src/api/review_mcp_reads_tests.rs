@@ -1079,6 +1079,7 @@ async fn the_mcp_endpoint_offers_exactly_the_review_tools_the_ruled_table_opens(
                     "review_defect",
                     "review_errata",
                     "review_fact",
+                    "review_governor",
                     "review_item",
                     "review_keep",
                     "review_kind_word",
@@ -1088,6 +1089,7 @@ async fn the_mcp_endpoint_offers_exactly_the_review_tools_the_ruled_table_opens(
                     "review_merge",
                     "review_ontology",
                     "review_ontology_list",
+                    "review_pending_fact",
                     "review_revert",
                     "review_violation",
                 ],
@@ -1101,8 +1103,9 @@ async fn the_mcp_endpoint_offers_exactly_the_review_tools_the_ruled_table_opens(
                 .collect();
             review.sort_unstable();
             anyhow::ensure!(review == expected, "{who}: {review:?}");
-            // 写工具（分开、合并、撤回、成批，对缺陷、事实、矛盾、违规、勘误、对齐、本体提案的提议，
-            // 直接落地的映射决定、两种运行、类别词决定）不是只读；别的 Review 工具都是
+            // 写工具（分开、合并、撤回、成批，对缺陷、事实、矛盾、违规、勘误、对齐、本体提案、
+            // 等点头的事实、治理的一笔的提议，直接落地的映射决定、两种运行、类别词决定）不是
+            // 只读；别的 Review 工具都是
             for tool in tools
                 .iter()
                 .filter(|t| t["name"].as_str().is_some_and(|n| n.starts_with("review")))
@@ -1120,7 +1123,9 @@ async fn the_mcp_endpoint_offers_exactly_the_review_tools_the_ruled_table_opens(
                     || tool["name"] == "review_ontology"
                     || tool["name"] == "review_mapping"
                     || tool["name"] == "review_check"
-                    || tool["name"] == "review_kind_word";
+                    || tool["name"] == "review_kind_word"
+                    || tool["name"] == "review_pending_fact"
+                    || tool["name"] == "review_governor";
                 if writes {
                     anyhow::ensure!(
                         tool["annotations"]["readOnlyHint"] == false,

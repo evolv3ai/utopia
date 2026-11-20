@@ -496,7 +496,11 @@ pub struct AgentAnswerBody {
 }
 
 /// 人回答 agent 的一笔（0025）。回答走的是人的裁决路径：decided_by 是这个人，
-/// 台账记的是这个人——它就此成为下一轮的先例
+/// 台账记的是这个人——它就此成为下一轮的先例。
+///
+/// **只收会话**（0076）：这条路由是「以人的身份合并、分开、撤回一对」的第二条路，个人令牌
+/// 在提取器那里就是 401。令牌想说它会怎么答，走 [`propose_governor`] 的那条路由，只留一条
+/// 提议。下面的语句原样挪进了 [`governor_answer`]，会话的回答与审计行同从前一个字不差
 pub async fn agent_answer(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -504,6 +508,31 @@ pub async fn agent_answer(
     Json(body): Json<AgentAnswerBody>,
 ) -> ApiResult<Json<serde_json::Value>> {
     require_kb(&state, &user, kb_id, Role::Editor).await?;
+    governor_answer(&state, kb_id, &user, decision_id, &body, None).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// 人回答治理 agent 的一笔的那几句，从会话处理函数里原样挪出来：读这一笔、按它的状态与
+/// 动作走人的裁决路径（`decide_review` / `revert_merge` / `merge_entities`）、把这一笔记成
+/// 答过、审计行、保险丝、治理的后续、刷新。会话调它时 `proposal` 是 None，审计 detail 与
+/// 从前一个键不差；批准令牌的提议时带上提议的 id，detail 里多一个 `agent_proposal`——这次
+/// 回答是这个人的，也看得出是从哪条提议来的。actor 两种情形都是这个人，detail 里不放
+/// `token_id`。它不是一个事务：中途报的错原样报出去
+async fn governor_answer(
+    state: &AppState,
+    kb_id: Uuid,
+    user: &utopia_core::models::User,
+    decision_id: Uuid,
+    body: &AgentAnswerBody,
+    proposal: Option<Uuid>,
+) -> Result<(), utopia_core::AppError> {
+    // 审计 detail：不带提议时原样，带提议时只多 `agent_proposal` 一个键
+    let named = |mut detail: serde_json::Value| {
+        if let Some(proposal) = proposal {
+            detail["agent_proposal"] = json!(proposal);
+        }
+        detail
+    };
     let d = utopia_store::governance::get(&state.pool, kb_id, decision_id).await?;
     let (l, r) = (
         d.left.clone().unwrap_or_default(),
@@ -534,8 +563,10 @@ pub async fn agent_answer(
                 if act == "merge" { "review.merge" } else { "review.keep" },
                 "review",
                 Some(d.target_id),
-                json!({ "left": l, "right": r, "agent_decision": decision_id, "agent_action": d.action,
+                named(
+                    json!({ "left": l, "right": r, "agent_decision": decision_id, "agent_action": d.action,
                         "why": body.rationale }),
+                ),
             )
             .await;
         }
@@ -556,11 +587,11 @@ pub async fn agent_answer(
                 "merge.revert",
                 "merge",
                 Some(merge_id),
-                json!({ "source": l, "target": r, "agent_decision": decision_id }),
+                named(json!({ "source": l, "target": r, "agent_decision": decision_id })),
             )
             .await;
             // 撤回 agent 的合并到了两次：保险丝
-            crate::governance::fuse(&state, kb_id).await;
+            crate::governance::fuse(state, kb_id).await;
         }
         ("applied", "merge") if d.action == "keep" => {
             let (left_id, right_id): (Uuid, Uuid) = sqlx::query_as(
@@ -598,7 +629,7 @@ pub async fn agent_answer(
                 "merge.manual",
                 "merge",
                 Some(merge_id),
-                json!({ "source": l, "target": r, "agent_decision": decision_id }),
+                named(json!({ "source": l, "target": r, "agent_decision": decision_id })),
             )
             .await;
         }
@@ -606,13 +637,12 @@ pub async fn agent_answer(
             return Err(utopia_core::AppError::invalid(
                 "agent_answer",
                 format!("cannot {action} an agent decision that is {status}"),
-            )
-            .into())
+            ))
         }
     }
-    crate::governance::after_human_decision(&state, kb_id, &[d.target_id], None, user.id).await;
+    crate::governance::after_human_decision(state, kb_id, &[d.target_id], None, user.id).await;
     state.emit_review(kb_id);
-    Ok(Json(json!({ "ok": true })))
+    Ok(())
 }
 
 // ───────────────────────── 人答令牌 agent 的提议（0076） ─────────────────────────
@@ -970,6 +1000,8 @@ enum Decision {
     AlignmentRule(DecideAlignmentRuleReq),
     OntologyReject(super::ontology_routes::DecideProposalReq),
     OntologyAdopt(super::question_routes::AdoptReq),
+    PendingNod(DecidePendingBody),
+    Governor(AgentAnswerBody),
 }
 
 /// 这条提议的操作认不认得。`None` = 认不得：答的人拿到的还是从前那个 500
@@ -995,6 +1027,10 @@ fn decision_of(
                 Decision::OntologyReject(stored_request(p)?)
             },
         ),
+        // 等点头的事实与治理的一笔：存下的请求体只有 `action`。治理那一个解回来的
+        // `rationale` 因此恒为空——令牌的理由留在提议上，不当成这个人的话
+        "pending.nod" => Some(Decision::PendingNod(stored_request(p)?)),
+        "governor.answer" => Some(Decision::Governor(stored_request(p)?)),
         _ => None,
     })
 }
@@ -1134,6 +1170,99 @@ async fn approve_decision(
                 Err(e) => Err(e),
             }
         }
+        // 等点头的事实：批准**就是这个人的点头**——落事实（或记拒绝）、他的审计行、
+        // 时间解析的任务，都与他自己点头时一样。点头不是一个事务，它报的错（`NotFound`
+        // 也算）原样报出去，提议留着；上面已经读过那一行还在。确认带回落下的事实
+        Decision::PendingNod(body) => {
+            let fact_id = pending_nod(state, kb_id, user, p.target_id, &body.action, p.id).await?;
+            Ok(Approved::Done(Applied {
+                fact_id,
+                ..Applied::default()
+            }))
+        }
+        // 治理的一笔：跑的就是人回答治理的那段代码，以这个人的身份、没有理由。它不是一个
+        // 事务，报的错原样报出去，提议留着
+        Decision::Governor(body) => {
+            // 理由在这里再清一次：就算哪一行台账的请求体里带着它，也传不进人的回答
+            let body = AgentAnswerBody {
+                action: body.action,
+                rationale: None,
+            };
+            governor_answer(state, kb_id, user, p.target_id, &body, Some(p.id)).await?;
+            Ok(Approved::Done(Applied::default()))
+        }
+    }
+}
+
+/// 批准一条「对等点头的事实点头或摇头」的提议时，这个人的那一次点头。
+///
+/// 语句照 [`decide_pending`] 抄的（那个处理函数一个字没动，令牌也进不去）：确认走
+/// `pending::confirm`、审计行 `fact.nod_confirmed`、排一次时间解析、推三个事件；否决走
+/// `pending::reject`（记的是这个人）、审计行 `fact.nod_rejected`、推两个事件。actor 是批准
+/// 的这个人；与他自己点头只差一处——审计 detail 里多一个 `agent_proposal`，指着那条提议。
+/// detail 里不放 `token_id`。回确认时落下的那条事实，否决是 None。
+///
+/// **只有 [`approve_decision`] 调它**，而那里只有登录的人到得了：令牌没有一条路走到这里
+async fn pending_nod(
+    state: &AppState,
+    kb_id: Uuid,
+    user: &utopia_core::models::User,
+    pending_id: Uuid,
+    action: &str,
+    proposal: Uuid,
+) -> Result<Option<Uuid>, utopia_core::AppError> {
+    // 快照是一个对象：原样，只多 `agent_proposal` 一个键
+    let named = |mut detail: serde_json::Value| {
+        detail["agent_proposal"] = json!(proposal);
+        detail
+    };
+    match action {
+        "confirm" => {
+            let done = utopia_store::pending::confirm(&state.pool, kb_id, pending_id).await?;
+            let _ = utopia_store::audit::record(
+                &state.pool,
+                Some(kb_id),
+                user.id,
+                "fact.nod_confirmed",
+                "fact",
+                Some(done.fact_id),
+                named(done.snapshot),
+            )
+            .await;
+            // 点头落下的开放陈述带着时间词：按文档重排一次时间解析（0045），
+            // 幂等，同一篇排着就不重复
+            let _ = utopia_store::jobs::enqueue_unless_queued(
+                &state.pool,
+                "resolve_time",
+                json!({ "document_id": done.document_id }),
+            )
+            .await;
+            state.emit_pending(kb_id);
+            state.emit_review(kb_id);
+            state.emit_graph(kb_id);
+            Ok(Some(done.fact_id))
+        }
+        "reject" => {
+            let snap = utopia_store::pending::reject(&state.pool, kb_id, pending_id, Some(user.id))
+                .await?;
+            let _ = utopia_store::audit::record(
+                &state.pool,
+                Some(kb_id),
+                user.id,
+                "fact.nod_rejected",
+                "pending_fact",
+                Some(pending_id),
+                named(snap),
+            )
+            .await;
+            state.emit_pending(kb_id);
+            state.emit_review(kb_id);
+            Ok(None)
+        }
+        other => Err(utopia_core::AppError::invalid(
+            "unknown_action",
+            format!("action must be confirm or reject, got {other}"),
+        )),
     }
 }
 
@@ -2322,6 +2451,92 @@ pub async fn decide_pending(
         )
         .into()),
     }
+}
+
+// ───────────────────── 令牌自己的两个入口（0076） ─────────────────────
+//
+// 等点头的事实与治理的一笔，令牌**不从人的路由进**：上面的 `decide_pending`、
+// `pending_for_chunk` 与 `agent_answer` 照旧只收 `AuthUser`，个人令牌在提取器那里就是 401。
+// 令牌走下面两条 `…/propose` 路由，它们只留一条提议（`review_ops::propose_pending` /
+// `propose_governor`），什么都不改；答提议的仍然只能是登录的人。
+//
+// 两条路由只收令牌：会话来的答 403 `token_required`，什么都不做。请求体按原始字节收下，
+// 过了写的检查才解析——被拒绝的调用方先听到「你写不了」，再听到「你写错了」
+
+/// 令牌那一支的请求体：解不出来时先过写的检查（scope、库、角色），再答 `invalid_body`
+async fn token_body<T: serde::de::DeserializeOwned>(
+    state: &AppState,
+    caller: &ReviewCaller,
+    body: &[u8],
+    shape: &str,
+) -> Result<T, utopia_core::AppError> {
+    match serde_json::from_slice::<T>(body) {
+        Ok(body) => Ok(body),
+        Err(_) => {
+            review_ops::authorize_write(state, caller).await?;
+            Err(utopia_core::AppError::invalid(
+                "invalid_body",
+                format!("The request body must be a JSON object such as {shape}"),
+            ))
+        }
+    }
+}
+
+/// 令牌提议对一条等点头的事实点头或摇头（0076）。**只留提议**：`pending_facts` 那一行不动，
+/// 不落事实、不记拒绝；登录的人在 Review 里批准时，那一次点头是这个人的。请求体是
+/// `{"action": "confirm" | "reject"}`。会话调这里是 403 `token_required`——人点头走
+/// [`decide_pending`]
+pub async fn propose_pending(
+    State(state): State<AppState>,
+    caller: SessionOrToken,
+    Path((kb_id, pending_id)): Path<(Uuid, Uuid)>,
+    body: axum::body::Bytes,
+) -> ApiResult<Json<serde_json::Value>> {
+    let user = caller.user;
+    let Some(token) = caller.pat else {
+        return Err(review_ops::token_required().into());
+    };
+    let caller = ReviewCaller { user, token, kb_id };
+    let body: DecidePendingBody =
+        token_body(&state, &caller, &body, r#"{"action": "confirm"}"#).await?;
+    Ok(Json(
+        review_ops::propose_pending(&state, &caller, pending_id, &body.action).await?,
+    ))
+}
+
+/// 令牌提议怎么回答治理 agent 的一笔（0076）。**只留提议**：治理的那一行、那一对、保险丝都
+/// 不动，不排治理任务；登录的人在 Review 里批准时，跑的是他自己回答治理的那段代码
+/// （[`governor_answer`]），不带令牌的理由。请求体是
+/// `{"action": "merge" | "keep" | "revert", "rationale": …}`。会话调这里是 403
+/// `token_required`——人回答治理走 [`agent_answer`]
+pub async fn propose_governor(
+    State(state): State<AppState>,
+    caller: SessionOrToken,
+    Path((kb_id, decision_id)): Path<(Uuid, Uuid)>,
+    body: axum::body::Bytes,
+) -> ApiResult<Json<serde_json::Value>> {
+    let user = caller.user;
+    let Some(token) = caller.pat else {
+        return Err(review_ops::token_required().into());
+    };
+    let caller = ReviewCaller { user, token, kb_id };
+    let body: AgentAnswerBody = token_body(
+        &state,
+        &caller,
+        &body,
+        r#"{"action": "keep", "rationale": "why"}"#,
+    )
+    .await?;
+    Ok(Json(
+        review_ops::propose_governor(
+            &state,
+            &caller,
+            decision_id,
+            &body.action,
+            body.rationale.as_deref(),
+        )
+        .await?,
+    ))
 }
 
 /// 跑一遍物化推导。
