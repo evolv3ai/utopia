@@ -346,8 +346,10 @@ pub struct DecideBody {
     pub rationale: Option<String>,
 }
 
-/// 人裁一对重复项。写令牌也能把一对分开（0076）：令牌走 `review_ops::keep`，判定经
-/// 裁定表、记进令牌 agent 的台账，不算人的先例；合并没开给令牌。会话照旧跑下面这一段
+/// 人裁一对重复项。写令牌也能裁（0076）：分开走 `review_ops::keep`，合并走
+/// `review_ops::merge_pair`——合并先过服务端的闸门，被留下的不落地、只留一条提议。
+/// 两样都经裁定表、记进令牌 agent 的台账，不算人的先例。令牌在进下面这一段之前就
+/// 离开了处理函数：会话照旧跑下面这一段，不问闸门
 pub async fn decide(
     State(state): State<AppState>,
     caller: SessionOrToken,
@@ -357,15 +359,18 @@ pub async fn decide(
     let user = caller.user;
     if let Some(token) = caller.pat {
         let caller = ReviewCaller { user, token, kb_id };
-        if body.action != "keep" {
-            // 先过 scope 与角色，再说「这个动作没开」：只读令牌问合并，答的仍是
-            // `token_read_only`。什么都不写
-            review_ops::authorize_write(&state, &caller).await?;
-            return Err(review_ops::not_open().into());
-        }
-        return Ok(Json(
-            review_ops::keep(&state, &caller, review_id, body.rationale.as_deref()).await?,
-        ));
+        let rationale = body.rationale.as_deref();
+        let answer = match body.action.as_str() {
+            "keep" => review_ops::keep(&state, &caller, review_id, rationale).await?,
+            "merge" => review_ops::merge_pair(&state, &caller, review_id, rationale, None).await?,
+            _ => {
+                // 先过 scope 与角色，再说「这个动作没开」：只读令牌问一个没开的动作，
+                // 答的仍是 `token_read_only`。什么都不写
+                review_ops::authorize_write(&state, &caller).await?;
+                return Err(review_ops::not_open().into());
+            }
+        };
+        return Ok(Json(answer));
     }
     require_kb(&state, &user, kb_id, Role::Editor).await?;
     let snap: Option<(String, String, f32)> = sqlx::query_as(
@@ -733,13 +738,29 @@ pub struct ManualMergeBody {
     pub rationale: Option<String>,
 }
 
-/// 手动合并（实体面板"Merge into…"入口）。
+/// 手动合并（实体面板"Merge into…"入口）。写令牌也能合（0076）：令牌走
+/// `review_ops::merge_entities`，先过服务端的闸门，被留下的只留一条提议；它在进下面
+/// 这一段之前就离开了处理函数。会话照旧跑下面这一段，不问闸门
 pub async fn manual_merge(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    caller: SessionOrToken,
     Path(kb_id): Path<Uuid>,
     Json(body): Json<ManualMergeBody>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    let user = caller.user;
+    if let Some(token) = caller.pat {
+        let caller = ReviewCaller { user, token, kb_id };
+        return Ok(Json(
+            review_ops::merge_entities(
+                &state,
+                &caller,
+                body.source,
+                body.target,
+                body.rationale.as_deref(),
+            )
+            .await?,
+        ));
+    }
     require_kb(&state, &user, kb_id, Role::Editor).await?;
     let snap: Option<(String,)> = sqlx::query_as(
         "SELECT s.canonical_name || ' → ' || t.canonical_name

@@ -8,7 +8,9 @@
 //! - **够不着的库是 404**（N2）：`kb_ids` 排除了这个库的令牌，两条读路由都答 404，
 //!   与一个不存在的库同一个回答，响应里没有条目、计数或总览
 //! - **别的档没开**：令牌问 `pending`、`agent`、`merges` 得到 `unknown_queue`，会话照旧
-//! - **合并、撤销、批量没开**（SC6 / E15）：令牌被拒绝，图上的行前后相等，台账没有行
+//! - **被拒绝的合并、手动合并、撤销、批量什么都不改**：合并开给了编辑者的写令牌
+//!   （过闸门，见 `review_token_merge_tests.rs`），只读令牌与 Viewer 的令牌在两条合并
+//!   路由上照旧被拒绝；撤销与批量仍只认会话。图上的行前后相等，台账没有行
 //! - **分开一对**：写令牌加编辑者——落地、进台账、审计行带令牌；拒绝各有各的 code，
 //!   拒绝什么都不改；不排治理任务，这一对上开着的建议原样留着
 //!
@@ -292,7 +294,8 @@ async fn a_token_receives_duplicates_in_the_session_order() -> anyhow::Result<()
 }
 
 #[tokio::test]
-async fn a_refused_token_merge_revert_or_batch_leaves_the_graph_equal() -> anyhow::Result<()> {
+async fn a_token_refused_on_merge_manual_merge_revert_or_batch_leaves_the_graph_equal(
+) -> anyhow::Result<()> {
     let Some(f) = Fx::new(false).await? else {
         return Ok(());
     };
@@ -339,18 +342,34 @@ async fn a_refused_token_merge_revert_or_batch_leaves_the_graph_equal() -> anyho
             );
         }
 
-        // 队列里的合并：进得了处理函数，被策略拒绝
-        let (status, body) = f
-            .call(
-                &token,
-                "POST",
-                &format!("/kbs/{kb}/review/{pair}"),
-                Some(json!({ "action": "merge", "rationale": "same person" })),
-            )
-            .await?;
-        anyhow::ensure!(status == StatusCode::FORBIDDEN, "merge: {status} {body}");
-        anyhow::ensure!(body["code"] == "token_operation_not_open", "merge: {body}");
-        // 批量（不论动作）、撤销、手动合并：这些路由仍只认会话
+        // 队列里的合并与手动合并开给了编辑者的写令牌；留下来的拒绝是这两种——只读令牌
+        // （`token_read_only`）与主人是 Viewer 的写令牌（`token_owner_below_editor`），
+        // 两条合并路由上都一样
+        let (_, read_only) = f.token(f.editor, "reader", "read", None).await?;
+        let (_, viewer_write) = f.token(f.viewer, "viewer writer", "write", None).await?;
+        for (refused, code) in [
+            (&read_only, "token_read_only"),
+            (&viewer_write, "token_owner_below_editor"),
+        ] {
+            for (path, request) in [
+                (
+                    format!("/kbs/{kb}/review/{pair}"),
+                    json!({ "action": "merge", "rationale": "same person" }),
+                ),
+                (
+                    format!("/kbs/{kb}/entities/merge"),
+                    json!({ "source": left, "target": right }),
+                ),
+            ] {
+                let (status, body) = f.call(refused, "POST", &path, Some(request)).await?;
+                anyhow::ensure!(
+                    status == StatusCode::FORBIDDEN,
+                    "{code} {path}: {status} {body}"
+                );
+                anyhow::ensure!(body["code"] == code, "{code} {path}: {body}");
+            }
+        }
+        // 批量（不论动作）、撤销：这些路由仍只认会话
         let closed = [
             (
                 format!("/kbs/{kb}/review/batch"),
@@ -361,10 +380,6 @@ async fn a_refused_token_merge_revert_or_batch_leaves_the_graph_equal() -> anyho
                 json!({ "ids": [pair, other], "action": "keep" }),
             ),
             (format!("/kbs/{kb}/merges/{merge_id}/revert"), json!({})),
-            (
-                format!("/kbs/{kb}/entities/merge"),
-                json!({ "source": left, "target": right }),
-            ),
         ];
         for (path, body) in closed {
             let (status, answer) = f.call(&token, "POST", &path, Some(body.clone())).await?;

@@ -1,8 +1,10 @@
-//! Review 的三个 MCP 工具（0076 决定 2）：`review_list`、`review_item`、`review_keep`。
+//! Review 的 MCP 工具（0076 决定 2）：`review_list`、`review_item`、`review_keep`、
+//! `review_merge`。
 //!
 //! 两个读工具管 Review 的十三档：`review_list` 读一档的一页（十一个列表档、总览、决策台账），
-//! `review_item` 读某一档里列着的一条，违规一档的条目带上它的证明。写的只有 `review_keep`
-//! 一样，这一刀没有多开。
+//! `review_item` 读某一档里列着的一条，违规一档的条目带上它的证明。写的有两样：
+//! `review_keep` 把一对分开；`review_merge` 合并队列里的一对或手动指定的两个实体，
+//! 先过服务端的闸门，被留下的不落地、只留一条等人答的提议。**没有哪个工具能答提议。**
 //!
 //! **这里只做两件事：把参数递给 `review_ops`，把它的回答变成工具结果。** 授权、裁定表、
 //! 台账、审计都在 `review_ops` 里面，REST 的令牌分支调的是同一批函数——所以同一枚令牌
@@ -10,7 +12,7 @@
 //! 两道检查迟早有一道先变。
 //!
 //! **不进 `chat::tools_schema`，也不进 `tools::dispatch`。** 那两处与应用内的聊天助手
-//! 共用，而助手不该拿到任何 Review 工具。这三个工具的定义与派发只在这个文件里，
+//! 共用，而助手不该拿到任何 Review 工具。这几个工具的定义与派发只在这个文件里，
 //! 由 `mcp.rs` 接进 `tools/list` 与 `tools/call`。
 //!
 //! 标注（`readOnlyHint` 之类）只是给客户端的提示，服务端没有一条路径读它们（0076 决定 3）。
@@ -28,10 +30,16 @@ use crate::state::AppState;
 const LIST: &str = "review_list";
 const ITEM: &str = "review_item";
 const KEEP: &str = "review_keep";
+const MERGE: &str = "review_merge";
 
 /// 这个名字归不归这里管。归这里的，`mcp.rs` 不再拿它去问 `is_exposed`
 pub(super) fn serves(name: &str) -> bool {
-    matches!(name, LIST | ITEM | KEEP)
+    matches!(name, LIST | ITEM | KEEP | MERGE)
+}
+
+/// 写工具：只列给写得了的调用方，标注里 `readOnlyHint` 是 false
+fn writes(name: &str) -> bool {
+    matches!(name, KEEP | MERGE)
 }
 
 /// 工具定义，OpenAI 的形状——`chat::check_call` 认的就是这个形状，参数守卫与别的工具
@@ -42,7 +50,11 @@ pub(super) fn serves(name: &str) -> bool {
 /// 写了 `minimum` 的话，守规矩的客户端会在本地就把 0 拦下。
 ///
 /// `review_item` 的 `id` **不写 `format: uuid`**：对齐一档的类别词没有 uuid，认的是它的词。
-/// `review_keep` 的 `id` 照旧是 uuid——它只分重复项
+/// `review_keep` 的 `id` 照旧是 uuid——它只分重复项。
+///
+/// `review_merge` **没有必填参数**：要么给 `id`（队列里的一对），要么给 `source` 与
+/// `target`（两个实体）。两种给法是哪一种、给全了没有，由 [`call`] 看——`required`
+/// 表达不了「二选一」
 fn definitions() -> Value {
     json!([
         {
@@ -162,20 +174,73 @@ fn definitions() -> Value {
                     "required": ["id"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": MERGE,
+                "description": "Merge two entities that are the same thing. Pass either id (the \
+                    review id of a pending duplicate pair from review_list; the side with more \
+                    facts survives, as when a person merges the pair in the Review tab) or \
+                    source and target (two entity ids; source is merged into target). The \
+                    server's merge gate is asked first. If it passes, the merge is applied at \
+                    once and recorded under the token's owner and the token's name, and the \
+                    result is {ok, outcome: \"applied\", action_id, merge_id}. If the gate \
+                    holds the merge (a source that treats names as identifiers, a one-value \
+                    relation the merge would contradict, derived facts resting on one side, an \
+                    entity named in an answer, a pair a person kept apart, or a pair whose \
+                    merge was reverted), nothing is changed: the call waits as a proposal that \
+                    only a signed-in person can answer in the Review tab, and the result is \
+                    {ok, outcome: \"held\" or \"proposed\", action_id, reason, explanation}. \
+                    Repeating a held call returns the same proposal with code \
+                    already_proposed. No tool answers a proposal. A pair that was already \
+                    decided, or an entity already merged into another, is refused with code \
+                    already_decided; merging an entity into itself with code self_merge; an \
+                    unknown id with code not_found.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "description": "Review id (uuid) of a pending duplicate pair from \
+                                review_list. Leave out when source and target are given."
+                        },
+                        "source": {
+                            "type": "string",
+                            "format": "uuid",
+                            "description": "Entity id (uuid) to merge away. Given together \
+                                with target, instead of id."
+                        },
+                        "target": {
+                            "type": "string",
+                            "format": "uuid",
+                            "description": "Entity id (uuid) that survives. Given together \
+                                with source, instead of id."
+                        },
+                        "rationale": {
+                            "type": "string",
+                            "description": "Optional: one sentence on what makes the two the \
+                                same thing."
+                        }
+                    }
+                }
+            }
         }
     ])
 }
 
 /// 提示，不是约束：能不能做由 `review_ops` 说了算
 fn annotations(name: &str) -> Value {
-    if name == KEEP {
-        json!({ "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false })
-    } else {
-        json!({ "readOnlyHint": true })
+    match name {
+        KEEP => json!({ "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false }),
+        // 合并改事实与实体：落地的那一次不是只添不改
+        MERGE => json!({ "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false }),
+        _ => json!({ "readOnlyHint": true }),
     }
 }
 
-/// `tools/list` 里的那几项。两个读工具对每一个进得来的调用方都列；`review_keep` 只在
+/// `tools/list` 里的那几项。两个读工具对每一个进得来的调用方都列；写工具（[`writes`]）只在
 /// `can_write`（令牌 scope 是 write 且主人至少是 Editor）时列——列出一个注定被拒绝的
 /// 工具，等于让对面的 agent 反复去试
 pub(super) fn listed(can_write: bool) -> Vec<Value> {
@@ -186,7 +251,7 @@ pub(super) fn listed(can_write: bool) -> Vec<Value> {
         .filter_map(|tool| {
             let f = tool.get("function")?;
             let name = f.get("name")?.as_str()?;
-            if name == KEEP && !can_write {
+            if writes(name) && !can_write {
                 return None;
             }
             Some(json!({
@@ -224,6 +289,18 @@ fn optional_integer(name: &str, args: &Value, key: &str) -> Result<Option<i64>, 
             .as_i64()
             .map(Some)
             .ok_or_else(|| bad_argument(name, key, "an integer")),
+    }
+}
+
+/// 可选的 uuid：没给或 null 是「没给」，给了不是 uuid 的东西是参数错误
+fn optional_uuid(name: &str, args: &Value, key: &str) -> Result<Option<Uuid>, ToolResult> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v
+            .as_str()
+            .and_then(|s| s.trim().parse::<Uuid>().ok())
+            .map(Some)
+            .ok_or_else(|| bad_argument(name, key, "a uuid returned by another review tool")),
     }
 }
 
@@ -282,7 +359,7 @@ async fn refusal(name: &str, error: AppError) -> ToolResult {
 
 /// 执行一次调用。`name` 必须是 [`serves`] 认的名字。
 ///
-/// **`review_keep` 没被列出来的调用方照样走到 `review_ops::keep`**：拒绝它的是那里的
+/// **写工具没被列出来的调用方照样走到 `review_ops` 的那个函数**：拒绝它的是那里的
 /// 检查，回来的是带 code 的工具错误（`token_read_only`、`token_owner_below_editor`），
 /// 与 REST 同一个 code——对面的 agent 由此知道是换一枚令牌，还是换令牌也没用
 pub(super) async fn call(
@@ -357,6 +434,45 @@ pub(super) async fn call(
                 Err(refused) => return refused,
             };
             review_ops::keep(state, caller, id, rationale).await
+        }
+        MERGE => {
+            let (id, source, target) = match (
+                optional_uuid(name, &args, "id"),
+                optional_uuid(name, &args, "source"),
+                optional_uuid(name, &args, "target"),
+            ) {
+                (Ok(id), Ok(source), Ok(target)) => (id, source, target),
+                (Err(refused), _, _) | (_, Err(refused), _) | (_, _, Err(refused)) => {
+                    return refused
+                }
+            };
+            let rationale = match optional_string(name, &args, "rationale") {
+                Ok(v) => v,
+                Err(refused) => return refused,
+            };
+            // 两种给法各走各的操作，与 REST 的两条路由一一对应；闸门在操作里面。
+            // 给法说不清（两种都给、只给一半、都没给）就不执行，不猜是哪一种
+            match (id, source, target) {
+                (Some(id), None, None) => {
+                    review_ops::merge_pair(state, caller, id, rationale, None).await
+                }
+                (None, Some(source), Some(target)) => {
+                    review_ops::merge_entities(state, caller, source, target, rationale).await
+                }
+                _ => {
+                    return ToolResult::new(
+                        format!(
+                            "{name} needs either `id` (a pending duplicate pair) or both \
+                             `source` and `target` (two entity ids), and not both forms, so \
+                             the call was not run. Call it again with one of the two."
+                        ),
+                        Step::new("tool", name, "invalid arguments")
+                            .invalid("id")
+                            .json(),
+                    )
+                    .error()
+                }
+            }
         }
         // `serves` 之外的名字到不了这里；到了也只说没有这个工具，不去碰库
         _ => {

@@ -9,13 +9,16 @@
 //!
 //! 读的一侧整个开给令牌：十一个列表档、总览、决策台账，以及违规与派生事实的两条证明。
 //! 每一档里列着的一条也能单独取（[`item`]），取到的就是列表里那个对象。
-//! 写的一侧只有「把一对重复项分开」这一样；别的裁决、合并、撤销、批量都还关着——
+//! 写的一侧开了两样：「把一对重复项分开」（[`keep`]），和过了服务端闸门的合并——
+//! 队列里的一对（[`merge_pair`]）与手动指定源和目标（[`merge_entities`]）。闸门留下的
+//! 合并什么都不改，只留一条等人答的提议。别的裁决、撤销、批量都还关着——
 //! 读得到「等你点头」不等于能替人点头。
 
 use serde_json::json;
 use utopia_core::models::{ReviewSummary, Role, User};
 use utopia_core::AppError;
-use utopia_store::execution_gate::{agent_policy, AgentOperation, AgentOutcome};
+use utopia_store::execution_gate::{agent_policy, AgentOperation, AgentOutcome, Hold};
+use utopia_store::token_agent_actions::{TokenAgentAction, TokenWrite, TokenWriteOutcome};
 use uuid::Uuid;
 
 use crate::state::AppState;
@@ -313,4 +316,132 @@ pub(crate) async fn keep(
     .await?;
     state.emit_review(caller.kb_id);
     Ok(json!({ "ok": true, "outcome": action.outcome, "action_id": action.id }))
+}
+
+/// 这枚令牌的一次写入，交给 store 的样子。`breaker` 这一刀恒为 false：熔断器还没接上
+fn token_write(
+    caller: &ReviewCaller,
+    rationale: Option<&str>,
+    batch_id: Option<Uuid>,
+) -> TokenWrite {
+    TokenWrite {
+        kb_id: caller.kb_id,
+        owner_id: caller.user.id,
+        token_id: caller.token.token_id,
+        rationale: rationale.map(str::to_string),
+        batch_id,
+        breaker: false,
+    }
+}
+
+/// 闸门当时说的那一句，从台账行的 payload 里读回来。store 把 `Hold` 的 `Display`
+/// 存在 `hold` 键下（`contradiction CEO of`、`derived 3`）；这里照原样解回去，
+/// 好用 `Hold::explain` 的那一句——解释的话只写在闸门那一处
+fn hold_said(action: &TokenAgentAction) -> Option<Hold> {
+    let said = action.payload.get("hold")?.as_str()?;
+    let counted = |rest: &str| rest.trim().parse::<i64>().ok();
+    match said {
+        "identity" => Some(Hold::Identity),
+        "kept_by_person" => Some(Hold::KeptByPerson),
+        "reverted_merge" => Some(Hold::RevertedMerge),
+        _ => {
+            if let Some(predicate) = said.strip_prefix("contradiction ") {
+                Some(Hold::Contradiction(predicate.to_string()))
+            } else if let Some(n) = said.strip_prefix("derived ") {
+                counted(n).map(Hold::Derived)
+            } else if let Some(n) = said.strip_prefix("answered ") {
+                counted(n).map(Hold::Answered)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// 给对面的 agent 看的一句：为什么没落地、现在怎样了。`reason` 是稳定的 code，
+/// 这一句只是它的说明，不是契约
+fn explanation(action: &TokenAgentAction) -> String {
+    let reason = action.gate_reason.as_deref().unwrap_or_default();
+    let why = match reason {
+        "breaker" => {
+            "this token only proposes merges and reverts on this knowledge base for now".to_string()
+        }
+        _ => match hold_said(action) {
+            Some(hold) if hold.code() == reason => hold.explain(),
+            _ => format!("the server gate held this call ({reason})"),
+        },
+    };
+    format!(
+        "Not applied: {why}. Nothing was changed; the call waits as a proposal that a signed-in \
+         editor answers in the Review tab."
+    )
+}
+
+/// 一次令牌合并的回答（0076）。落地：`merge_id`，提交之后的某一步失败了再带
+/// `follow_up_error`——合并已经在了，所以仍是 200 与 `applied`，不报成失败。
+/// 留成提议：`reason`（稳定的 code）与 `explanation`；撞上的是一条已经开着的提议时带
+/// `code: already_proposed`，`action_id` 就是那一条的
+fn merge_answer(done: &TokenWriteOutcome) -> serde_json::Value {
+    let action = &done.action;
+    let mut answer = json!({ "ok": true, "outcome": action.outcome, "action_id": action.id });
+    if action.outcome == AgentOutcome::Applied.as_str() {
+        answer["merge_id"] = json!(action.merge_id);
+        if let Some(error) = &done.follow_up_error {
+            answer["follow_up_error"] = json!(error);
+        }
+    } else {
+        answer["reason"] = json!(action.gate_reason);
+        answer["explanation"] = json!(explanation(action));
+        if done.existing {
+            answer["code"] = json!("already_proposed");
+        }
+    }
+    answer
+}
+
+/// 经令牌合并队列里的一对重复项。
+///
+/// **闸门不在这里问，也绕不过去**：`merge_duplicate_pair` 自己先问
+/// `hold_for_token_merge` 与裁定表，再决定落地还是留成提议（0076：没有不过闸门的令牌
+/// 合并）。这里**不调** `resolution::decide_review`——那是人的路，不问闸门；也**不调**
+/// `governance::after_human_decision`：令牌的合并不是人的先例，不排治理任务，不替人回答
+/// 这一对上开着的建议。`batch_id` 是成批调用的号，单笔为 None
+pub(crate) async fn merge_pair(
+    state: &AppState,
+    caller: &ReviewCaller,
+    review_id: Uuid,
+    rationale: Option<&str>,
+    batch_id: Option<Uuid>,
+) -> Result<serde_json::Value, AppError> {
+    authorize_write(state, caller).await?;
+    let done = utopia_store::token_agent_actions::merge_duplicate_pair(
+        &state.pool,
+        &token_write(caller, rationale, batch_id),
+        review_id,
+    )
+    .await?;
+    state.emit_review(caller.kb_id);
+    Ok(merge_answer(&done))
+}
+
+/// 经令牌手动合并两个实体：源并进目标，方向是调用方给的。与 [`merge_pair`] 同一套规矩：
+/// 授权在这里，闸门在 `merge_entity_pair` 里面，**不调** `resolution::merge_entities`
+/// （人的路，不问闸门），不调 `governance::after_human_decision`
+pub(crate) async fn merge_entities(
+    state: &AppState,
+    caller: &ReviewCaller,
+    source: Uuid,
+    target: Uuid,
+    rationale: Option<&str>,
+) -> Result<serde_json::Value, AppError> {
+    authorize_write(state, caller).await?;
+    let done = utopia_store::token_agent_actions::merge_entity_pair(
+        &state.pool,
+        &token_write(caller, rationale, None),
+        source,
+        target,
+    )
+    .await?;
+    state.emit_review(caller.kb_id);
+    Ok(merge_answer(&done))
 }
