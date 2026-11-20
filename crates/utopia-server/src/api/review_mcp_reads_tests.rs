@@ -1051,12 +1051,22 @@ async fn the_mcp_endpoint_offers_exactly_the_review_tools_the_ruled_table_opens(
             (
                 "read token of a viewer",
                 &viewer_read,
-                vec!["review_item", "review_list", "review_ontology_list"],
+                vec![
+                    "review_item",
+                    "review_list",
+                    "review_mapping_list",
+                    "review_ontology_list",
+                ],
             ),
             (
                 "read token of an editor",
                 &editor_read,
-                vec!["review_item", "review_list", "review_ontology_list"],
+                vec![
+                    "review_item",
+                    "review_list",
+                    "review_mapping_list",
+                    "review_ontology_list",
+                ],
             ),
             (
                 "write token of an editor",
@@ -1064,13 +1074,17 @@ async fn the_mcp_endpoint_offers_exactly_the_review_tools_the_ruled_table_opens(
                 vec![
                     "review_alignment",
                     "review_batch",
+                    "review_check",
                     "review_conflict",
                     "review_defect",
                     "review_errata",
                     "review_fact",
                     "review_item",
                     "review_keep",
+                    "review_kind_word",
                     "review_list",
+                    "review_mapping",
+                    "review_mapping_list",
                     "review_merge",
                     "review_ontology",
                     "review_ontology_list",
@@ -1087,8 +1101,8 @@ async fn the_mcp_endpoint_offers_exactly_the_review_tools_the_ruled_table_opens(
                 .collect();
             review.sort_unstable();
             anyhow::ensure!(review == expected, "{who}: {review:?}");
-            // 写工具（分开、合并、撤回、成批，对缺陷、事实、矛盾、违规、勘误、对齐、本体提案的提议）
-            // 不是只读；别的 Review 工具都是
+            // 写工具（分开、合并、撤回、成批，对缺陷、事实、矛盾、违规、勘误、对齐、本体提案的提议，
+            // 直接落地的映射决定、两种运行、类别词决定）不是只读；别的 Review 工具都是
             for tool in tools
                 .iter()
                 .filter(|t| t["name"].as_str().is_some_and(|n| n.starts_with("review")))
@@ -1103,7 +1117,10 @@ async fn the_mcp_endpoint_offers_exactly_the_review_tools_the_ruled_table_opens(
                     || tool["name"] == "review_violation"
                     || tool["name"] == "review_errata"
                     || tool["name"] == "review_alignment"
-                    || tool["name"] == "review_ontology";
+                    || tool["name"] == "review_ontology"
+                    || tool["name"] == "review_mapping"
+                    || tool["name"] == "review_check"
+                    || tool["name"] == "review_kind_word";
                 if writes {
                     anyhow::ensure!(
                         tool["annotations"]["readOnlyHint"] == false,

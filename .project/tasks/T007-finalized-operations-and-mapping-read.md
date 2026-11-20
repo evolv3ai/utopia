@@ -3,9 +3,9 @@ id: T007
 title: Let a token decide a mapping, run the check and inference, and record its kind-word decision
 wave: 3
 deps: [T006]
-status: pending
-agent: null
-base: null
+status: done
+agent: build_T007
+base: d7d0ddc3b7ca8e6d42a9f4e65422b56ffb039ae6
 worktree: null
 task_branch: null
 files:
@@ -76,3 +76,189 @@ Heavy: yes
 ## Log
 
 - 2026-11-20 — created by planner
+- 2026-11-20 — coder build_T007: preflight at base `d7d0ddc`, clean. Every path in Context, Approach and the Interface contract exists or is declared in `files`; SC3 and SC4 exist in INTENT.md; T001 to T006 signatures used as landed. Early checks from the brief, all inside `files`, no NEEDS-ORCHESTRATOR: (1) mapping: the person's `mapping.decided` audit row is written in `review_routes.rs` and the status in `mappings.rs`, so the token path's status, ledger row and audit row fit in one transaction in `token_agent_actions.rs`; (2) runs: `reasoning::run` / `check_ontology` / `materialize` are called unchanged and the ledger and audit rows are written by `review_ops.rs`; (3) kind word: `type_bindings::decide_and_apply_human_tx`, `busy_on_lock_timeout`, `normalize` and `jobs::enqueue_unless_queued_tx` are already public, so `type_bindings.rs` and `review_targets.rs` are not edited, and the `alignment.kind_word_decided` audit row is written by the handler. No existing signature changed (`mappings::decide` keeps its own; grep of callers incl. `tests/` and `*_tests.rs`). No test outside `files` asserts a token refusal on the mappings list, the mapping decision, the two runs, or an exact tool list (the one exact list is in `review_mcp_reads_tests.rs`, in `files`).
+- 2026-11-20 — coder build_T007: built.
+  - `crates/utopia-store/src/mappings.rs`: `decide_on(conn, …)` holds the UPDATE; `decide(pool, …)` keeps its signature and calls it on a pooled connection.
+  - `crates/utopia-store/src/token_agent_actions.rs`: `decide_mapping(pool, w, mapping_id, status)` (policy row `Mapping` must finalize; `bad_status`; label read; then one transaction: row lock, `NotFound` / `already_decided` on an equal status, `mappings::decide_on`, `record_applied`, audit `mapping.decided` with `token_audit_detail`) and `decide_kind_word(pool, w, kind_word, type_id, votes)` (policy row `AlignmentKindWord`; one transaction with the person's 2 s lock timeout: `decide_and_apply_human_tx`, the `align_phrases` job, `record_applied`; lock timeout maps to `alignment_busy`; `None` when the person's code reports nothing written). Neither reads the rate limit.
+  - `crates/utopia-server/src/api/review_ops.rs`: `mappings` (token read), `decide_mapping`, `run_check`, `decide_kind_word` (MCP entry, `authorize_write` first) and `kind_word_decision` (shared with the REST token branch, no `guard`). Order in `decide_mapping` and `run_check` is the contract's: `authorize_write`; `bad_status` / `unknown_run` / `inference_off`; `target_open`; policy row must be `Applied`; `guard`; store call or run. A run writes its `applied` row and its audit row in one transaction right after the run returns; a failure there fails the call.
+  - `crates/utopia-server/src/api/review_routes.rs`: `decide_mapping`, `run_consistency_check`, `run_inference` take `SessionOrToken`, token branch returns first. Session statements moved unchanged into `consistency_run`, `inference_on`, `inference_run` and `kind_word_class`, which the token path also calls, so the report and the refusals are the person's by construction. Kind-word handler: its two checks stay first for both callers; only then a token goes to `review_ops::kind_word_decision`.
+  - `crates/utopia-server/src/api/mapping_routes.rs`: `list` takes `SessionOrToken`; the body moved into `page_body`.
+  - `crates/utopia-server/src/api/review_tools.rs`: `review_mapping_list` (read, `{"readOnlyHint":true}`, listed for every token that reaches the base), `review_mapping`, `review_check`, `review_kind_word` (write tools, finalize annotations).
+  - `crates/utopia-server/src/api/mod.rs`: `review_token_run_tests` and `review_token_kind_word_tests` declared; two route comments.
+  - Tests: new store file `a_token_finalize_writes_its_row_with_the_change.rs` (2 tests); `review_token_mapping_tests.rs` replaced (3 tests; `a_token_is_still_refused_on_the_mapping_route` removed); new `review_token_run_tests.rs` (3) and `review_token_kind_word_tests.rs` (3); `review_mcp_reads_tests.rs` gains the four names in the expected lists and the three write names in the `writes` expression, nothing else. Seeds are direct inserts; no model job.
+  - No migration, no dependency, no `AgentOperation` / `AppError` variant, no item struct field; `CURRENT_SCHEMA_VERSION` untouched.
+- 2026-11-20 — coder build_T007: carried item settled (kind-word label). `token_agent_actions::decide_kind_word` stores `request: {"kind_word": <the word as sent>, "class": <the body's class>}`, so `review_targets::target_label` returns the word. Asserted not empty and equal to the word in the store test (ledger payload and Agent History row) and in `a_token_kind_word_decision_keeps_its_answers_and_gains_one_applied_row` (Agent History row over HTTP). `review_targets.rs` is unchanged.
+- 2026-11-20 — coder build_T007: readings taken where the contract is silent (none changes a contract shape).
+  1. The token answer of all three finalized operations is exactly the person's body (`{"ok": true}` for a mapping and a kind word, the report for a run); it carries no `outcome` or `action_id`. The ledger row is found through Agent History.
+  2. Ledger payloads: mapping `{request: {status}, target_label, action: <status>}`; run `{request: {}, target_label: <base name>}` (the routes have no body; the MCP `run` argument is not stored); kind word `{request: {kind_word, class}, target_label, action: bind | none}`. Kind-word `target_key` is `type_bindings::normalize(word)`; `target_id` is the base id.
+  3. `review_check` with a `run` other than `consistency` or `inference` is refused with a new code `unknown_run` (after the write check); REST cannot reach it.
+  4. The kind-word audit row stays best-effort after the commit, as it is today (`let _ = audit::record`); only its detail grew. The ledger row is in the decision's transaction. The mapping and run audit rows are in the same transaction as their ledger row.
+  5. A person's kind-word decision is an upsert, so a word the base has not listed is recorded as a new binding for a token as for a person (existing `token_setup_tests` rely on it); the 404 remains only for the store reporting nothing written. The tool description says so.
+  6. The store functions re-check the policy row and `bad_status` themselves, so a caller other than `review_ops` cannot finalize past the table.
+  7. `guard` is called with `AgentOperation::Mapping` / `ConsistencyRun`: the limit applies, the breaker is not read (it concerns merges only).
+- 2026-11-20 — coder build_T007: commands, primary worktree, Git Bash, `CARGO_TARGET_DIR=C:/Users/Owner/.gsd-path/cargo-target/coder-m004`, own databases `m004_t007_dev_store` and `m004_t007_dev` (created, migrated with `cargo run -p utopia-store --example migrate`, both "数据库迁移完成"), `UTOPIA_TEST_REQUIRE_DB=1`. The four test files passed on their first run; no test was changed after a failure.
+  - `cargo test -p utopia-store --test a_token_finalize_writes_its_row_with_the_change -- <the two Verify names>` → both `... ok`; `test result: ok. 2 passed; 0 failed`.
+  - `cargo test -p utopia-store --test a_token_proposal_waits_for_a_person --test a_token_merge_is_gated_recorded_and_undone --test a_token_keep_is_never_human_precedent` → `ok. 8 passed`, `ok. 10 passed`, `ok. 6 passed` (three `test result: ok. [1-9]` lines).
+  - Store tests my store change can affect: `cargo test -p utopia-store --test store -- a_mapping_is_not_a_fact a_kind_word_binds_to_a_class` → `ok. 6 passed; 355 filtered out`; `cargo test -p utopia-store --lib` → `ok. 102 passed; 1 ignored`. The rest of the store suite was not run.
+  - `cargo test -p utopia-server -- <the ten Verify names>` → `test result: ok. 10 passed; 0 failed; 949 filtered out`; each of the ten filters matched exactly one mounted test (`api::review_token_mapping_tests::` 3, `api::review_token_run_tests::` 3, `api::review_token_kind_word_tests::` 3, `api::review_mcp_reads_tests::` 1). The two store filters match the two tests of the store file.
+  - `cargo test -p utopia-server` (whole crate, after `cargo fmt`) → `test result: ok. 957 passed; 0 failed; 2 ignored` (949 before, minus the removed 401 test, plus nine new). `chat_empty_reply_tests::gathering_errors_cannot_spoof_the_private_handoff` passed in this run. No test outside this task's files failed.
+  - `cargo fmt --all --check` → first run reported diffs in four of this task's files; `cargo fmt --all` changed only those; check exit 0.
+  - `cargo clippy --workspace --all-targets -- -D warnings` → exit 0.
+  - The Verify command itself was not run (it names the orchestrator's databases). Its module-filter step was not run separately; the whole-crate run covers those modules, and the two new module filters each match three tests.
+- 2026-11-20 — coder build_T007: deviations from the brief or the interface contract: none. Not tested: a run whose ledger or audit write fails after the run succeeded (the code path returns the error; no test forces it); two concurrent runs of one base by a token (no lock was added, as ruled); the `None` return of `decide_kind_word` (the person's upsert always writes); a token of a non-member owner on the mappings list (covered only by the shared `authorize_read`, tested for an excluded base). The web surface (Agent History and Activity rows reading "owner via token name") is covered here only by the ledger and audit data those views read; the browser walkthrough is left to final review.
+- 2026-11-20 — orchestrator Verify (sidecar gsd-path-verify/task-t007-verify): pass, exit 0; output tail:
+  ```
+  test api::review_totals_tests::a_token_reading_duplicates_receives_the_same_total_as_a_session ... ok
+  test api::review_token_reads_tests::a_token_receives_each_sections_items_in_the_session_order ... ok
+  test api::review_totals_tests::a_session_list_response_differs_from_before_only_by_the_added_total_key ... ok
+  test api::review_token_run_tests::a_token_consistency_check_and_inference_run_each_write_one_applied_row ... ok
+  test api::review_token_revert_tests::a_token_reverts_its_own_merge_over_the_api_and_over_mcp_and_a_second_revert_answers_already_decided ... ok
+  test api::review_token_revert_tests::review_revert_is_listed_only_to_a_write_token_of_an_editor_and_says_what_a_revert_does_not_recall ... ok
+  test api::review_totals_tests::an_empty_queue_has_total_0_and_an_offset_past_the_end_returns_no_items_with_the_true_total ... ok
+  test api::review_token_reads_tests::a_tokens_total_counts_the_listed_rows_and_counts_keep_their_values ... ok
+  test api::review_token_run_tests::the_call_after_the_200th_finalized_write_answers_429_and_changes_nothing ... ok
+  test api::review_token_revert_tests::a_token_reverts_any_token_agents_merge_of_the_base_and_an_unknown_or_foreign_merge_id_is_not_found ... ok
+  test api::review_totals_tests::the_seed_puts_items_in_every_one_of_the_thirteen_sections ... ok
+  test api::review_token_revert_tests::after_a_token_merge_and_its_revert_every_fact_entity_and_evidence_row_is_as_before ... ok
+  test api::review_totals_tests::the_total_of_every_list_queue_is_the_number_of_rows_its_pages_return ... ok
+  test api::review_token_reads_tests::a_token_whose_kb_ids_exclude_the_base_gets_404_on_every_review_read ... ok
+  test api::review_token_merge_tests::of_a_person_the_governor_and_a_token_deciding_one_pair_exactly_one_is_applied_and_the_losing_token_gets_already_decided ... ok
+  test api::review_token_violation_tests::a_token_violation_decision_waits_as_a_proposal_and_a_person_applies_it ... ok
+  test api::review_token_reads_tests::a_token_page_size_is_clamped_and_an_offset_at_or_past_the_total_returns_no_items ... ok
+  
+  test result: ok. 140 passed; 0 failed; 0 ignored; 0 measured; 819 filtered out; finished in 30.80s
+  ```
+- 2026-11-20 — orchestrator regression Verify of T001 (sidecar gsd-path-verify/task-t007-verify): pass, exit 0; output tail:
+  ```
+  test api::review_token_reads_tests::agent_history_without_a_token_action_reads_governor_rows_only_and_a_ledger_row_keeps_its_stored_token_name ... ok
+  test api::review_token_reads_tests::a_token_paging_alignment_with_equal_timestamps_visits_each_waiting_item_exactly_once ... ok
+  test api::review_totals_tests::a_session_list_response_differs_from_before_only_by_the_added_total_key ... ok
+  test api::review_token_reads_tests::a_token_asking_for_mappings_or_an_unknown_section_is_refused_with_unknown_queue ... ok
+  test api::review_totals_tests::the_alignment_low_confidence_and_agent_totals_follow_the_list_while_counts_keep_their_values ... ok
+  test api::review_token_reads_tests::a_dead_token_gets_401_and_an_excluded_token_gets_404_on_the_api_and_403_on_the_mcp_endpoint ... ok
+  test api::review_totals_tests::alignment_items_with_one_timestamp_are_each_listed_once_across_pages ... ok
+  test api::review_totals_tests::a_token_reading_duplicates_receives_the_same_total_as_a_session ... ok
+  test api::review_totals_tests::an_empty_queue_has_total_0_and_an_offset_past_the_end_returns_no_items_with_the_true_total ... ok
+  test api::review_totals_tests::the_seed_puts_items_in_every_one_of_the_thirteen_sections ... ok
+  test api::review_routes::attribution_tests::agent_history_merges_ledger_rows_by_action_time_and_keeps_governor_order ... ok
+  test api::review_token_reads_tests::a_read_token_of_a_viewer_lists_each_of_the_thirteen_sections_as_a_session_editor_sees_them ... ok
+  test api::review_token_reads_tests::a_token_receives_each_sections_items_in_the_session_order ... ok
+  test api::review_totals_tests::the_total_of_every_list_queue_is_the_number_of_rows_its_pages_return ... ok
+  test api::review_token_reads_tests::a_tokens_total_counts_the_listed_rows_and_counts_keep_their_values ... ok
+  test api::review_token_reads_tests::a_token_whose_kb_ids_exclude_the_base_gets_404_on_every_review_read ... ok
+  test api::review_token_reads_tests::a_token_page_size_is_clamped_and_an_offset_at_or_past_the_total_returns_no_items ... ok
+  
+  test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 933 filtered out; finished in 14.30s
+  ```
+- 2026-11-20 — orchestrator regression Verify of T002 (sidecar gsd-path-verify/task-t007-verify): pass, exit 0; output tail:
+  ```
+  test api::review_totals_tests::a_token_reading_duplicates_receives_the_same_total_as_a_session ... ok
+  test api::review_totals_tests::the_alignment_low_confidence_and_agent_totals_follow_the_list_while_counts_keep_their_values ... ok
+  test api::review_totals_tests::alignment_items_with_one_timestamp_are_each_listed_once_across_pages ... ok
+  test api::review_token_revert_tests::review_revert_is_listed_only_to_a_write_token_of_an_editor_and_says_what_a_revert_does_not_recall ... ok
+  test api::review_token_reads_tests::a_token_receives_each_sections_items_in_the_session_order ... ok
+  test api::review_token_revert_tests::a_token_reverts_its_own_merge_over_the_api_and_over_mcp_and_a_second_revert_answers_already_decided ... ok
+  test api::review_totals_tests::an_empty_queue_has_total_0_and_an_offset_past_the_end_returns_no_items_with_the_true_total ... ok
+  test api::review_token_merge_tests::each_of_the_six_hold_reasons_lands_a_proposal_that_names_it_for_the_queue_merge_and_the_manual_merge ... ok
+  test api::review_token_reads_tests::a_tokens_total_counts_the_listed_rows_and_counts_keep_their_values ... ok
+  test api::review_totals_tests::the_seed_puts_items_in_every_one_of_the_thirteen_sections ... ok
+  test api::review_totals_tests::the_total_of_every_list_queue_is_the_number_of_rows_its_pages_return ... ok
+  test api::review_token_revert_tests::a_token_reverts_any_token_agents_merge_of_the_base_and_an_unknown_or_foreign_merge_id_is_not_found ... ok
+  test api::review_token_revert_tests::after_a_token_merge_and_its_revert_every_fact_entity_and_evidence_row_is_as_before ... ok
+  test api::review_token_reads_tests::a_token_whose_kb_ids_exclude_the_base_gets_404_on_every_review_read ... ok
+  test api::review_token_merge_tests::of_a_person_the_governor_and_a_token_deciding_one_pair_exactly_one_is_applied_and_the_losing_token_gets_already_decided ... ok
+  test api::review_token_violation_tests::a_token_violation_decision_waits_as_a_proposal_and_a_person_applies_it ... ok
+  test api::review_token_reads_tests::a_token_page_size_is_clamped_and_an_offset_at_or_past_the_total_returns_no_items ... ok
+  
+  test result: ok. 124 passed; 0 failed; 0 ignored; 0 measured; 835 filtered out; finished in 28.68s
+  ```
+- 2026-11-20 — orchestrator regression Verify of T003 (sidecar gsd-path-verify/task-t007-verify): pass, exit 0; output tail:
+  ```
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:21152) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:40884) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:39152) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:21992) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:35076) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:35828) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:38160) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  [33m
+  (!) Some chunks are larger than 500 kB after minification. Consider:
+  - Using dynamic import() to code-split the application
+  - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+  - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+  ```
+- 2026-11-20 — orchestrator regression Verify of T004 (sidecar gsd-path-verify/task-t007-verify): pass, exit 0; output tail:
+  ```
+  test api::review_totals_tests::a_token_reading_duplicates_receives_the_same_total_as_a_session ... ok
+  test api::review_totals_tests::alignment_items_with_one_timestamp_are_each_listed_once_across_pages ... ok
+  test api::review_totals_tests::the_alignment_low_confidence_and_agent_totals_follow_the_list_while_counts_keep_their_values ... ok
+  test api::review_token_reads_tests::a_token_receives_each_sections_items_in_the_session_order ... ok
+  test api::review_token_revert_tests::a_token_reverts_its_own_merge_over_the_api_and_over_mcp_and_a_second_revert_answers_already_decided ... ok
+  test api::review_token_revert_tests::review_revert_is_listed_only_to_a_write_token_of_an_editor_and_says_what_a_revert_does_not_recall ... ok
+  test api::review_token_merge_tests::each_of_the_six_hold_reasons_lands_a_proposal_that_names_it_for_the_queue_merge_and_the_manual_merge ... ok
+  test api::review_totals_tests::an_empty_queue_has_total_0_and_an_offset_past_the_end_returns_no_items_with_the_true_total ... ok
+  test api::review_token_reads_tests::a_tokens_total_counts_the_listed_rows_and_counts_keep_their_values ... ok
+  test api::review_totals_tests::the_seed_puts_items_in_every_one_of_the_thirteen_sections ... ok
+  test api::review_totals_tests::the_total_of_every_list_queue_is_the_number_of_rows_its_pages_return ... ok
+  test api::review_token_revert_tests::a_token_reverts_any_token_agents_merge_of_the_base_and_an_unknown_or_foreign_merge_id_is_not_found ... ok
+  test api::review_token_revert_tests::after_a_token_merge_and_its_revert_every_fact_entity_and_evidence_row_is_as_before ... ok
+  test api::review_token_reads_tests::a_token_whose_kb_ids_exclude_the_base_gets_404_on_every_review_read ... ok
+  test api::review_token_merge_tests::of_a_person_the_governor_and_a_token_deciding_one_pair_exactly_one_is_applied_and_the_losing_token_gets_already_decided ... ok
+  test api::review_token_violation_tests::a_token_violation_decision_waits_as_a_proposal_and_a_person_applies_it ... ok
+  test api::review_token_reads_tests::a_token_page_size_is_clamped_and_an_offset_at_or_past_the_total_returns_no_items ... ok
+  
+  test result: ok. 127 passed; 0 failed; 0 ignored; 0 measured; 832 filtered out; finished in 29.05s
+  ```
+- 2026-11-20 — orchestrator regression Verify of T005 (sidecar gsd-path-verify/task-t007-verify): pass, exit 0; output tail:
+  ```
+  test api::review_totals_tests::alignment_items_with_one_timestamp_are_each_listed_once_across_pages ... ok
+  test api::review_token_revert_tests::a_token_revert_of_a_persons_or_the_governors_merge_lands_a_proposal_and_reverts_nothing ... ok
+  test api::review_totals_tests::the_alignment_low_confidence_and_agent_totals_follow_the_list_while_counts_keep_their_values ... ok
+  test api::review_token_reads_tests::a_token_receives_each_sections_items_in_the_session_order ... ok
+  test api::review_token_revert_tests::review_revert_is_listed_only_to_a_write_token_of_an_editor_and_says_what_a_revert_does_not_recall ... ok
+  test api::review_totals_tests::an_empty_queue_has_total_0_and_an_offset_past_the_end_returns_no_items_with_the_true_total ... ok
+  test api::review_token_revert_tests::a_token_reverts_its_own_merge_over_the_api_and_over_mcp_and_a_second_revert_answers_already_decided ... ok
+  test api::review_token_merge_tests::each_of_the_six_hold_reasons_lands_a_proposal_that_names_it_for_the_queue_merge_and_the_manual_merge ... ok
+  test api::review_token_reads_tests::a_tokens_total_counts_the_listed_rows_and_counts_keep_their_values ... ok
+  test api::review_totals_tests::the_seed_puts_items_in_every_one_of_the_thirteen_sections ... ok
+  test api::review_token_revert_tests::a_token_reverts_any_token_agents_merge_of_the_base_and_an_unknown_or_foreign_merge_id_is_not_found ... ok
+  test api::review_totals_tests::the_total_of_every_list_queue_is_the_number_of_rows_its_pages_return ... ok
+  test api::review_token_revert_tests::after_a_token_merge_and_its_revert_every_fact_entity_and_evidence_row_is_as_before ... ok
+  test api::review_token_reads_tests::a_token_whose_kb_ids_exclude_the_base_gets_404_on_every_review_read ... ok
+  test api::review_token_merge_tests::of_a_person_the_governor_and_a_token_deciding_one_pair_exactly_one_is_applied_and_the_losing_token_gets_already_decided ... ok
+  test api::review_token_violation_tests::a_token_violation_decision_waits_as_a_proposal_and_a_person_applies_it ... ok
+  test api::review_token_reads_tests::a_token_page_size_is_clamped_and_an_offset_at_or_past_the_total_returns_no_items ... ok
+  
+  test result: ok. 127 passed; 0 failed; 0 ignored; 0 measured; 832 filtered out; finished in 29.03s
+  ```
+- 2026-11-20 — orchestrator regression Verify of T006 (sidecar gsd-path-verify/task-t007-verify): pass, exit 0; output tail:
+  ```
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:32464) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:33284) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:14252) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:18652) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:39732) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:8312) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:40288) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  [33m
+  (!) Some chunks are larger than 500 kB after minification. Consider:
+  - Using dynamic import() to code-split the application
+  - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+  - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+  ```

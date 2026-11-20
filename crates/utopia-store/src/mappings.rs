@@ -196,6 +196,20 @@ pub async fn decide(
     status: &str,
     actor: Uuid,
 ) -> AppResult<()> {
+    let mut conn = pool.acquire().await?;
+    decide_on(&mut conn, kb_id, mapping_id, status, actor).await
+}
+
+/// [`decide`] 的那一句，跑在调用方的连接上（0076）：令牌的映射决定要和它的台账行、审计行
+/// 一起提交、一起回滚（`token_agent_actions::decide_mapping`），所以改状态的这一句得能进
+/// 别人的事务。人的那条路仍走 [`decide`]，签名与行为都不变
+pub async fn decide_on(
+    conn: &mut sqlx::PgConnection,
+    kb_id: Uuid,
+    mapping_id: Uuid,
+    status: &str,
+    actor: Uuid,
+) -> AppResult<()> {
     let res = sqlx::query(
         "UPDATE concept_mappings
             SET status = $3, decided_by = $4, decided_at = now(), updated_at = now()
@@ -205,7 +219,7 @@ pub async fn decide(
     .bind(mapping_id)
     .bind(status)
     .bind(actor)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
     if res.rows_affected() == 0 {
         return Err(AppError::NotFound);

@@ -12,7 +12,8 @@ use utopia_core::AppError;
 use uuid::Uuid;
 
 use super::graph_routes::require_kb;
-use crate::auth::AuthUser;
+use super::review_ops::{self, ReviewCaller};
+use crate::auth::{AuthUser, SessionOrToken};
 use crate::error::ApiResult;
 use crate::state::AppState;
 
@@ -33,26 +34,68 @@ pub struct ListQuery {
 /// **Viewer 就能看。** 口径是「这个数怎么算」，问数的答案直接由它决定——
 /// 看得见答案却看不见口径，等于要人信一个不给看的算法。改（`revise`）
 /// 才要 Editor。
+///
+/// 个人令牌也能读（0076）：令牌走 `review_ops::mappings`（主人至少是 Viewer、令牌的
+/// `kb_ids` 够得着这个库，否则 404），会话照旧过下面的 `require_kb`。两边过了检查拿的都是
+/// [`page_body`] 的那一页——令牌要先读得到映射，才定得了它
 pub async fn list(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    caller: SessionOrToken,
     Path(kb_id): Path<Uuid>,
     Query(q): Query<ListQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    let user = caller.user;
+    if let Some(token) = caller.pat {
+        let caller = ReviewCaller { user, token, kb_id };
+        return Ok(Json(
+            review_ops::mappings(
+                &state,
+                &caller,
+                q.status.as_deref(),
+                q.q.as_deref(),
+                q.limit,
+                q.offset,
+            )
+            .await?,
+        ));
+    }
     require_kb(&state, &user, kb_id, Role::Viewer).await?;
-    let status = q.status.as_deref().filter(|s| !s.is_empty());
+    Ok(Json(
+        page_body(
+            &state,
+            kb_id,
+            q.status.as_deref(),
+            q.q.as_deref(),
+            q.limit,
+            q.offset,
+        )
+        .await?,
+    ))
+}
+
+/// 一页口径的响应体，从会话处理函数里原样挪出来：筛选的校验、那一页、三种状态的计数、
+/// 上一轮探索的账。**这里不做授权**——会话先过 `require_kb`，令牌先过 `review_ops` 的读
+/// 检查，MCP 的 `review_mapping_list` 走的也是令牌那一条；三个入口拿到的是同一个对象
+pub(super) async fn page_body(
+    state: &AppState,
+    kb_id: Uuid,
+    status: Option<&str>,
+    q: Option<&str>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+) -> Result<serde_json::Value, AppError> {
+    let status = status.filter(|s| !s.is_empty());
     if let Some(s) = status {
         if !matches!(s, "proposed" | "confirmed" | "rejected") {
             return Err(AppError::invalid(
                 "bad_status",
                 "status must be proposed, confirmed or rejected",
-            )
-            .into());
+            ));
         }
     }
-    let needle = q.q.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let limit = q.limit.unwrap_or(MAPPING_PAGE).clamp(1, 200);
-    let offset = q.offset.unwrap_or(0).max(0);
+    let needle = q.map(str::trim).filter(|s| !s.is_empty());
+    let limit = limit.unwrap_or(MAPPING_PAGE).clamp(1, 200);
+    let offset = offset.unwrap_or(0).max(0);
 
     let (items, total) =
         utopia_store::mappings::page(&state.pool, kb_id, status, needle, limit, offset).await?;
@@ -64,12 +107,12 @@ pub async fn list(
         .await?
         .into_iter()
         .next();
-    Ok(Json(json!({
+    Ok(json!({
         "items": items,
         "total": total,
         "counts": { "proposed": proposed, "confirmed": confirmed, "rejected": rejected },
         "last_run": last_run,
-    })))
+    }))
 }
 
 #[derive(Deserialize)]

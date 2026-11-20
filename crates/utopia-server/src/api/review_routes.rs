@@ -1837,12 +1837,22 @@ pub struct DecideMappingReq {
 /// **改状态不删行**：确认发生过、拒绝也发生过。而拒绝留痕当下就有用——
 /// 下一轮探索会再次算出被拒绝过的那条，`propose` 的 `WHERE status = 'proposed'`
 /// 据此不把它刷回待看。
+///
+/// 写令牌也能定（0076）：裁定表里映射是「直接落地」，令牌走 `review_ops::decide_mapping`——
+/// 过限速、状态与台账行、审计行一个事务。令牌在进下面这一段之前就离开了处理函数；会话
+/// 照旧跑下面的代码，回答与审计行同从前一个字不差
 pub async fn decide_mapping(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    caller: SessionOrToken,
     Path((kb_id, mapping_id)): Path<(Uuid, Uuid)>,
     Json(req): Json<DecideMappingReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    let user = caller.user;
+    if let Some(token) = caller.pat {
+        let caller = ReviewCaller { user, token, kb_id };
+        let answer = review_ops::decide_mapping(&state, &caller, mapping_id, &req.status).await?;
+        return Ok(Json(answer));
+    }
     require_kb(&state, &user, kb_id, Role::Editor).await?;
     if !matches!(req.status.as_str(), "confirmed" | "rejected") {
         return Err(utopia_core::AppError::invalid(
@@ -2076,16 +2086,24 @@ async fn violation_decision(
 ///
 /// `predicates_with_axioms` 一并回给前端：**零和零的含义不同**。没有公理时
 /// 结论是"没有判据"，界面该说"先导一份带公理的本体"，而不是"未发现矛盾"。
+///
+/// 写令牌也能跑（0076）：裁定表里这一行是「直接落地」，令牌走 `review_ops::run_check`——
+/// 过限速，跑的就是下面的 [`consistency_run`]，跑完写一行台账与带令牌名字的审计行。会话
+/// 照旧：回答与审计行同从前一个字不差
 pub async fn run_consistency_check(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    caller: SessionOrToken,
     Path(kb_id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    let user = caller.user;
+    if let Some(token) = caller.pat {
+        let caller = ReviewCaller { user, token, kb_id };
+        return Ok(Json(
+            review_ops::run_check(&state, &caller, "consistency").await?,
+        ));
+    }
     require_kb(&state, &user, kb_id, Role::Editor).await?;
-    let report = utopia_store::reasoning::run(&state.pool, kb_id).await?;
-    // 本体自洽性一并算。两者判据同源（都是本体声明的公理），分两个按钮
-    // 只会让人点两次
-    let onto = utopia_store::reasoning::check_ontology(&state.pool, kb_id).await?;
+    let (detail, body) = consistency_run(&state, kb_id).await?;
     let _ = utopia_store::audit::record(
         &state.pool,
         Some(kb_id),
@@ -2093,19 +2111,34 @@ pub async fn run_consistency_check(
         "consistency.checked",
         "knowledge_base",
         Some(kb_id),
-        json!({
-            "edges": report.edges,
-            "predicates_with_axioms": report.predicates_with_axioms,
-            "found": report.found,
-            "inserted": report.inserted,
-            "cleared": report.cleared,
-            "cycles_capped": report.cycles_capped,
-            "defects_found": onto.found,
-        }),
+        detail,
     )
     .await;
     state.emit_review(kb_id);
-    Ok(Json(json!({
+    Ok(Json(body))
+}
+
+/// 跑一遍一致性检查，回（审计行的 detail，响应体）。从会话处理函数里原样挪出来，没有新
+/// 加的锁：会话与令牌（`review_ops::run_check`）跑的是同一段，所以令牌拿到的报告就是人
+/// 拿到的那一份。**这里不做授权、不写审计**——谁跑的由调用方记
+pub(super) async fn consistency_run(
+    state: &AppState,
+    kb_id: Uuid,
+) -> Result<(serde_json::Value, serde_json::Value), utopia_core::AppError> {
+    let report = utopia_store::reasoning::run(&state.pool, kb_id).await?;
+    // 本体自洽性一并算。两者判据同源（都是本体声明的公理），分两个按钮
+    // 只会让人点两次
+    let onto = utopia_store::reasoning::check_ontology(&state.pool, kb_id).await?;
+    let detail = json!({
+        "edges": report.edges,
+        "predicates_with_axioms": report.predicates_with_axioms,
+        "found": report.found,
+        "inserted": report.inserted,
+        "cleared": report.cleared,
+        "cycles_capped": report.cycles_capped,
+        "defects_found": onto.found,
+    });
+    let body = json!({
         "edges": report.edges,
         "predicates_with_axioms": report.predicates_with_axioms,
         "found": report.found,
@@ -2119,7 +2152,8 @@ pub async fn run_consistency_check(
         "classes": onto.classes,
         "defects_found": onto.found,
         "defects_new": onto.inserted,
-    })))
+    });
+    Ok((detail, body))
 }
 
 #[derive(Deserialize)]
@@ -2290,12 +2324,45 @@ pub async fn decide_pending(
     }
 }
 
+/// 跑一遍物化推导。
+///
+/// 写令牌也能跑（0076）：与一致性检查同一行裁定，令牌走 `review_ops::run_check`——开关
+/// 关着答的是同一个 `inference_off`（一行不写），开着就过限速、跑下面的
+/// [`inference_run`]、写一行台账与带令牌名字的审计行。会话照旧
 pub async fn run_inference(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    caller: SessionOrToken,
     Path(kb_id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    let user = caller.user;
+    if let Some(token) = caller.pat {
+        let caller = ReviewCaller { user, token, kb_id };
+        return Ok(Json(
+            review_ops::run_check(&state, &caller, "inference").await?,
+        ));
+    }
     require_kb(&state, &user, kb_id, Role::Editor).await?;
+    inference_on(&state, kb_id).await?;
+    let (detail, body) = inference_run(&state, kb_id).await?;
+    let _ = utopia_store::audit::record(
+        &state.pool,
+        Some(kb_id),
+        user.id,
+        "inference.materialized",
+        "knowledge_base",
+        Some(kb_id),
+        detail,
+    )
+    .await;
+    state.emit_graph(kb_id);
+    Ok(Json(body))
+}
+
+/// 这个库开没开物化推导：没开是 `inference_off`。会话与令牌问的是同一句
+pub(super) async fn inference_on(
+    state: &AppState,
+    kb_id: Uuid,
+) -> Result<(), utopia_core::AppError> {
     let on: bool =
         sqlx::query_scalar("SELECT materialize_inferences FROM knowledge_bases WHERE id = $1")
             .bind(kb_id)
@@ -2306,36 +2373,27 @@ pub async fn run_inference(
         return Err(utopia_core::AppError::invalid(
             "inference_off",
             "materialized inference is off for this knowledge base",
-        )
-        .into());
+        ));
     }
+    Ok(())
+}
+
+/// 跑一遍物化推导，回（审计行的 detail，响应体）——两样是同一组数。从会话处理函数里原样
+/// 挪出来，没有新加的锁；**这里不做授权、不看开关、不写审计**，那三样归调用方
+pub(super) async fn inference_run(
+    state: &AppState,
+    kb_id: Uuid,
+) -> Result<(serde_json::Value, serde_json::Value), utopia_core::AppError> {
     let report = utopia_store::reasoning::materialize(&state.pool, kb_id).await?;
-    let _ = utopia_store::audit::record(
-        &state.pool,
-        Some(kb_id),
-        user.id,
-        "inference.materialized",
-        "knowledge_base",
-        Some(kb_id),
-        json!({
-            "rules": report.rules,
-            "edges": report.edges,
-            "derived": report.derived,
-            "inserted": report.inserted,
-            "invalidated": report.invalidated,
-            "capped": report.capped,
-        }),
-    )
-    .await;
-    state.emit_graph(kb_id);
-    Ok(Json(json!({
+    let numbers = json!({
         "rules": report.rules,
         "edges": report.edges,
         "derived": report.derived,
         "inserted": report.inserted,
         "invalidated": report.invalidated,
         "capped": report.capped,
-    })))
+    });
+    Ok((numbers.clone(), numbers))
 }
 
 #[derive(Deserialize)]
@@ -2600,26 +2658,19 @@ pub async fn decide_alignment_kind_word(
 ) -> ApiResult<Json<serde_json::Value>> {
     caller.require_write(Some(kb_id))?;
     let token_id = caller.token_id();
-    let user = caller.user;
+    let SessionOrToken { user, pat } = caller;
     require_kb(&state, &user, kb_id, Role::Editor).await?;
-    let class = match req
-        .class
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        None => None,
-        Some(key) => Some(
-            utopia_store::graph::entity_types(&state.pool, kb_id)
-                .await?
-                .into_iter()
-                .find(|c| c.key == key)
-                .map(|c| c.id)
-                .ok_or_else(|| {
-                    utopia_core::AppError::invalid("unknown_class", "no class with that key")
-                })?,
-        ),
-    };
+    if let Some(token) = pat {
+        // 令牌过了上面两道从前就有的检查（所以主人不够格时仍是那句不带 code 的 403），
+        // 之后只有 store 的那一次调用换了：判定连同一行台账一个事务，审计行多带令牌的
+        // 名字与台账行的 id。回答同从前；**不过限速**（0076：这条路由不为令牌收窄）
+        let caller = ReviewCaller { user, token, kb_id };
+        let answer =
+            review_ops::kind_word_decision(&state, &caller, &kind_word, req.class.as_deref())
+                .await?;
+        return Ok(Json(answer));
+    }
+    let class = kind_word_class(&state, kb_id, req.class.as_deref()).await?;
     let votes = json!({ "person": req.class });
     let written = utopia_store::type_bindings::decide_and_apply_human(
         &state.pool,
@@ -2648,6 +2699,28 @@ pub async fn decide_alignment_kind_word(
     state.emit_review(kb_id);
     state.emit_graph(kb_id);
     Ok(Json(json!({ "ok": true })))
+}
+
+/// 请求里的类键对上这个库的哪个类：空 = 没有类对得上（None），认不出的键是
+/// `unknown_class`。从类别词的处理函数里原样挪出来，会话与令牌问的是同一句
+pub(super) async fn kind_word_class(
+    state: &AppState,
+    kb_id: Uuid,
+    class: Option<&str>,
+) -> Result<Option<Uuid>, utopia_core::AppError> {
+    match class.map(str::trim).filter(|s| !s.is_empty()) {
+        None => Ok(None),
+        Some(key) => Ok(Some(
+            utopia_store::graph::entity_types(&state.pool, kb_id)
+                .await?
+                .into_iter()
+                .find(|c| c.key == key)
+                .map(|c| c.id)
+                .ok_or_else(|| {
+                    utopia_core::AppError::invalid("unknown_class", "no class with that key")
+                })?,
+        )),
+    }
 }
 
 #[derive(Deserialize)]

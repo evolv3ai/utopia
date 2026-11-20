@@ -21,6 +21,9 @@
 //! 与规则（[`propose_alignment_phrase`]、[`propose_alignment_rule`]）也是；本体提案不在
 //! Review 的列表里，它的读（[`ontology_proposals`]）与拒绝、采纳的提议（[`propose_ontology`]）
 //! 走的是它自己的那几条路由。
+//! 裁定表里「直接落地」的另外三行也在这里：语义层映射的读（[`mappings`]）与决定
+//! （[`decide_mapping`]）、一致性检查与物化推导（[`run_check`]）——都过限速、落地时留一行
+//! `applied`；类别词的决定（[`decide_kind_word`]）从前就直接落地，补上了台账行，不限速。
 //! 别的裁决都还关着——读得到「等你点头」不等于能替人点头。
 //!
 //! 每一笔要落地的写入之前还有两道，都只在 [`guard`] 一处：限速（一枚令牌在一个库里
@@ -314,6 +317,8 @@ fn rate_limited() -> AppError {
 /// [`keep`]、[`merge_pair`]、[`merge_entities`]、[`revert_merge`] 都在写的检查之后、
 /// store 函数之前调它；成批的每一笔、整批撤回的每一次、MCP 的每个写工具走的都是这四个
 /// 函数，所以没有哪个入口绕得过去（一枚被限速或跳了熔断器的令牌换一个入口也一样）。
+/// 映射的决定（[`decide_mapping`]）与两种运行（[`run_check`]）同样先调它再落地；类别词的
+/// 决定（[`kind_word_decision`]）按裁定不调，但它的行数在这里的总数里。
 ///
 /// - 限速：台账上这枚令牌在这个库里最近一小时落地的行数到了
 ///   [`TOKEN_WRITES_PER_HOUR`]，这一次答 `agent_rate_limited`（429），什么都不改、
@@ -1272,6 +1277,216 @@ pub(crate) async fn propose_ontology(
         why.as_deref(),
     )
     .await
+}
+
+// ───────────────────── 直接落地的三行：映射、两种运行、类别词（0076） ─────────────────────
+//
+// 裁定表里这三行是「直接落地」。映射的决定与两种运行（一致性检查、物化推导）先问裁定表、
+// 再过 [`guard`]（限速），落地时台账里各留一行 `applied`；类别词的决定从前就对写令牌
+// 直接落地，这里只给它补上台账行与令牌的名字，**不限速**（它的行照样数进那一小时的总数）。
+// 回答都是人拿到的那一个 body
+
+/// 一页语义层映射，与会话从 `GET /mappings` 读到的同一个 `{items, total, counts,
+/// last_run}`（`mapping_routes::page_body`）。读的检查与 [`list`] 同一个：主人至少是
+/// Viewer、令牌的 `kb_ids` 够得着这个库，否则 404。Review 列表里 `mappings` 仍不是开给
+/// 令牌的档（[`list`] 照旧答 `unknown_queue`）——令牌读映射走的是这一条
+pub(crate) async fn mappings(
+    state: &AppState,
+    caller: &ReviewCaller,
+    status: Option<&str>,
+    q: Option<&str>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+) -> Result<serde_json::Value, AppError> {
+    authorize_read(state, caller).await?;
+    super::mapping_routes::page_body(state, caller.kb_id, status, q, limit, offset).await
+}
+
+/// 经令牌对一条语义层映射表态：**直接落地**（裁定表的 Mapping 一行）。
+///
+/// 次序是契约：写的检查；请求体（`status` 只能是 confirmed / rejected，否则 `bad_status`，
+/// 与人的路由同一个 code、同一句话）；目标（这个库里没有是 404；映射没有「定了」这一态，
+/// 状态已经是请求要的那个就是 `already_decided`，一行不写）；裁定表（给的不是「落地」就
+/// 拒绝）；[`guard`]（限速：`agent_rate_limited`，什么都不改、一行不写）；store。
+///
+/// 新状态、台账行（`mapping.decide`，`applied`）、审计行（`mapping.decided`，actor 是令牌的
+/// 主人，detail 里带 `token_id`、`token_name`、`action_id`）由
+/// `token_agent_actions::decide_mapping` 在一个事务里写。回答是人拿到的那一个
+pub(crate) async fn decide_mapping(
+    state: &AppState,
+    caller: &ReviewCaller,
+    mapping_id: Uuid,
+    status: &str,
+) -> Result<serde_json::Value, AppError> {
+    authorize_write(state, caller).await?;
+    if !matches!(status, "confirmed" | "rejected") {
+        return Err(AppError::invalid(
+            "bad_status",
+            "status must be confirmed or rejected",
+        ));
+    }
+    let request = json!({ "status": status });
+    target_open(state, caller, "mapping.decide", mapping_id, &request).await?;
+    if agent_policy(AgentOperation::Mapping, None) != AgentOutcome::Applied {
+        return Err(not_open());
+    }
+    guard(state, caller, AgentOperation::Mapping).await?;
+    utopia_store::token_agent_actions::decide_mapping(
+        &state.pool,
+        &token_write(caller, None, None, false),
+        mapping_id,
+        status,
+    )
+    .await?;
+    state.emit_review(caller.kb_id);
+    Ok(json!({ "ok": true }))
+}
+
+/// 经令牌跑一遍一致性检查（`run` 是 `consistency`）或物化推导（`inference`）：**直接落地**
+/// （裁定表的 ConsistencyRun 一行管这两种）。
+///
+/// 次序是契约：写的检查；`run` 认不认得（`unknown_run`——REST 的两条路由各给各的，到不了
+/// 这里，MCP 工具的 `run` 是调用方写的）；推导的开关（关着是 `inference_off`，与人的路由
+/// 同一个 code，一行不写）；裁定表；[`guard`]（限速：`agent_rate_limited`，不跑、一行不写）；
+/// 跑——就是人跑的那一段（`review_routes::consistency_run` / `inference_run`），没有新加
+/// 的锁；跑成了**紧接着**在一个事务里写台账行（`consistency.check` / `inference.run`，
+/// `applied`，目标是库本身）与审计行（`consistency.checked` / `inference.materialized`，
+/// actor 是令牌的主人，detail 是人的那一份加 `token_id`、`token_name`、`action_id`）。
+/// 这两行写不进去，这一次调用就是失败——不回一份没有记下来的报告。回答是人拿到的报告
+pub(crate) async fn run_check(
+    state: &AppState,
+    caller: &ReviewCaller,
+    run: &str,
+) -> Result<serde_json::Value, AppError> {
+    authorize_write(state, caller).await?;
+    let (operation, audited, inference): (&'static str, &'static str, bool) = match run {
+        "consistency" => ("consistency.check", "consistency.checked", false),
+        "inference" => ("inference.run", "inference.materialized", true),
+        other => {
+            return Err(AppError::invalid(
+                "unknown_run",
+                format!("run must be consistency or inference, got {other}"),
+            ))
+        }
+    };
+    if inference {
+        super::review_routes::inference_on(state, caller.kb_id).await?;
+    }
+    if agent_policy(AgentOperation::ConsistencyRun, None) != AgentOutcome::Applied {
+        return Err(not_open());
+    }
+    guard(state, caller, AgentOperation::ConsistencyRun).await?;
+    let pool = &state.pool;
+    // 两条路由都没有请求体。目标的那句话（库的名字）在跑之前读：读不到就不跑
+    let request = json!({});
+    let label = utopia_store::review_targets::target_label(
+        pool,
+        caller.kb_id,
+        operation,
+        caller.kb_id,
+        &request,
+    )
+    .await?;
+    let (detail, body) = if inference {
+        super::review_routes::inference_run(state, caller.kb_id).await?
+    } else {
+        super::review_routes::consistency_run(state, caller.kb_id).await?
+    };
+    let mut tx = pool.begin().await?;
+    let action = utopia_store::token_agent_actions::record_applied(
+        &mut tx,
+        &token_write(caller, None, None, false),
+        &Proposal {
+            operation,
+            target_kind: "knowledge_base",
+            target_id: caller.kb_id,
+            target_key: &caller.kb_id.to_string(),
+            payload: json!({ "request": request, "target_label": label }),
+        },
+    )
+    .await?;
+    utopia_store::audit::record_on(
+        &mut tx,
+        Some(caller.kb_id),
+        Some(caller.user.id),
+        audited,
+        "knowledge_base",
+        Some(caller.kb_id),
+        utopia_store::token_agent_actions::token_audit_detail(detail, &action),
+    )
+    .await?;
+    tx.commit().await?;
+    // 与人的两条路由各推的那一个事件相同：检查动的是 Review 的队列，推导动的是图
+    if inference {
+        state.emit_graph(caller.kb_id);
+    } else {
+        state.emit_review(caller.kb_id);
+    }
+    Ok(body)
+}
+
+/// 经令牌定一个类别词绑到哪个类，MCP 的 `review_kind_word` 走的入口：先过
+/// [`authorize_write`]——所以被拒绝的调用方拿到的是带 code 的工具错误（`token_read_only`、
+/// `token_kb_out_of_scope`、`token_owner_below_editor`），再到 [`kind_word_decision`]。
+/// REST 的那条路由不走这里：它留着自己从前的两道检查与那句不带 code 的 403
+pub(crate) async fn decide_kind_word(
+    state: &AppState,
+    caller: &ReviewCaller,
+    kind_word: &str,
+    class: Option<&str>,
+) -> Result<serde_json::Value, AppError> {
+    authorize_write(state, caller).await?;
+    kind_word_decision(state, caller, kind_word, class).await
+}
+
+/// 类别词的决定在写的检查之后的那一段：**直接落地**（裁定表的 AlignmentKindWord 一行），
+/// REST 的令牌分支与 [`decide_kind_word`] 共用。**这里不做授权**——调用方已经做过。
+///
+/// - 类的键认不出：`unknown_class`；锁等不到：`alignment_busy`；store 说没写下判定：404。
+///   都与从前同一个回答
+/// - 判定与一行台账（`alignment.kind_word`，`applied`）由
+///   `token_agent_actions::decide_kind_word` 在一个事务里写
+/// - 审计行 `alignment.kind_word_decided` 照旧在判定之后尽力而为地写；detail 除了从前的
+///   `kind_word`、`class`、`token_id`，多了 `token_name` 与 `action_id`
+/// - **不调 [`guard`]**：这条路由从前对写令牌就不限速，0076 不为令牌收窄它。它的台账行
+///   是 `applied`，所以照样数进这枚令牌那一小时的总数
+pub(crate) async fn kind_word_decision(
+    state: &AppState,
+    caller: &ReviewCaller,
+    kind_word: &str,
+    class: Option<&str>,
+) -> Result<serde_json::Value, AppError> {
+    if agent_policy(AgentOperation::AlignmentKindWord, None) != AgentOutcome::Applied {
+        return Err(not_open());
+    }
+    let type_id = super::review_routes::kind_word_class(state, caller.kb_id, class).await?;
+    // 人的那一票：请求里的 `class` 原样，与会话记下的同一个形状
+    let votes = json!({ "person": class });
+    let action = utopia_store::token_agent_actions::decide_kind_word(
+        &state.pool,
+        &token_write(caller, None, None, false),
+        kind_word,
+        type_id,
+        &votes,
+    )
+    .await?
+    .ok_or(AppError::NotFound)?;
+    let _ = utopia_store::audit::record(
+        &state.pool,
+        Some(caller.kb_id),
+        caller.user.id,
+        "alignment.kind_word_decided",
+        "type_binding",
+        None,
+        utopia_store::token_agent_actions::token_audit_detail(
+            json!({ "kind_word": kind_word, "class": class }),
+            &action,
+        ),
+    )
+    .await;
+    state.emit_review(caller.kb_id);
+    state.emit_graph(caller.kb_id);
+    Ok(json!({ "ok": true }))
 }
 
 // ───────────────────── 开着的提议挂在它指着的那一条上（0076） ─────────────────────

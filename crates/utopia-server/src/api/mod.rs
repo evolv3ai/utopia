@@ -246,6 +246,7 @@ pub fn router(state: AppState, cfg: &AppConfig) -> Router {
             "/me/tokens/{token_id}",
             axum::routing::delete(token_routes::revoke),
         )
+        // 列表也开给个人令牌读（0076）；写一条口径仍只给会话
         .route(
             "/kbs/{id}/mappings",
             get(mapping_routes::list).post(mapping_routes::create),
@@ -583,7 +584,8 @@ pub fn router(state: AppState, cfg: &AppConfig) -> Router {
             "/kbs/{id}/review/alignment/rules/{rule_id}",
             post(review_routes::decide_alignment_rule),
         )
-        // 语义层映射的表态（0011）。跟消解审核并排——都是「引擎提议、人裁决」
+        // 语义层映射的表态（0011）。跟消解审核并排——都是「引擎提议、人裁决」。
+        // 写令牌也能定，直接落地、过限速（0076）；下面的一致性检查与物化推导同样
         .route(
             "/kbs/{id}/review/mappings/{mapping_id}",
             post(review_routes::decide_mapping),
@@ -764,6 +766,13 @@ mod review_token_alignment_tests;
 
 #[cfg(test)]
 mod review_token_mapping_tests;
+
+// 直接落地的另外两行（0076）：一致性检查与物化推导、类别词的决定
+#[cfg(test)]
+mod review_token_run_tests;
+
+#[cfg(test)]
+mod review_token_kind_word_tests;
 
 #[cfg(test)]
 mod review_token_ontology_tests;

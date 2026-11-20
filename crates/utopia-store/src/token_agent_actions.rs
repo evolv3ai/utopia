@@ -583,6 +583,205 @@ pub fn token_audit_detail(
     detail
 }
 
+// ───────────────────── 直接落地的两种决定：映射与类别词（0076） ─────────────────────
+//
+// 裁定表里这两行是「直接落地」。变更、台账行（`applied`）在同一个事务里：读不到令牌的
+// 名字、写不进台账，变更也不留下。限速不在这里问——那是调用方（`review_ops::guard`）在
+// 进来之前的事；类别词按裁定从不限速，但它的行照样数进那一小时的总数
+
+/// 目标已经是请求要的那个样子：与 `review_ops::target_open` 同一个 code、同一句话
+fn target_already_decided() -> AppError {
+    AppError::CodedConflict {
+        code: "already_decided",
+        message: "This item was already decided.".into(),
+    }
+}
+
+/// 裁定表给这一行的必须是「直接落地」。表要是哪天改了，这里拒绝，而不是照旧写一行 applied
+fn finalizes(op: AgentOperation) -> AppResult<()> {
+    let outcome = agent_policy(op, None);
+    if outcome != AgentOutcome::Applied {
+        return Err(AppError::Other(anyhow::anyhow!(
+            "the agent policy does not finalize {op:?} (outcome {})",
+            outcome.as_str()
+        )));
+    }
+    Ok(())
+}
+
+/// 经令牌对一条语义层映射表态。一个事务：映射的新状态、台账行（`mapping.decide`，
+/// `applied`）、审计行（`mapping.decided`，actor 是令牌的主人，detail 里带 `token_id`、
+/// `token_name`、`action_id`），要么都在要么都不在。
+///
+/// - `status` 只能是 confirmed / rejected：别的是 `bad_status`，与人的路由同一个 code
+/// - 这个库里没有这条映射：`NotFound`
+/// - 映射没有「定了」这一态：状态已经是请求要的那个就是 `already_decided`，一行不写；
+///   不一样就落地。锁着行再比，所以同时到的两个相同决定正好落地一个
+/// - 读不到令牌的名字、写不进台账或审计：报错，什么都不提交
+pub async fn decide_mapping(
+    pool: &PgPool,
+    w: &TokenWrite,
+    mapping_id: Uuid,
+    status: &str,
+) -> AppResult<TokenAgentAction> {
+    finalizes(AgentOperation::Mapping)?;
+    if !matches!(status, "confirmed" | "rejected") {
+        return Err(AppError::invalid(
+            "bad_status",
+            "status must be confirmed or rejected",
+        ));
+    }
+    let request = serde_json::json!({ "status": status });
+    // 目标的那句话在事务之前读：它自己从池里取连接，在事务里调就是拿着一条连接等另一条。
+    // 这个库里没有这条映射时它就是 `NotFound`
+    let label =
+        crate::review_targets::target_label(pool, w.kb_id, "mapping.decide", mapping_id, &request)
+            .await?;
+
+    let mut tx = pool.begin().await?;
+    let current: Option<String> = sqlx::query_scalar(
+        "SELECT status FROM concept_mappings WHERE id = $1 AND kb_id = $2 FOR UPDATE",
+    )
+    .bind(mapping_id)
+    .bind(w.kb_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(current) = current else {
+        return Err(AppError::NotFound);
+    };
+    if current == status {
+        return Err(target_already_decided());
+    }
+    crate::mappings::decide_on(&mut tx, w.kb_id, mapping_id, status, w.owner_id).await?;
+
+    let mut payload = serde_json::json!({
+        "request": request, "target_label": label, "action": status,
+    });
+    if let Some(why) = trimmed(&w.rationale) {
+        payload["why"] = serde_json::json!(why);
+    }
+    let key = mapping_id.to_string();
+    let action = record_applied(
+        &mut tx,
+        w,
+        &Proposal {
+            operation: "mapping.decide",
+            target_kind: "concept_mapping",
+            target_id: mapping_id,
+            target_key: &key,
+            payload,
+        },
+    )
+    .await?;
+    crate::audit::record_on(
+        &mut tx,
+        Some(w.kb_id),
+        Some(w.owner_id),
+        "mapping.decided",
+        "concept_mapping",
+        Some(mapping_id),
+        token_audit_detail(serde_json::json!({ "status": status }), &action),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(action)
+}
+
+/// 经令牌定一个类别词绑到哪个类。写的就是人的那一次判定（`type_bindings::
+/// decide_and_apply_human` 的事务体：判定、投影到实体、排一次短语对齐，同一个 2 秒的
+/// 锁等待），外加**同一个事务里**的一行台账（`alignment.kind_word`，`applied`）。
+///
+/// - `None`：人的那段代码说没有写下判定（`decide_and_apply_human_tx` 回 false；人的判定
+///   是一次 upsert，平常总写得下）。台账一行不写，调用方答它从前的 404
+/// - 锁等不到：`alignment_busy`，与人的路由同一个 code；什么都不提交
+/// - 台账行的目标是库本身（类别词没有 uuid），`target_key` 是规整过的词；请求里存着
+///   `kind_word`，Agent 一档那一行的目标就是这个词（`review_targets::target_label` 读它）
+/// - 审计行不在这里写：路由照旧自己写 `alignment.kind_word_decided`，detail 用
+///   [`token_audit_detail`] 补上令牌的那几项
+///
+/// **不限速**：这个函数与它的调用方都不问 `finalized_since`。它写下的行是 `applied`，
+/// 所以数进这枚令牌那一小时的总数
+pub async fn decide_kind_word(
+    pool: &PgPool,
+    w: &TokenWrite,
+    kind_word: &str,
+    type_id: Option<Uuid>,
+    votes: &serde_json::Value,
+) -> AppResult<Option<TokenAgentAction>> {
+    finalizes(AgentOperation::AlignmentKindWord)?;
+    // 请求体只有 `class`（`votes` 里人的那一票就是它）；词在路径里，一并存下
+    let request = serde_json::json!({
+        "kind_word": kind_word,
+        "class": votes.get("person").cloned().unwrap_or(serde_json::Value::Null),
+    });
+    let label = crate::review_targets::target_label(
+        pool,
+        w.kb_id,
+        "alignment.kind_word",
+        w.kb_id,
+        &request,
+    )
+    .await?;
+    let key = crate::type_bindings::normalize(kind_word);
+    let mut payload = serde_json::json!({
+        "request": request,
+        "target_label": label,
+        "action": if type_id.is_some() { "bind" } else { "none" },
+    });
+    if let Some(why) = trimmed(&w.rationale) {
+        payload["why"] = serde_json::json!(why);
+    }
+
+    let mut tx = pool.begin().await?;
+    let result = async {
+        sqlx::query("SET LOCAL lock_timeout = '2s'")
+            .execute(&mut *tx)
+            .await?;
+        let written = crate::type_bindings::decide_and_apply_human_tx(
+            &mut tx, w.kb_id, kind_word, type_id, votes,
+        )
+        .await?;
+        if !written {
+            return Ok::<Option<TokenAgentAction>, AppError>(None);
+        }
+        crate::jobs::enqueue_unless_queued_tx(
+            &mut tx,
+            "align_phrases",
+            serde_json::json!({ "kb_id": w.kb_id }),
+        )
+        .await?;
+        let action = record_applied(
+            &mut tx,
+            w,
+            &Proposal {
+                operation: "alignment.kind_word",
+                target_kind: "type_binding",
+                target_id: w.kb_id,
+                target_key: &key,
+                payload,
+            },
+        )
+        .await?;
+        Ok(Some(action))
+    }
+    .await;
+    match result {
+        Ok(action) => {
+            tx.commit().await?;
+            Ok(action)
+        }
+        Err(error) => {
+            // 先把回滚做完再回答：连接要干净地还回去。回滚自己也失败时两个错误都留着
+            if let Err(rollback) = tx.rollback().await {
+                return Err(AppError::Other(anyhow::Error::new(error).context(format!(
+                    "rolling back a token kind-word decision: {rollback}"
+                ))));
+            }
+            Err(crate::type_bindings::busy_on_lock_timeout(error))
+        }
+    }
+}
+
 fn governor_is_deciding() -> AppError {
     AppError::Conflict(
         "The agent is deciding this pair right now; wait for its proposal or turn governance off."

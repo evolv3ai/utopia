@@ -16,6 +16,9 @@
 //! 都不改，只留一条等人答的提议。本体提案不在那十三档里，另有两个工具：
 //! `review_ontology_list` 读还开着的本体提案（会话在本体页上看到的那一份），
 //! `review_ontology` 提议拒绝或采纳其中一条。
+//! 裁定表里直接落地的三行各有一个工具：`review_mapping`（对一条语义层映射表态，
+//! `review_mapping_list` 读得到它们）、`review_check`（跑一致性检查或物化推导）、
+//! `review_kind_word`（定一个类别词的类）——这三个调用当场生效，不等人答。
 //! **没有哪个工具能答提议。**
 //!
 //! **这里只做两件事：把参数递给 `review_ops`，把它的回答变成工具结果。** 授权、裁定表、
@@ -54,6 +57,10 @@ const ERRATA: &str = "review_errata";
 const ALIGNMENT: &str = "review_alignment";
 const ONTOLOGY_LIST: &str = "review_ontology_list";
 const ONTOLOGY: &str = "review_ontology";
+const MAPPING_LIST: &str = "review_mapping_list";
+const MAPPING: &str = "review_mapping";
+const CHECK: &str = "review_check";
+const KIND_WORD: &str = "review_kind_word";
 
 /// 这个名字归不归这里管。归这里的，`mcp.rs` 不再拿它去问 `is_exposed`
 pub(super) fn serves(name: &str) -> bool {
@@ -72,6 +79,10 @@ pub(super) fn serves(name: &str) -> bool {
             | ALIGNMENT
             | ONTOLOGY_LIST
             | ONTOLOGY
+            | MAPPING_LIST
+            | MAPPING
+            | CHECK
+            | KIND_WORD
     )
 }
 
@@ -89,6 +100,9 @@ fn writes(name: &str) -> bool {
             | ERRATA
             | ALIGNMENT
             | ONTOLOGY
+            | MAPPING
+            | CHECK
+            | KIND_WORD
     )
 }
 
@@ -844,6 +858,161 @@ fn definitions() -> Value {
                     "required": ["section", "key", "action"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": MAPPING_LIST,
+                "description": "Read the semantic-layer mappings of this knowledge base: each \
+                    binds a business concept (a metric or a dimension) to a table, expression \
+                    or SQL of a mounted data source. These are not a section of review_list; a \
+                    signed-in person sees them on the Data mapping page. Returns {items, total, \
+                    counts, last_run} as a signed-in person gets it: items is one page, each \
+                    with id, concept_id, concept_name, source, table_name, expr, sql, unit, \
+                    summary, derived, status (\"proposed\", \"confirmed\" or \"rejected\") and \
+                    written_by; total is the number of mappings the filter matches over all \
+                    pages; counts is how many mappings have each status; last_run is the \
+                    latest exploration run, or null. status keeps one status only, and any \
+                    other value is refused with code bad_status; q keeps mappings whose \
+                    concept, source or table contains it; limit (default 25, clamped to 1 to \
+                    200) and offset page the list. Reading is all this tool offers: nothing \
+                    listed here is decided by reading it. review_mapping decides one.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "status": {
+                            "type": "string",
+                            "description": "Optional: \"proposed\", \"confirmed\" or \
+                                \"rejected\". Left out, mappings of every status are listed."
+                        },
+                        "q": {
+                            "type": "string",
+                            "description": "Optional: text the concept name, the source name \
+                                or the table name must contain."
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Page size (default 25; values outside 1 to 200 are \
+                                clamped)."
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "description": "Number of mappings to skip (default 0)."
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": MAPPING,
+                "description": "Decide one semantic-layer mapping, an item of \
+                    review_mapping_list: \"confirmed\" (the definition takes effect and is \
+                    used to answer questions about data) or \"rejected\" (it is not used, and \
+                    exploration does not put it back). This call finalizes: the mapping's \
+                    status changes at once, with no person approving it, and the decision is \
+                    recorded under the token's owner and the token's name in Agent History and \
+                    in Activity. The result is {ok: true}, as a signed-in person gets. A \
+                    mapping has no decided state: a status equal to the one it already has is \
+                    refused with code already_decided and changes nothing, and a different \
+                    status is applied, so a confirmed mapping can be rejected and a rejected \
+                    one confirmed. A status other than confirmed or rejected is refused with \
+                    code bad_status; an id that is unknown, or of another knowledge base, with \
+                    code not_found. The decision counts toward the limit of 200 finalized \
+                    writes per token and knowledge base in a rolling hour; past it the call is \
+                    refused with code agent_rate_limited and changes nothing.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "description": "Mapping id (uuid) of an item from \
+                                review_mapping_list."
+                        },
+                        "status": {
+                            "type": "string",
+                            "description": "\"confirmed\" or \"rejected\"."
+                        }
+                    },
+                    "required": ["id", "status"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": CHECK,
+                "description": "Run one of two computations over the whole knowledge base: \
+                    \"consistency\" (check every fact against the ontology's axioms and the \
+                    ontology against itself; new violations and defects appear in the \
+                    \"violations\" and \"defects\" sections of review_list, and violations \
+                    that no longer hold are cleared) or \"inference\" (materialize the facts \
+                    the ontology's rules derive, and invalidate derived facts that no longer \
+                    follow). This call finalizes: the run happens at once, with no person \
+                    approving it, and is recorded under the token's owner and the token's name \
+                    in Agent History and in Activity. The result is the report a signed-in \
+                    person gets: for \"consistency\" {edges, predicates_with_axioms, found, \
+                    inserted, cleared, cycles_capped, classes, defects_found, defects_new}; \
+                    for \"inference\" {rules, edges, derived, inserted, invalidated, capped}. \
+                    \"inference\" on a knowledge base whose materialized-inference setting is \
+                    off is refused with code inference_off and nothing runs; a run other than \
+                    the two is refused with code unknown_run. Each run counts toward the limit \
+                    of 200 finalized writes per token and knowledge base in a rolling hour; \
+                    past it the call is refused with code agent_rate_limited and nothing runs. \
+                    A run decides no violation and no defect: a token only proposes those \
+                    decisions, with review_violation and review_defect.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "run": {
+                            "type": "string",
+                            "description": "\"consistency\" or \"inference\"."
+                        }
+                    },
+                    "required": ["run"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": KIND_WORD,
+                "description": "Decide which class one kind word is bound to: a kind_word item \
+                    of the \"alignment\" section of review_list (a word the extraction used \
+                    for a kind of entity, such as \"startup\"). class is the key of the \
+                    ontology class to bind it to; leave class out to decide that no class \
+                    fits. This call finalizes: the decision is written at once, with no person \
+                    approving it, the class is set on (or removed from) the entities under \
+                    that kind word, a phrase-alignment job is queued, and the decision is \
+                    recorded under the token's owner and the token's name in Agent History and \
+                    in Activity. The result is {ok: true}, as a signed-in person gets. A class \
+                    key the ontology does not have is refused with code unknown_class; a kind \
+                    word that another operation is updating with code alignment_busy, and the \
+                    call can be repeated shortly. The word is matched without regard to case \
+                    or repeated spaces, and a word the section does not list is recorded as a \
+                    new binding, as it is for a signed-in person. A kind-word decision is not refused by the \
+                    limit on finalized writes, and it counts toward that limit for the token's \
+                    other finalized writes. Phrases and rules are not decided with this tool: \
+                    review_alignment proposes those.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "kind_word": {
+                            "type": "string",
+                            "description": "The kind word, exactly as its item in the \
+                                \"alignment\" section of review_list gives it."
+                        },
+                        "class": {
+                            "type": "string",
+                            "description": "Key of the class to bind the kind word to. Leave \
+                                out to decide that no class fits."
+                        }
+                    },
+                    "required": ["kind_word"]
+                }
+            }
         }
     ])
 }
@@ -867,11 +1036,16 @@ fn annotations(name: &str) -> Value {
         DEFECT | FACT | CONFLICT | VIOLATION | ERRATA | ALIGNMENT | ONTOLOGY => {
             json!({ "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false })
         }
+        // 直接落地的三个工具：映射的状态当场就改，运行当场就跑（清掉、作废旧的行），
+        // 类别词当场改写它名下实体的类——都不是只添不改
+        MAPPING | CHECK | KIND_WORD => {
+            json!({ "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false })
+        }
         _ => json!({ "readOnlyHint": true }),
     }
 }
 
-/// `tools/list` 里的那几项。读工具（两个读 Review 的、一个读本体提案的）对每一个进得来的调用方都列；写工具（[`writes`]）只在
+/// `tools/list` 里的那几项。读工具（两个读 Review 的、一个读本体提案的、一个读语义层映射的）对每一个进得来的调用方都列；写工具（[`writes`]）只在
 /// `can_write`（令牌 scope 是 write 且主人至少是 Editor）时列——列出一个注定被拒绝的
 /// 工具，等于让对面的 agent 反复去试
 pub(super) fn listed(can_write: bool) -> Vec<Value> {
@@ -1397,6 +1571,59 @@ pub(super) async fn call(
                 }
             }
             review_ops::propose_ontology(state, caller, section, key, action, request).await
+        }
+        MAPPING_LIST => {
+            // 参数就是那条列表路由的查询参数；`status` 认不认得由操作说（`bad_status`），
+            // 翻页的两个数照路由的规矩夹
+            let (status, q) = match (
+                optional_string(name, &args, "status"),
+                optional_string(name, &args, "q"),
+            ) {
+                (Ok(status), Ok(q)) => (status, q),
+                (Err(refused), _) | (_, Err(refused)) => return refused,
+            };
+            let (limit, offset) = match (
+                optional_integer(name, &args, "limit"),
+                optional_integer(name, &args, "offset"),
+            ) {
+                (Ok(limit), Ok(offset)) => (limit, offset),
+                (Err(refused), _) | (_, Err(refused)) => return refused,
+            };
+            review_ops::mappings(state, caller, status, q, limit, offset).await
+        }
+        MAPPING => {
+            // 参数是路由的 id 与请求体的 `status`；`status` 认不认得由操作说（`bad_status`，
+            // 与 REST 同一个 code），这里原样递下去
+            let Some(id) = args["id"]
+                .as_str()
+                .and_then(|s| s.trim().parse::<Uuid>().ok())
+            else {
+                return bad_argument(name, "id", "a uuid returned by review_mapping_list");
+            };
+            let Some(status) = args["status"].as_str() else {
+                return bad_argument(name, "status", "\"confirmed\" or \"rejected\"");
+            };
+            review_ops::decide_mapping(state, caller, id, status).await
+        }
+        CHECK => {
+            // `run` 说走哪一条路由（一致性检查或物化推导），两条路由都没有请求体。认不出的
+            // 由操作拒绝（`unknown_run`）
+            let Some(run) = args["run"].as_str().map(str::trim) else {
+                return bad_argument(name, "run", "\"consistency\" or \"inference\"");
+            };
+            review_ops::run_check(state, caller, run).await
+        }
+        KIND_WORD => {
+            // 参数是路由路径里的词与请求体的 `class`。词**原样递下去**（库里按规整过的词
+            // 认，规整是 store 的事）；类认不认得由操作说（`unknown_class`）
+            let Some(kind_word) = args["kind_word"].as_str() else {
+                return bad_argument(name, "kind_word", "a string");
+            };
+            let class = match optional_string(name, &args, "class") {
+                Ok(v) => v,
+                Err(refused) => return refused,
+            };
+            review_ops::decide_kind_word(state, caller, kind_word, class).await
         }
         // `serves` 之外的名字到不了这里；到了也只说没有这个工具，不去碰库
         _ => {
