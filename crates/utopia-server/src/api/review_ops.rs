@@ -12,8 +12,9 @@
 //! 写的一侧开了三样：「把一对重复项分开」（[`keep`]）；过了服务端闸门的合并——
 //! 队列里的一对（[`merge_pair`]）与手动指定源和目标（[`merge_entities`]），闸门留下的
 //! 合并什么都不改，只留一条等人答的提议；撤回一次合并（[`revert_merge`]）——令牌 agent
-//! 做的合并直接撤，人或治理 agent 做的只留提议。别的裁决、批量都还关着——
-//! 读得到「等你点头」不等于能替人点头。
+//! 做的合并直接撤，人或治理 agent 做的只留提议。还有成批的两样：一次裁最多 50 对
+//! 重复项（[`batch`]），每一对走的就是上面的单笔函数；以及把一批做出的合并整批撤回
+//! （[`revert_batch`]）。别的裁决都还关着——读得到「等你点头」不等于能替人点头。
 
 use serde_json::json;
 use utopia_core::models::{ReviewSummary, Role, User};
@@ -293,12 +294,14 @@ pub(crate) async fn summary(
 ///
 /// 审核行、台账行、审计行由 `keep_duplicate_pair` 在一个事务里写。这里**不调**
 /// `governance::after_human_decision`：令牌的决定不是人的先例（0076 决定 9），不排治理
-/// 任务，也不替人回答这一对上开着的建议。只推一次刷新，让开着的 Review 页看到队列变了
+/// 任务，也不替人回答这一对上开着的建议。只推一次刷新，让开着的 Review 页看到队列变了。
+/// `batch_id` 是成批调用的号，单笔为 None
 pub(crate) async fn keep(
     state: &AppState,
     caller: &ReviewCaller,
     review_id: Uuid,
     rationale: Option<&str>,
+    batch_id: Option<Uuid>,
 ) -> Result<serde_json::Value, AppError> {
     authorize_write(state, caller).await?;
     // 裁定表在闸门那边。分开没有闸门，所以不带 hold；表给的不是 applied 就不落地
@@ -306,13 +309,14 @@ pub(crate) async fn keep(
     if outcome != AgentOutcome::Applied {
         return Err(not_open());
     }
-    let action = utopia_store::token_agent_actions::keep_duplicate_pair(
+    let action = utopia_store::token_agent_actions::keep_duplicate_pair_in_batch(
         &state.pool,
         caller.kb_id,
         review_id,
         caller.user.id,
         caller.token.token_id,
         rationale,
+        batch_id,
     )
     .await?;
     state.emit_review(caller.kb_id);
@@ -432,6 +436,182 @@ pub(crate) async fn merge_pair(
     .await?;
     state.emit_review(caller.kb_id);
     Ok(merge_answer(&done))
+}
+
+/// 一次拒绝在 REST 上的样子：code 与那一句话，**取自 `ApiErr` 渲染出来的响应本身**。
+/// 成批调用里每一条的 `code` / `error`、MCP 工具错误里的 `code` / `message` 都从这里来，
+/// 所以三处说的是同一个 code——不在这里另写一张错误对照表，那张表迟早先变（以后多一种
+/// 错误，这里不用跟着改）。404 在 REST 上没有 code，这里给它 `not_found`；别的没有 code
+/// 的错误（治理 agent 正在裁这一对的那句 409）code 为 None。内部错误的细节只留在日志里，
+/// 回出去的是「Internal server error」
+pub(crate) async fn refused(error: AppError) -> (Option<String>, String) {
+    use axum::response::IntoResponse;
+    let response = crate::error::ApiErr(error).into_response();
+    let status = response.status();
+    let body: serde_json::Value = axum::body::to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or(serde_json::Value::Null);
+    let message = body["error"]
+        .as_str()
+        .unwrap_or("Internal server error")
+        .to_string();
+    let code = body["code"]
+        .as_str()
+        .map(str::to_string)
+        .or_else(|| (status == axum::http::StatusCode::NOT_FOUND).then(|| "not_found".to_string()));
+    (code, message)
+}
+
+/// 令牌的一批最多多少对（0076）。会话的批量上限是 500，那是人在界面上「全选」的量；
+/// 令牌的一批小得多：一次调用里能落地多少笔由它封顶，令牌中途被撤销也只跑完这一批
+pub(crate) const TOKEN_BATCH_MAX: usize = 50;
+
+/// 经令牌成批裁重复项：1 到 [`TOKEN_BATCH_MAX`] 对，整批一个动作（`merge` 或 `keep`）。
+///
+/// **这里没有合并、分开、闸门的逻辑**（0076：成批的一笔拿不到单笔拿不到的东西）：每一对
+/// 原样交给 [`merge_pair`] 或 [`keep`]，授权、闸门、裁定表、台账、审计都在它们里面，
+/// 每一对各问各的。这里只做三件事：整批的两个拒绝、发一个 `batch_id`、把每一对的回答
+/// 或错误收成一条结果。
+///
+/// - 先过写的检查，再看条数与动作：只读令牌问一批 51 条，答的仍是 `token_read_only`
+/// - 0 条或超过上限：`batch_size`；动作不是 merge / keep：会话批量今天的那一句（422，
+///   没有 code）。这两种都是**整批拒绝**，一对都没碰，台账一行不写
+/// - 之后按请求的次序一对一对来，一对的错误只是它自己的结果，不拖累后面的。同一个 id
+///   给了两次，第二次拿到的是它那时的状态给的回答（落地过的是 `already_decided`，
+///   留成提议的是同一条提议加 `already_proposed`）
+/// - 台账或审计写不进去是那一对的错误：单笔函数的事务整个回滚，这里记成没成，不记成成了
+///
+/// 回 `{batch_id, decided, outcomes}`；`decided` 数的是落地（`applied`）的条数
+pub(crate) async fn batch(
+    state: &AppState,
+    caller: &ReviewCaller,
+    ids: &[Uuid],
+    action: &str,
+    rationale: Option<&str>,
+) -> Result<serde_json::Value, AppError> {
+    authorize_write(state, caller).await?;
+    if ids.is_empty() || ids.len() > TOKEN_BATCH_MAX {
+        return Err(AppError::invalid(
+            "batch_size",
+            format!("between 1 and {TOKEN_BATCH_MAX} ids per batch"),
+        ));
+    }
+    if action != "merge" && action != "keep" {
+        // 与 `resolution::decide_reviews` 同一句：会话的批量对认不出的动作就是这么答的
+        return Err(AppError::Validation("action must be merge or keep".into()));
+    }
+    let batch_id = Uuid::now_v7();
+    let mut outcomes = Vec::with_capacity(ids.len());
+    let mut decided = 0usize;
+    for &id in ids {
+        let answered = if action == "merge" {
+            merge_pair(state, caller, id, rationale, Some(batch_id)).await
+        } else {
+            keep(state, caller, id, rationale, Some(batch_id)).await
+        };
+        outcomes.push(match answered {
+            Ok(answer) => {
+                if answer["outcome"] == AgentOutcome::Applied.as_str() {
+                    decided += 1;
+                }
+                // 单笔的回答里有什么就带什么，没有的键是 null：七个键每一条都在
+                let mut outcome = json!({
+                    "id": id,
+                    "outcome": answer["outcome"],
+                    "action_id": answer["action_id"],
+                    "merge_id": answer["merge_id"],
+                    "reason": answer["reason"],
+                    "code": answer["code"],
+                    "error": null,
+                });
+                // 合并已经在了、之后的某一步失败：仍是 applied，那一句照单笔的样子带上
+                if let Some(error) = answer.get("follow_up_error") {
+                    outcome["follow_up_error"] = error.clone();
+                }
+                outcome
+            }
+            Err(e) => {
+                let (code, error) = refused(e).await;
+                json!({
+                    "id": id, "outcome": null, "action_id": null, "merge_id": null,
+                    "reason": null, "code": code, "error": error,
+                })
+            }
+        });
+    }
+    Ok(json!({ "batch_id": batch_id, "decided": decided, "outcomes": outcomes }))
+}
+
+/// 同一个进程里整批撤回一批一批地跑。整批撤回是「列出这一批的合并，一条一条撤」，
+/// 撤回自己开事务、自己提交（人的那条路是 `resolution::revert_merge`，不归这里改）；
+/// 两个调用同时撤同一批，就会两边各跑一遍同一次合并的撤回。排了队，后到的看见的是
+/// 已经撤回的合并，每一条都答 `already_decided`。拿进程内的锁而不是数据库的咨询锁：
+/// 后者要占着一条连接等另一条（见 `token_agent_actions::keep_duplicate_pair`）。
+/// 它管不到的：多个进程之间，以及同时到的一次**单笔**撤回——那两种与今天一样
+static UNIT_REVERTING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// 轮到这一次整批撤回。会话的那一支在 `review_routes` 里跑人的撤回路径，也先拿这一把
+pub(crate) async fn unit_revert_turn() -> tokio::sync::MutexGuard<'static, ()> {
+    UNIT_REVERTING.lock().await
+}
+
+/// 整批撤回里一次合并的结果：`{merge_id, outcome, code, error}`，四个键每一条都在
+pub(crate) async fn unit_revert_outcome(
+    merge_id: Uuid,
+    answered: Result<serde_json::Value, AppError>,
+) -> serde_json::Value {
+    match answered {
+        Ok(answer) => json!({
+            "merge_id": merge_id, "outcome": answer["outcome"],
+            "code": answer["code"], "error": null,
+        }),
+        Err(e) => {
+            let (code, error) = refused(e).await;
+            json!({ "merge_id": merge_id, "outcome": null, "code": code, "error": error })
+        }
+    }
+}
+
+/// 整批撤回的回答：`reverted` 数的是这一次撤掉（`applied`）的合并
+pub(crate) fn unit_revert_answer(
+    batch_id: Uuid,
+    outcomes: Vec<serde_json::Value>,
+) -> serde_json::Value {
+    let reverted = outcomes
+        .iter()
+        .filter(|o| o["outcome"] == AgentOutcome::Applied.as_str())
+        .count();
+    json!({ "batch_id": batch_id, "reverted": reverted, "outcomes": outcomes })
+}
+
+/// 经令牌把一批做出的合并整批撤回（0076）。
+///
+/// 与 [`batch`] 一样，这里**没有撤回的逻辑**：台账上这一批落地的每一次合并原样交给
+/// [`revert_merge`]，直接撤还是只留提议、撤没撤过，都由它说。尽力而为：一次合并一条
+/// 结果，已经撤回的是那一条的 `already_decided`，不拖累别的；这一批里分开的、留成提议的
+/// 不在台账的合并行里，碰不到。撤回的台账行与审计行带着同一个 `batch_id`。
+///
+/// 这个库的台账里没有哪一行带着这个号：`NotFound`（先过写的检查，再说有没有）
+pub(crate) async fn revert_batch(
+    state: &AppState,
+    caller: &ReviewCaller,
+    batch_id: Uuid,
+    rationale: Option<&str>,
+) -> Result<serde_json::Value, AppError> {
+    authorize_write(state, caller).await?;
+    let _turn = unit_revert_turn().await;
+    let merges =
+        utopia_store::token_agent_actions::batch_merges(&state.pool, caller.kb_id, batch_id)
+            .await?
+            .ok_or(AppError::NotFound)?;
+    let mut outcomes = Vec::with_capacity(merges.len());
+    for merge_id in merges {
+        let answered = revert_merge(state, caller, merge_id, rationale, Some(batch_id)).await;
+        outcomes.push(unit_revert_outcome(merge_id, answered).await);
+    }
+    Ok(unit_revert_answer(batch_id, outcomes))
 }
 
 /// 经令牌手动合并两个实体：源并进目标，方向是调用方给的。与 [`merge_pair`] 同一套规矩：

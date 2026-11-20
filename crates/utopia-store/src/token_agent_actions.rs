@@ -129,6 +129,22 @@ pub async fn keep_duplicate_pair(
     token_id: Uuid,
     rationale: Option<&str>,
 ) -> AppResult<TokenAgentAction> {
+    keep_duplicate_pair_in_batch(pool, kb_id, review_id, owner_id, token_id, rationale, None).await
+}
+
+/// [`keep_duplicate_pair`]，外加这一笔属于哪一批（0076：成批调用的号由服务端发，批里
+/// 每一笔的台账行与审计行都带着它）。`batch_id` 为 None 就是单笔：台账行的 `batch_id`
+/// 为空，审计 detail 里没有这个键，与从前一个键不差。检查、事务、错误都是上面那一套——
+/// 成批的一笔拿不到单笔拿不到的东西
+pub async fn keep_duplicate_pair_in_batch(
+    pool: &PgPool,
+    kb_id: Uuid,
+    review_id: Uuid,
+    owner_id: Uuid,
+    token_id: Uuid,
+    rationale: Option<&str>,
+    batch_id: Option<Uuid>,
+) -> AppResult<TokenAgentAction> {
     let rationale = rationale.map(str::trim).filter(|s| !s.is_empty());
     // 裁定表在闸门那边（0076 决定 5）；分开没有闸门，所以不带 hold。表要是哪天把这一行
     // 改成了别的，这里拒绝落地，而不是照旧写一行 applied
@@ -212,8 +228,8 @@ pub async fn keep_duplicate_pair(
         "WITH t AS (
              INSERT INTO token_agent_actions
                  (id, kb_id, operation, target_kind, target_id, owner_id, token_id,
-                  token_name, outcome, payload)
-             VALUES ($1, $2, 'review.keep', 'review', $3, $4, $5, $6, $7, $8)
+                  token_name, outcome, payload, batch_id)
+             VALUES ($1, $2, 'review.keep', 'review', $3, $4, $5, $6, $7, $8, $9)
              RETURNING *)
          SELECT {COLS} FROM t {JOINS}"
     ))
@@ -225,10 +241,18 @@ pub async fn keep_duplicate_pair(
     .bind(&token_name)
     .bind(outcome.as_str())
     .bind(&payload)
+    .bind(batch_id)
     .fetch_one(&mut *tx)
     .await?;
 
     // 审计行与图上的变更同一条连接、同一个事务：写不进去，上面两笔一起回滚
+    let mut detail = serde_json::json!({
+        "left": left, "right": right, "score": score, "why": rationale,
+        "token_id": token_id, "token_name": token_name,
+    });
+    if let Some(batch_id) = batch_id {
+        detail["batch_id"] = serde_json::json!(batch_id);
+    }
     crate::audit::record_on(
         &mut tx,
         Some(kb_id),
@@ -236,10 +260,7 @@ pub async fn keep_duplicate_pair(
         "review.keep",
         "review",
         Some(review_id),
-        serde_json::json!({
-            "left": left, "right": right, "score": score, "why": rationale,
-            "token_id": token_id, "token_name": token_name,
-        }),
+        detail,
     )
     .await?;
 
@@ -1094,6 +1115,46 @@ pub fn target_gone(e: &AppError) -> bool {
         }
         _ => false,
     }
+}
+
+/// 人的撤回路径（`resolution::revert_merge`）说「这次合并已经撤回了」的那一句。整批撤回
+/// 里人的那一支拿它把这一条折成 `already_decided`；那个函数不归这里改，所以按原话认
+pub fn merge_already_reverted(e: &AppError) -> bool {
+    matches!(e, AppError::Conflict(said) if said == ALREADY_REVERTED)
+}
+
+/// 一批（0076：令牌的一次成批调用，服务端发的 `batch_id`）做出的合并，按做出的先后。
+///
+/// `None` = 这个库的台账里没有哪一行带着这个号：认不出的号、别的库的号，调用方答 404。
+/// `Some` 里只有**落地的合并行**指着的合并——留成提议的、分开的、没成的都不在里面，
+/// 所以整批撤回碰不到它们。全是分开或提议的一批是 `Some(空)`。已经撤回的合并照样列出来：
+/// 撤没撤过由撤回的那条路自己说（`already_decided`），这里不替它判
+pub async fn batch_merges(
+    pool: &PgPool,
+    kb_id: Uuid,
+    batch_id: Uuid,
+) -> AppResult<Option<Vec<Uuid>>> {
+    let known: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM token_agent_actions WHERE kb_id = $1 AND batch_id = $2)",
+    )
+    .bind(kb_id)
+    .bind(batch_id)
+    .fetch_one(pool)
+    .await?;
+    if !known {
+        return Ok(None);
+    }
+    let merges: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT merge_id FROM token_agent_actions
+          WHERE kb_id = $1 AND batch_id = $2 AND outcome = 'applied'
+            AND operation IN ('review.merge', 'merge.manual') AND merge_id IS NOT NULL
+          ORDER BY created_at, id",
+    )
+    .bind(kb_id)
+    .bind(batch_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(Some(merges))
 }
 
 /// 这两个实体之间最新的一次还没撤回的合并，方向不论。批准队列合并的提议之后用它找出

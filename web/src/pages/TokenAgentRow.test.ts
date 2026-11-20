@@ -7,6 +7,8 @@ import { en } from "../i18n/en";
 import { zh } from "../i18n/zh";
 import {
   TokenAgentRow,
+  activityTokenLabel,
+  batchLabel,
   declaredClientLabel,
   isOpenProposal,
   tokenOperationLabel,
@@ -63,7 +65,16 @@ const renderAnswerable = (a: TokenAgentAction) =>
   );
 
 /** 这一刀服务端会写出来的每一个 code：动作、理由、后来的状态、结果 */
-const OPERATIONS = ["review.keep", "review.merge", "merge.manual", "merge.revert"];
+const OPERATIONS = [
+  "review.keep",
+  "review.merge",
+  "merge.manual",
+  "merge.revert",
+  // Activity 里与提议有关的三种事件（审计的 action）
+  "agent.proposal",
+  "agent.proposal.declined",
+  "agent.proposal.superseded",
+];
 const PROPOSABLE = ["review.merge", "merge.manual", "merge.revert"];
 const REASONS = [
   "identity",
@@ -122,6 +133,40 @@ describe("a token agent's row in Agent History", () => {
   it("uses the removed-user wording when the owner's name is gone", () => {
     const html = render({ ...keep, owner_name: null });
     expect(html).toContain(`${S.kbset.deletedUser} via graph-curator`);
+  });
+});
+
+describe("a batch member in Agent History", () => {
+  const batchId = "019a0000-0000-7000-8000-0000a1b2c3d4";
+  const other = "019a0000-0000-7000-8000-00005e6f7a8b";
+
+  it("reads owner via token name and carries a short batch label", () => {
+    for (const a of [
+      { ...keep, batch_id: batchId },
+      { ...keep, operation: "review.merge", merge_id: proposedRevert.merge_id, batch_id: batchId },
+      { ...heldMerge, batch_id: batchId },
+      { ...keep, operation: "merge.revert", target_kind: "merge", batch_id: batchId },
+    ]) {
+      const html = render(a);
+      expect(html).toContain("Mira Okafor via graph-curator");
+      expect(html).toContain(batchLabel(batchId));
+      expect(html).toContain("batch a1b2c3d4");
+      // 整个号只在 title 里，行上写的是短标签
+      expect(html).not.toContain(`>${batchId}<`);
+    }
+  });
+
+  it("tells two batches apart and writes no label on a single call", () => {
+    expect(batchLabel(batchId)).not.toBe(batchLabel(other));
+    expect(render({ ...keep, batch_id: other })).toContain("batch 5e6f7a8b");
+    expect(render(keep)).not.toContain("batch");
+    expect(render(heldMerge)).not.toContain("batch");
+  });
+
+  it("adds no control: a batch is not reverted from the Review tab", () => {
+    const html = renderAnswerable({ ...keep, operation: "review.merge", batch_id: batchId });
+    expect(html).not.toMatch(/<(?:button|input|select|textarea)/);
+    expect(html).not.toContain(`>${S.review.revert}<`);
   });
 });
 
@@ -214,6 +259,8 @@ describe("every code the token ledger writes has a label in both languages", () 
           expect(table[code]).not.toBe(code);
         }
       }
+      expect(r.tokenBatch("a1b2c3d4")).toContain("a1b2c3d4");
+      expect(r.tokenBatch("a1b2c3d4")).not.toBe("a1b2c3d4");
       for (const text of [
         r.tokenApprove,
         r.tokenDecline,
@@ -231,6 +278,9 @@ describe("every code the token ledger writes has a label in both languages", () 
     for (const code of REASONS) expect(tokenReasonLabel(code)).not.toBe(code);
     for (const code of STATES) expect(tokenStateLabel(code)).not.toBe(code);
     for (const code of PROPOSABLE) expect(tokenProposalLabel(code)).not.toBe(code);
+    // 少一个标签，下面这一行就失败：标签函数对不认得的 code 原样写出来
+    for (const code of OPERATIONS) expect(tokenOperationLabel(code)).not.toBe(code);
+    for (const code of OUTCOMES) expect(S.review.tokenOutcome[code]).toBeTruthy();
     expect(tokenReasonLabel("something_new")).toBe("something_new");
     expect(tokenStateLabel("something_new")).toBe("something_new");
   });
@@ -246,6 +296,20 @@ describe("the labels token rows share", () => {
     expect(tokenOperationLabel("review.keep")).toBe(S.review.tokenOperations["review.keep"]);
     expect(tokenOperationLabel("review.keep")).not.toBe("review.keep");
     expect(tokenOperationLabel("review.something_new")).toBe("review.something_new");
+  });
+
+  it("labels every token event in Activity, and a person's answer to a proposal", () => {
+    for (const code of OPERATIONS) {
+      expect(activityTokenLabel(code, true)).toBe(tokenOperationLabel(code));
+      expect(activityTokenLabel(code, true)).not.toBe(code);
+    }
+    // 人的行：只有答提议的那两种动作在这张表里，别的照旧走 Activity 自己的表
+    for (const code of ["agent.proposal.declined", "agent.proposal.superseded"]) {
+      expect(activityTokenLabel(code, false)).toBe(S.review.tokenOperations[code]);
+    }
+    for (const code of ["review.keep", "review.merge", "merge.revert", "kb.updated"]) {
+      expect(activityTokenLabel(code, false)).toBeNull();
+    }
   });
 
   it("marks the client as declared", () => {

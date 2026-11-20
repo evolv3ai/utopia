@@ -179,6 +179,8 @@ export interface AuditEvent {
   token_name?: string;
   /** 调用方**自己报的** User-Agent，只在带令牌的行上有。是声明，不是验证过的身份 */
   declared_client?: string;
+  /** 令牌成批调用的一笔才有（0076）：服务端发的那一批的号 */
+  batch_id?: string;
 }
 
 export interface KbMember {

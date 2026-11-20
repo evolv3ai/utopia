@@ -361,7 +361,7 @@ pub async fn decide(
         let caller = ReviewCaller { user, token, kb_id };
         let rationale = body.rationale.as_deref();
         let answer = match body.action.as_str() {
-            "keep" => review_ops::keep(&state, &caller, review_id, rationale).await?,
+            "keep" => review_ops::keep(&state, &caller, review_id, rationale, None).await?,
             "merge" => review_ops::merge_pair(&state, &caller, review_id, rationale, None).await?,
             _ => {
                 // 先过 scope 与角色，再说「这个动作没开」：只读令牌问一个没开的动作，
@@ -1008,12 +1008,30 @@ const BATCH_MAX: usize = 500;
 
 /// 批量裁决（#428）：与单条 `decide` 同一条路——每条各自合并/分开、各自记
 /// 台账，回来的是逐条结果。一次只推一遍前端刷新。
+///
+/// 写令牌也能成批裁（0076）：令牌走 `review_ops::batch`——最多 50 对，每一对走单笔的
+/// 那条令牌路径（合并先过闸门），服务端发一个 `batch_id`；它在进下面这一段之前就离开了
+/// 处理函数。会话照旧跑下面这一段：上限 500，不问闸门，回答的形状不变
 pub async fn batch(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    caller: SessionOrToken,
     Path(kb_id): Path<Uuid>,
     Json(body): Json<BatchBody>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    let user = caller.user;
+    if let Some(token) = caller.pat {
+        let caller = ReviewCaller { user, token, kb_id };
+        return Ok(Json(
+            review_ops::batch(
+                &state,
+                &caller,
+                &body.ids,
+                &body.action,
+                body.rationale.as_deref(),
+            )
+            .await?,
+        ));
+    }
     require_kb(&state, &user, kb_id, Role::Editor).await?;
     if body.ids.is_empty() || body.ids.len() > BATCH_MAX {
         return Err(utopia_core::AppError::invalid(
@@ -1080,6 +1098,112 @@ pub async fn batch(
     state.emit_review(kb_id);
     let decided = decided_ids.len();
     Ok(Json(json!({ "decided": decided, "outcomes": outcomes })))
+}
+
+/// 整批撤回里人的那一支撤一次合并：照会话的 `revert_merge` 走——合并前后的名字、
+/// `resolution::revert_merge`、`merge.revert` 审计行（尽力而为）、`governance::after_revert`。
+/// 这是人的撤回：记在这个人名下，detail 里不带 `token_id`，只多一个 `agent_batch` 说它是
+/// 跟着哪一批撤的；撤的是令牌 agent 的合并，所以熔断器照人的撤回那样数它。
+/// 已经撤回的合并折成 `already_decided`——那条路自己说的是一句没有 code 的 409
+async fn revert_as_person(
+    state: &AppState,
+    kb_id: Uuid,
+    user_id: Uuid,
+    batch_id: Uuid,
+    merge_id: Uuid,
+) -> Result<serde_json::Value, utopia_core::AppError> {
+    let snap: Option<(String, String)> = sqlx::query_as(
+        "SELECT s.canonical_name, t.canonical_name
+         FROM entity_merges m
+         JOIN entities s ON s.id = m.source_id
+         JOIN entities t ON t.id = m.target_id
+         WHERE m.id = $1 AND m.kb_id = $2",
+    )
+    .bind(merge_id)
+    .bind(kb_id)
+    .fetch_optional(&state.pool)
+    .await
+    .ok()
+    .flatten();
+    if let Err(e) = utopia_store::resolution::revert_merge(&state.pool, kb_id, merge_id).await {
+        if utopia_store::token_agent_actions::merge_already_reverted(&e) {
+            return Err(utopia_core::AppError::CodedConflict {
+                code: "already_decided",
+                message: "This merge was already reverted.".into(),
+            });
+        }
+        return Err(e);
+    }
+    if let Some((s, t)) = snap {
+        record_approval(
+            state,
+            kb_id,
+            user_id,
+            "merge.revert",
+            "merge",
+            merge_id,
+            json!({ "source": s, "target": t, "agent_batch": batch_id }),
+        )
+        .await;
+    }
+    crate::governance::after_revert(state, kb_id, merge_id, user_id).await;
+    Ok(json!({ "outcome": "applied" }))
+}
+
+/// 把令牌的一批做出的合并整批撤回（0076）：`POST /review/agent-batches/{batch_id}/revert`。
+///
+/// 编辑者的写令牌与登录的编辑者都能调。令牌走 `review_ops::revert_batch`——每一次合并
+/// 经 `review_ops::revert_merge`；人走人的撤回路径（[`revert_as_person`]），一次合并一次。
+/// 两边回的是同一个形状：`{batch_id, reverted, outcomes}`，一次合并一条结果。尽力而为：
+/// 已经撤回的是那一条的 `already_decided`，这一批里分开的、留成提议的不碰。这个库的台账里
+/// 没有哪一行带着这个号是 404。Review 页上没有它的按钮。
+///
+/// 请求体按原始字节收下，只有令牌那一支去解析（空的，或 `{"rationale": "…"}`）：
+/// 与单笔撤回的路由同一个规矩
+pub async fn agent_batch_revert(
+    State(state): State<AppState>,
+    caller: SessionOrToken,
+    Path((kb_id, batch_id)): Path<(Uuid, Uuid)>,
+    body: axum::body::Bytes,
+) -> ApiResult<Json<serde_json::Value>> {
+    let user = caller.user;
+    if let Some(token) = caller.pat {
+        let caller = ReviewCaller { user, token, kb_id };
+        let body = if body.iter().all(u8::is_ascii_whitespace) {
+            TokenRevertBody::default()
+        } else {
+            match serde_json::from_slice::<TokenRevertBody>(&body) {
+                Ok(body) => body,
+                Err(_) => {
+                    // 先说「你写不了」，再说「你写错了」
+                    review_ops::authorize_write(&state, &caller).await?;
+                    return Err(utopia_core::AppError::invalid(
+                        "invalid_body",
+                        "The request body must be empty or a JSON object such as \
+                          {\"rationale\": \"why\"}",
+                    )
+                    .into());
+                }
+            }
+        };
+        return Ok(Json(
+            review_ops::revert_batch(&state, &caller, batch_id, body.rationale.as_deref()).await?,
+        ));
+    }
+    require_kb(&state, &user, kb_id, Role::Editor).await?;
+    // 与令牌那一支同一把进程内的锁：两个同时到的整批撤回排队，后到的每一条都是
+    // `already_decided`，而不是两边各跑一遍同一次合并的撤回
+    let _turn = review_ops::unit_revert_turn().await;
+    let merges = utopia_store::token_agent_actions::batch_merges(&state.pool, kb_id, batch_id)
+        .await?
+        .ok_or(utopia_core::AppError::NotFound)?;
+    let mut outcomes = Vec::with_capacity(merges.len());
+    for merge_id in merges {
+        let answered = revert_as_person(&state, kb_id, user.id, batch_id, merge_id).await;
+        outcomes.push(review_ops::unit_revert_outcome(merge_id, answered).await);
+    }
+    state.emit_review(kb_id);
+    Ok(Json(review_ops::unit_revert_answer(batch_id, outcomes)))
 }
 
 pub async fn confirm_fact(

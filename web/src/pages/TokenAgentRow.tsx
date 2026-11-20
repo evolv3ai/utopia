@@ -33,6 +33,21 @@ export function tokenStateLabel(state: string): string {
   return S.review.tokenStates[state] ?? state;
 }
 
+/** 成批调用的号，写成一个短标签（「batch 1a2b3c4d」）。**取末八位**：号是 UUIDv7，开头是
+ *  时间，前后脚的两批开头一样；末尾是随机的，才分得开。Agent 一档与 Activity 写法相同，
+ *  同一批的几行靠它认到一起 */
+export function batchLabel(batchId: string): string {
+  return S.review.tokenBatch(batchId.replace(/-/g, "").slice(-8));
+}
+
+/** Activity 里一条事件的动作，在令牌这张表里有没有说法：令牌的行（带 `token_name`）都走
+ *  这张表；人拒绝、或关掉一条过时提议的那两种事件是人的行，但动作是这一刀新写的，
+ *  同样在这张表里。别的事件回 null，照旧走 Activity 自己的那张表 */
+export function activityTokenLabel(action: string, byToken: boolean): string | null {
+  if (byToken) return tokenOperationLabel(action);
+  return action.startsWith("agent.proposal") ? tokenOperationLabel(action) : null;
+}
+
 /** 调用方自己报的 User-Agent。它由调用方完全控制，所以每次展示都写明是「declared」 */
 export function declaredClientLabel(client: string): string {
   return S.kbset.auditDeclaredClient(client);
@@ -113,6 +128,12 @@ export function TokenAgentRow({
       </div>
       <div className="mt-1 flex items-center gap-3 text-small text-ink-2">
         <span className="u-num text-fine shrink-0">{localDate(a.created_at)}</span>
+        {/* 成批调用的一笔：同一批的几行写着同一个标签 */}
+        {a.batch_id && (
+          <span className="u-num text-fine shrink-0" title={a.batch_id}>
+            {batchLabel(a.batch_id)}
+          </span>
+        )}
         {a.reason && <span className="shrink-0">{tokenReasonLabel(a.reason)}</span>}
         {a.rationale && <span className="truncate min-w-0">“{a.rationale}”</span>}
       </div>

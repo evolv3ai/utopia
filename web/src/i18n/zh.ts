@@ -1876,7 +1876,11 @@ export const zh: Strings = {
       "review.merge": "合并了一对重复项",
       "merge.manual": "合并了两个实体",
       "merge.revert": "撤销了一次合并",
+      "agent.proposal": "提议了一项改动，等人来答",
+      "agent.proposal.declined": "拒绝了 agent 的一条提议",
+      "agent.proposal.superseded": "关掉了 agent 一条已经过时的提议",
     } as Record<string, string>,
+    tokenBatch: (id) => `批次 ${id}`,
     tokenProposes: {
       "review.merge": "想合并一对重复项",
       "merge.manual": "想合并两个实体",

@@ -1,11 +1,13 @@
 //! Review 的 MCP 工具（0076 决定 2）：`review_list`、`review_item`、`review_keep`、
-//! `review_merge`、`review_revert`。
+//! `review_merge`、`review_revert`、`review_batch`。
 //!
 //! 两个读工具管 Review 的十三档：`review_list` 读一档的一页（十一个列表档、总览、决策台账），
 //! `review_item` 读某一档里列着的一条，违规一档的条目带上它的证明。写的有两样：
 //! `review_keep` 把一对分开；`review_merge` 合并队列里的一对或手动指定的两个实体，
 //! 先过服务端的闸门，被留下的不落地、只留一条等人答的提议；`review_revert` 撤回一次
-//! 合并——令牌 agent 做的直接撤，人或治理 agent 做的只留提议。**没有哪个工具能答提议。**
+//! 合并——令牌 agent 做的直接撤，人或治理 agent 做的只留提议，给 `batch_id` 就是把一批
+//! 做出的合并整批撤回；`review_batch` 一次裁最多 50 对重复项，每一对走的就是单笔的那条路，
+//! 服务端发一个 `batch_id`。**没有哪个工具能答提议。**
 //!
 //! **这里只做两件事：把参数递给 `review_ops`，把它的回答变成工具结果。** 授权、裁定表、
 //! 台账、审计都在 `review_ops` 里面，REST 的令牌分支调的是同一批函数——所以同一枚令牌
@@ -18,14 +20,12 @@
 //!
 //! 标注（`readOnlyHint` 之类）只是给客户端的提示，服务端没有一条路径读它们（0076 决定 3）。
 
-use axum::response::IntoResponse;
 use serde_json::{json, Value};
 use utopia_core::AppError;
 use uuid::Uuid;
 
 use super::review_ops::{self, ReviewCaller};
 use super::tools::{Step, ToolResult};
-use crate::error::ApiErr;
 use crate::state::AppState;
 
 const LIST: &str = "review_list";
@@ -33,15 +33,16 @@ const ITEM: &str = "review_item";
 const KEEP: &str = "review_keep";
 const MERGE: &str = "review_merge";
 const REVERT: &str = "review_revert";
+const BATCH: &str = "review_batch";
 
 /// 这个名字归不归这里管。归这里的，`mcp.rs` 不再拿它去问 `is_exposed`
 pub(super) fn serves(name: &str) -> bool {
-    matches!(name, LIST | ITEM | KEEP | MERGE | REVERT)
+    matches!(name, LIST | ITEM | KEEP | MERGE | REVERT | BATCH)
 }
 
 /// 写工具：只列给写得了的调用方，标注里 `readOnlyHint` 是 false
 fn writes(name: &str) -> bool {
-    matches!(name, KEEP | MERGE | REVERT)
+    matches!(name, KEEP | MERGE | REVERT | BATCH)
 }
 
 /// 工具定义，OpenAI 的形状——`chat::check_call` 认的就是这个形状，参数守卫与别的工具
@@ -60,7 +61,12 @@ fn writes(name: &str) -> bool {
 ///
 /// `review_revert` 的说明**不许把撤回说成完全复原**（0076）：它只把图放回去，合并还在时
 /// 推出的派生、记下的违规、导出的东西、答出去的话都不收回；没有类型的存活方留着拿到的
-/// 类型，存活的事实留着抄给它的陈述来源。这三句写在说明里，对面的 agent 读得到
+/// 类型，存活的事实留着抄给它的陈述来源。这三句写在说明里，对面的 agent 读得到。
+/// 它同样**没有必填参数**：`merge_id`（一次合并）与 `batch_id`（一批）正好给一个，
+/// 给了几个由 [`call`] 看
+///
+/// `review_batch` 的 `ids` **不写 `minItems` / `maxItems`**：0 条与 51 条是操作自己的拒绝
+/// （`batch_size`，与 REST 同一个 code），不是客户端在本地拦下的参数错误
 fn definitions() -> Value {
     json!([
         {
@@ -238,7 +244,14 @@ fn definitions() -> Value {
             "function": {
                 "name": REVERT,
                 "description": "Revert one merge, named by its merge_id (from the result of \
-                    review_merge, or from review_list with section \"merges\"). A merge that a \
+                    review_merge, or from review_list with section \"merges\"), or every merge \
+                    one review_batch call made, named by its batch_id. Pass exactly one of \
+                    merge_id and batch_id. With batch_id each merge of the batch that is not \
+                    yet reverted goes through the same single revert, best effort; the result \
+                    is {batch_id, reverted, outcomes: [{merge_id, outcome, code, error}]}, a \
+                    merge that was already reverted is that item's already_decided, pairs the \
+                    batch kept apart are left as they are, and a batch_id no action of this \
+                    knowledge base carries is refused with code not_found. A merge that a \
                     token agent made on this knowledge base, through this token or another, is \
                     reverted at once and recorded under the token's owner and the token's \
                     name; the result is {ok, outcome: \"applied\", action_id, merge_id}. A \
@@ -262,14 +275,65 @@ fn definitions() -> Value {
                             "type": "string",
                             "format": "uuid",
                             "description": "Merge id (uuid): merge_id in the result of \
-                                review_merge, or the id of an item of the \"merges\" section."
+                                review_merge, or the id of an item of the \"merges\" section. \
+                                Leave out when batch_id is given."
+                        },
+                        "batch_id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "description": "Batch id (uuid): batch_id in the result of \
+                                review_batch. Reverts every merge that batch made. Given \
+                                instead of merge_id."
                         },
                         "rationale": {
                             "type": "string",
                             "description": "Optional: one sentence on why the merge was wrong."
                         }
+                    }
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": BATCH,
+                "description": "Decide 1 to 50 pending duplicate pairs in one call, all with \
+                    the same action: \"merge\" or \"keep\". Each pair goes through the same \
+                    path as review_merge or review_keep, one by one in the order given, so a \
+                    batch grants nothing a single call would not: the server's merge gate is \
+                    asked for every pair, and a pair it holds changes nothing and waits as a \
+                    proposal that only a signed-in person can answer. The server issues one \
+                    batch_id, recorded with every action of the batch under the token's owner \
+                    and the token's name. The result is {batch_id, decided, outcomes: [{id, \
+                    outcome, action_id, merge_id, reason, code, error}]}, one outcome per id in \
+                    the order given; outcome is \"applied\", \"held\" or \"proposed\", or null \
+                    with code and error set when that pair was refused (not_found for an \
+                    unknown id, already_decided for a pair that was already decided); decided \
+                    counts the applied pairs. One refused pair does not stop the others. An id \
+                    given twice gets, the second time, the answer its state then gives. An \
+                    empty list or more than 50 ids is refused as a whole with code batch_size, \
+                    and so is an action other than merge or keep; nothing is changed. To undo \
+                    the merges of a batch, call review_revert with its batch_id.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "ids": {
+                            "type": "array",
+                            "items": { "type": "string", "format": "uuid" },
+                            "description": "Review ids (uuids) of 1 to 50 pending duplicate \
+                                pairs from review_list, in the order to decide them."
+                        },
+                        "action": {
+                            "type": "string",
+                            "description": "\"merge\" or \"keep\", applied to every pair."
+                        },
+                        "rationale": {
+                            "type": "string",
+                            "description": "Optional: one sentence that holds for the whole \
+                                batch."
+                        }
                     },
-                    "required": ["merge_id"]
+                    "required": ["ids", "action"]
                 }
             }
         }
@@ -284,6 +348,10 @@ fn annotations(name: &str) -> Value {
         MERGE => json!({ "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false }),
         // 撤回同样改事实与实体；第二次是 `already_decided`，不是同一个结果再来一遍
         REVERT => {
+            json!({ "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false })
+        }
+        // 一批里落地的合并同样改事实与实体
+        BATCH => {
             json!({ "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false })
         }
         _ => json!({ "readOnlyHint": true }),
@@ -379,21 +447,8 @@ fn success(name: &str, content: Value) -> ToolResult {
 /// 正是这一层要保证的。404 在 REST 那边没有 code，这里给它 `not_found`；别的没有
 /// code 的错误不带 `code` 键。内部错误的细节同样只留在日志里
 async fn refusal(name: &str, error: AppError) -> ToolResult {
-    let response = ApiErr(error).into_response();
-    let status = response.status();
-    let body: Value = axum::body::to_bytes(response.into_body(), 64 * 1024)
-        .await
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or(Value::Null);
-    let message = body["error"]
-        .as_str()
-        .unwrap_or("Internal server error")
-        .to_string();
-    let code = body["code"]
-        .as_str()
-        .map(str::to_string)
-        .or_else(|| (status == axum::http::StatusCode::NOT_FOUND).then(|| "not_found".to_string()));
+    // 渲染在 `review_ops::refused`：成批调用里每一条的 code 读的也是它
+    let (code, message) = review_ops::refused(error).await;
     let mut content = json!({ "message": message });
     if let Some(code) = &code {
         content["code"] = json!(code);
@@ -483,7 +538,7 @@ pub(super) async fn call(
                 Ok(v) => v,
                 Err(refused) => return refused,
             };
-            review_ops::keep(state, caller, id, rationale).await
+            review_ops::keep(state, caller, id, rationale, None).await
         }
         MERGE => {
             let (id, source, target) = match (
@@ -525,19 +580,62 @@ pub(super) async fn call(
             }
         }
         REVERT => {
-            // `format: uuid` 由守卫挡过；这里再解析一次，解析不了同样不执行
-            let Some(merge_id) = args["merge_id"]
-                .as_str()
-                .and_then(|s| s.trim().parse::<Uuid>().ok())
-            else {
-                return bad_argument(name, "merge_id", "a uuid returned by another review tool");
+            // 两个 id 都不是必填，守卫不看它们的格式：这里解析，解析不了就不执行
+            let (merge_id, batch_id) = match (
+                optional_uuid(name, &args, "merge_id"),
+                optional_uuid(name, &args, "batch_id"),
+            ) {
+                (Ok(merge_id), Ok(batch_id)) => (merge_id, batch_id),
+                (Err(refused), _) | (_, Err(refused)) => return refused,
             };
             let rationale = match optional_string(name, &args, "rationale") {
                 Ok(v) => v,
                 Err(refused) => return refused,
             };
-            // 与 REST 的撤回路由同一个操作：直接撤还是只留提议，由它里面的规则说
-            review_ops::revert_merge(state, caller, merge_id, rationale, None).await
+            // 两种给法各走各的操作，与 REST 的两条路由一一对应：一次合并的撤回（直接撤还是
+            // 只留提议，由它里面的规则说），一批的整批撤回。两个都给、都没给就不执行，不猜
+            match (merge_id, batch_id) {
+                (Some(merge_id), None) => {
+                    review_ops::revert_merge(state, caller, merge_id, rationale, None).await
+                }
+                (None, Some(batch_id)) => {
+                    review_ops::revert_batch(state, caller, batch_id, rationale).await
+                }
+                _ => {
+                    return ToolResult::new(
+                        format!(
+                            "{name} needs exactly one of `merge_id` (one merge) and `batch_id` \
+                            (every merge of one batch), so the call was not run. Call it again \
+                            with one of the two."
+                        ),
+                        Step::new("tool", name, "invalid arguments")
+                            .invalid("merge_id")
+                            .json(),
+                    )
+                    .error()
+                }
+            }
+        }
+        BATCH => {
+            // `ids` 与 `action` 必填，守卫看过在不在；`ids` 里每一个都得是 uuid——有一个
+            // 不是，整批不执行（REST 上同样是整个请求被拒）。条数不在这里看：0 条与 51 条
+            // 由 `review_ops::batch` 拒绝，带的是 REST 的 code
+            let ids: Option<Vec<Uuid>> = args["ids"].as_array().and_then(|ids| {
+                ids.iter()
+                    .map(|id| id.as_str().and_then(|s| s.trim().parse::<Uuid>().ok()))
+                    .collect()
+            });
+            let Some(ids) = ids else {
+                return bad_argument(name, "ids", "a list of uuids returned by review_list");
+            };
+            let Some(action) = args["action"].as_str() else {
+                return bad_argument(name, "action", "\"merge\" or \"keep\"");
+            };
+            let rationale = match optional_string(name, &args, "rationale") {
+                Ok(v) => v,
+                Err(refused) => return refused,
+            };
+            review_ops::batch(state, caller, &ids, action.trim(), rationale).await
         }
         // `serves` 之外的名字到不了这里；到了也只说没有这个工具，不去碰库
         _ => {

@@ -371,22 +371,28 @@ async fn a_token_refused_on_merge_manual_merge_revert_or_batch_leaves_the_graph_
                 anyhow::ensure!(body["code"] == code, "{code} {path}: {body}");
             }
         }
-        // 批量（不论动作）：这条路由仍只认会话
-        let closed = [
-            (
-                format!("/kbs/{kb}/review/batch"),
-                json!({ "ids": [pair, other], "action": "merge" }),
-            ),
-            (
-                format!("/kbs/{kb}/review/batch"),
-                json!({ "ids": [pair, other], "action": "keep" }),
-            ),
-        ];
-        for (path, body) in closed {
-            let (status, answer) = f.call(&token, "POST", &path, Some(body.clone())).await?;
+        // 批量（不论动作）也开给了编辑者的写令牌；留下来的拒绝是同样那两种，外加条数：
+        // 写得了的令牌一批给 51 条，整批被拒（`batch_size`），一对都没碰
+        let path = format!("/kbs/{kb}/review/batch");
+        for action in ["merge", "keep"] {
+            let body = json!({ "ids": [pair, other], "action": action });
+            for (refused, code) in [
+                (&read_only, "token_read_only"),
+                (&viewer_write, "token_owner_below_editor"),
+            ] {
+                let (status, answer) = f.call(refused, "POST", &path, Some(body.clone())).await?;
+                anyhow::ensure!(
+                    status == StatusCode::FORBIDDEN && answer["code"] == code,
+                    "{code} {path} {body}: {status} {answer}"
+                );
+            }
+            let mut too_many = vec![pair, other];
+            too_many.extend((0..49).map(|_| Uuid::now_v7()));
+            let body = json!({ "ids": too_many, "action": action });
+            let (status, answer) = f.call(&token, "POST", &path, Some(body)).await?;
             anyhow::ensure!(
-                status == StatusCode::UNAUTHORIZED,
-                "{path} {body}: {status} {answer}"
+                status == StatusCode::UNPROCESSABLE_ENTITY && answer["code"] == "batch_size",
+                "51 ids {path} {action}: {status} {answer}"
             );
         }
 

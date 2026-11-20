@@ -1093,12 +1093,8 @@ async fn a_token_cannot_nod_and_every_review_write_outside_the_ruled_table_answe
                 "nod {action}: {status} {body}"
             );
         }
-        // 批量、回答治理 agent 的建议：同样没开给令牌
+        // 回答治理 agent 的建议：同样没开给令牌（批量已经开给了编辑者的写令牌，不在这里）
         let writes = [
-            (
-                format!("/kbs/{kb}/review/batch"),
-                json!({ "ids": [duplicates[0], duplicates[1]], "action": "keep" }),
-            ),
             (
                 format!("/kbs/{kb}/review/agent/{}", agent[0]),
                 json!({ "action": "keep" }),

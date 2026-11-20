@@ -1113,12 +1113,14 @@ async fn review_revert_is_listed_only_to_a_write_token_of_an_editor_and_says_wha
             revert["annotations"]["readOnlyHint"] == false,
             "a write tool is not read-only: {revert}"
         );
-        // 一个 uuid 的 `merge_id`，一句可省的理由
+        // `merge_id`（一次合并）或 `batch_id`（一批），都是 uuid、正好给一个——所以没有必填
+        // 参数；外加一句可省的理由
         let schema = &revert["inputSchema"];
         anyhow::ensure!(
-            schema["required"] == json!(["merge_id"])
-                && keys(&schema["properties"]) == ["merge_id", "rationale"]
-                && schema["properties"]["merge_id"]["format"] == "uuid",
+            schema.get("required").is_none()
+                && keys(&schema["properties"]) == ["batch_id", "merge_id", "rationale"]
+                && schema["properties"]["merge_id"]["format"] == "uuid"
+                && schema["properties"]["batch_id"]["format"] == "uuid",
             "{schema}"
         );
         // 说明不把撤回说成完全复原（N6）：不收回什么、没类型的存活方、抄过去的陈述来源

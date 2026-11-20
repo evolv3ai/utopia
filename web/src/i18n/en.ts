@@ -2142,7 +2142,13 @@ export const en = {
       "review.merge": "merged a duplicate pair",
       "merge.manual": "merged two entities",
       "merge.revert": "reverted a merge",
+      // Activity 里与提议有关的三种事件：令牌的调用被留成提议；人拒绝了它；它过时了
+      "agent.proposal": "proposed a change that waits for a person",
+      "agent.proposal.declined": "declined an agent proposal",
+      "agent.proposal.superseded": "closed an agent proposal that no longer applies",
     } as Record<string, string>,
+    // 成批调用的号（0076）：只写号的末八位，够把同一批的几行认到一起
+    tokenBatch: (id: string) => `batch ${id}`,
     // 同一个动作没落地、留成提议时的说法（0076）：它想做，还没做
     tokenProposes: {
       "review.merge": "wants to merge a duplicate pair",

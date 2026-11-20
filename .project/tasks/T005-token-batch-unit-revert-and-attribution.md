@@ -3,9 +3,9 @@ id: T005
 title: A write token of an editor batches up to 50 duplicate pairs under one batch id, the batch is reverted as a unit, and every agent action reads as owner via token name with its batch id in Agent History and Activity
 wave: 4
 deps: [T004]
-status: pending
-agent: null
-base: null
+status: done
+agent: build_T005
+base: 810c9db658f8266441d91c3ecf3cd7a13ae31e38
 worktree: null
 task_branch: null
 files:
@@ -212,3 +212,115 @@ Heavy: yes
   - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
   ```
 - 2026-11-19 — orchestrator: landing refused (the landing allow-list is read from the committed brief, and the file-scope repair D120 was made after activation). The repaired brief is checkpointed here with the task returned to pending; the coder work is held in a Git stash and restored on re-activation, then landed without a new coder run.
+- 2026-11-20 — orchestrator Verify (sidecar gsd-path-verify/task-t005-verify): pass, exit 0; output tail:
+  ```
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:33472) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:38072) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:17916) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:31312) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:21632) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:40380) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:29108) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  [33m
+  (!) Some chunks are larger than 500 kB after minification. Consider:
+  - Using dynamic import() to code-split the application
+  - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+  - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+  ```
+- 2026-11-20 — orchestrator regression Verify of T001 (sidecar gsd-path-verify/task-t005-verify): pass, exit 0; output tail:
+  ```
+  test a_token_keep_with_no_token_to_name_changes_nothing ... ok
+  test a_token_keep_writes_the_review_row_the_ledger_row_and_the_audit_row_together ... ok
+  test replaying_migration_0128_changes_nothing ... ok
+  
+  test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.55s
+  
+     Compiling utopia-store v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t005-verify\crates\utopia-store)
+      Finished `test` profile [unoptimized + debuginfo] target(s) in 8.56s
+       Running tests\store\main.rs (C:/Users/Owner/.gsd-path/cargo-target/finish-m003-T005\debug\deps\store-97773e81a9073f97.exe)
+  
+  running 6 tests
+  test a_name_is_a_fact::merging_moves_names_and_reverting_brings_them_back ... ok
+  test merge_direction_counts_live_facts_in_each_base::merge_direction_counts_live_facts_in_each_base ... ok
+  test a_timeline_holds_whatever_the_order::a_revert_restores_both_timelines_a_merge_rewrote ... ok
+  test history_shows_the_merge_itself::history_carries_the_merge_and_its_direction ... ok
+  test an_automatic_merge_is_gated_by_what_it_can_undo::a_merge_that_would_leave_the_graph_is_held ... ok
+  test a_signature_holds_on_every_path::a_merge_that_breaks_the_signature_is_recorded ... ok
+  
+  test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 355 filtered out; finished in 0.88s
+  ```
+- 2026-11-20 — orchestrator regression Verify of T002 (sidecar gsd-path-verify/task-t005-verify): pass, exit 0; output tail:
+  ```
+  test api::review_mcp_tests::a_refused_keep_carries_the_same_code_over_the_api_and_over_mcp ... ok
+  test api::review_token_api_tests::an_empty_duplicates_section_reads_the_same_for_a_token_and_a_session ... ok
+  test api::review_token_api_tests::a_keep_over_the_api_is_refused_with_its_code ... ok
+  test api::review_mcp_reads_tests::review_item_defaults_to_duplicates_and_finds_a_kind_word_by_its_exact_word_and_an_agent_row_by_its_row_id ... ok
+  test api::review_token_api_tests::a_token_keep_over_the_api_starts_no_govern_round ... ok
+  test api::review_mcp_reads_tests::review_item_refuses_mappings_and_an_unknown_section_with_unknown_queue ... ok
+  test api::review_token_api_tests::a_write_token_of_an_editor_keeps_a_pair_over_the_api ... ok
+  test api::review_token_api_tests::a_token_whose_kb_ids_exclude_the_base_gets_404_on_review_reads ... ok
+  test api::review_session_unchanged_tests::a_session_editor_gets_todays_duplicates_overview_keep_merge_and_batch_responses ... ok
+  test api::review_token_api_tests::a_read_token_of_a_viewer_lists_duplicates_and_overview_as_a_session_editor_sees_them ... ok
+  test api::review_mcp_tests::two_keeps_of_one_pair_at_once_apply_exactly_one ... ok
+  test api::review_token_api_tests::a_token_refused_on_merge_manual_merge_revert_or_batch_leaves_the_graph_equal ... ok
+  test api::review_token_api_tests::a_token_receives_duplicates_in_the_session_order ... ok
+  test api::review_mcp_reads_tests::review_list_returns_what_the_token_api_returns_for_each_of_the_thirteen_sections ... ok
+  test api::review_mcp_reads_tests::review_item_returns_the_listed_items_own_fields_for_one_item_of_each_section ... ok
+  test api::review_mcp_reads_tests::review_list_pages_decisions_by_page_and_per_and_the_queue_sections_by_limit_and_offset ... ok
+  test api::review_mcp_reads_tests::review_item_answers_one_not_found_for_an_unknown_id_another_bases_id_and_an_item_no_longer_waiting ... ok
+  
+  test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 881 filtered out; finished in 5.80s
+  ```
+- 2026-11-20 — orchestrator regression Verify of T003 (sidecar gsd-path-verify/task-t005-verify): pass, exit 0; output tail:
+  ```
+  test api::review_token_reads_tests::a_token_cannot_nod_and_every_review_write_outside_the_ruled_table_answers_401 ... ok
+  test api::review_token_api_tests::a_token_receives_duplicates_in_the_session_order ... ok
+  test api::review_token_reads_tests::a_token_asking_for_mappings_or_an_unknown_section_is_refused_with_unknown_queue ... ok
+  test api::review_token_reads_tests::agent_history_read_by_a_token_names_the_owner_and_the_token_of_a_keep_beside_governor_rows ... ok
+  test api::review_mcp_reads_tests::review_item_refuses_mappings_and_an_unknown_section_with_unknown_queue ... ok
+  test api::review_token_reads_tests::a_read_token_of_a_viewer_lists_each_of_the_thirteen_sections_as_a_session_editor_sees_them ... ok
+  test api::review_token_reads_tests::a_token_paging_alignment_with_equal_timestamps_visits_each_waiting_item_exactly_once ... ok
+  test api::review_token_reads_tests::agent_history_without_a_token_action_reads_governor_rows_only_and_a_ledger_row_keeps_its_stored_token_name ... ok
+  test api::review_token_reads_tests::an_empty_section_reads_as_an_empty_list_with_total_0_for_a_token_as_for_a_session ... ok
+  test api::review_token_reads_tests::a_token_receives_each_sections_items_in_the_session_order ... ok
+  test api::review_mcp_reads_tests::review_list_returns_what_the_token_api_returns_for_each_of_the_thirteen_sections ... ok
+  test api::review_mcp_reads_tests::review_item_returns_the_listed_items_own_fields_for_one_item_of_each_section ... ok
+  test api::review_token_reads_tests::a_tokens_total_counts_the_listed_rows_and_counts_keep_their_values ... ok
+  test api::review_mcp_reads_tests::review_list_pages_decisions_by_page_and_per_and_the_queue_sections_by_limit_and_offset ... ok
+  test api::review_token_reads_tests::a_token_whose_kb_ids_exclude_the_base_gets_404_on_every_review_read ... ok
+  test api::review_mcp_reads_tests::review_item_answers_one_not_found_for_an_unknown_id_another_bases_id_and_an_item_no_longer_waiting ... ok
+  test api::review_token_reads_tests::a_token_page_size_is_clamped_and_an_offset_at_or_past_the_total_returns_no_items ... ok
+  
+  test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 880 filtered out; finished in 16.45s
+  ```
+- 2026-11-20 — orchestrator regression Verify of T004 (sidecar gsd-path-verify/task-t005-verify): pass, exit 0; output tail:
+  ```
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:13640) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:37780) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:5684) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:10684) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:30756) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:27656) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:7212) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  [33m
+  (!) Some chunks are larger than 500 kB after minification. Consider:
+  - Using dynamic import() to code-split the application
+  - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+  - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+  ```

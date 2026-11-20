@@ -18,7 +18,7 @@ import {
 import { api, type AuditEvent } from "../api";
 import { LANG_NAMES, S } from "../i18n";
 import { toast } from "../toast";
-import { declaredClientLabel, tokenOperationLabel, viaToken } from "./TokenAgentRow";
+import { activityTokenLabel, batchLabel, declaredClientLabel, viaToken } from "./TokenAgentRow";
 import {
   Button,
   Checkbox,
@@ -667,14 +667,21 @@ export function KbActivity({ kbId }: { kbId: string }) {
                   <span className="text-ink-2">
                     {/* 令牌行的动作标签另有一张表：往 auditActions 里加 review.keep
                         会把人和治理 agent 的行一起改了 */}
-                    {e.token_name
-                      ? tokenOperationLabel(e.action)
-                      : (S.kbset.auditActions[e.action] ?? e.action)}
+                    {activityTokenLabel(e.action, !!e.token_name) ??
+                      S.kbset.auditActions[e.action] ??
+                      e.action}
                   </span>
                   {auditDetailName(e) && (
                     <span className="text-ink-2">
                       {" "}
                       “{auditDetailName(e)}”
+                    </span>
+                  )}
+                  {/* 令牌成批调用的一笔（0076）：带上那一批的短标签，与 Agent 一档同一个写法 */}
+                  {e.token_name && e.batch_id && (
+                    <span className="u-num text-fine text-ink-2" title={e.batch_id}>
+                      {" · "}
+                      {batchLabel(e.batch_id)}
                     </span>
                   )}
                   {/* 调用方自己报的 User-Agent：只在令牌行上，而且写明是 declared */}

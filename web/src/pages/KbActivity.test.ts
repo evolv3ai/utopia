@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import { ApiError, type AuditEvent } from "../api";
 import { S } from "../i18n";
 import { KbActivity } from "./KbSettings";
+import { batchLabel } from "./TokenAgentRow";
 
 const kbId = "research";
 const queryKey = ["kbAudit", kbId, "", "", "", 0];
@@ -109,6 +110,59 @@ it("shows a token event that sent no User-Agent without a client label", () => {
 it("uses the removed-user wording before via when the owner's name is gone", () => {
   const rows = rowsOf(renderEvents([{ ...tokenKeep, actor_name: null }]));
   expect(rows).toContain(`${S.kbset.deletedUser} via graph-curator`);
+});
+
+// 令牌成批调用的一笔（0076）：另带服务端发的那一批的号
+const batchId = "019a0000-0000-7000-8000-0000a1b2c3d4";
+
+/** 这一刀让令牌写进 Activity 的每一种事件：落地的四种动作，和留成提议的那一种 */
+const TOKEN_ACTIONS = ["review.keep", "review.merge", "merge.manual", "merge.revert", "agent.proposal"];
+
+it("shows every token action as owner via token name in words, never as a raw code", () => {
+  for (const action of TOKEN_ACTIONS) {
+    const rows = rowsOf(renderEvents([{ ...tokenKeep, action }]));
+    expect(rows).toContain("Mira Okafor via graph-curator");
+    expect(S.review.tokenOperations[action], action).toBeTruthy();
+    expect(rows).toContain(S.review.tokenOperations[action]);
+    expect(rows).not.toContain(action);
+    // 不是治理 agent 或引擎的行
+    expect(rows).not.toContain(S.kbset.adjudicator);
+    expect(rows).not.toContain(S.kbset.engine);
+  }
+});
+
+it("shows the batch label on a batch member and none on a single call", () => {
+  for (const action of TOKEN_ACTIONS) {
+    const rows = rowsOf(renderEvents([{ ...tokenKeep, action, batch_id: batchId }]));
+    expect(rows).toContain("Mira Okafor via graph-curator");
+    expect(rows).toContain(batchLabel(batchId));
+    expect(rows).toContain("batch a1b2c3d4");
+  }
+  expect(rowsOf(renderEvents([tokenKeep]))).not.toContain("batch");
+  // 人的事件哪怕带着这个键也不写：批是令牌的
+  const person: AuditEvent = { ...tokenKeep, batch_id: batchId };
+  delete person.token_id;
+  delete person.token_name;
+  expect(rowsOf(renderEvents([person]))).not.toContain("batch");
+});
+
+it("shows a person's answer to an agent proposal in words, as that person's", () => {
+  for (const action of ["agent.proposal.declined", "agent.proposal.superseded"]) {
+    const answered: AuditEvent = {
+      ...tokenKeep,
+      action,
+      target_kind: "agent_action",
+      detail: { operation: "review.merge", proposed_by_token: "graph-curator" },
+    };
+    delete answered.token_id;
+    delete answered.token_name;
+    delete answered.declared_client;
+    const rows = rowsOf(renderEvents([answered]));
+    expect(rows).toContain("Mira Okafor");
+    expect(rows).not.toContain(" via ");
+    expect(rows).toContain(S.review.tokenOperations[action]);
+    expect(rows).not.toContain(action);
+  }
 });
 
 it("leaves events without a token name exactly as they were", () => {

@@ -462,6 +462,11 @@ pub struct AuditEventView {
     #[sqlx(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub declared_client: Option<String>,
+    /// 成批调用的号（0076）：令牌的一次批量里每一笔的 detail 都带着服务端发的 `batch_id`。
+    /// 同样「有才序列化」——不是批里的一笔，形状原样不动
+    #[sqlx(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub batch_id: Option<String>,
 }
 
 /// 账户层"我的知识库"行信息（成员行可空：open 库凭部署身份进入，无矩阵记录）。
