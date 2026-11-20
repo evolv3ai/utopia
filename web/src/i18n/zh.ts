@@ -2349,6 +2349,7 @@ export const zh: Strings = {
     adjudicator: "AI 裁决器",
     engine: "引擎",
     auditDeclaredClient: (client) => `客户端（自报）：${client}`,
+    auditProposedBy: (proposer) => `由 ${proposer} 提议`,
     auditActions: {
       "entity_type.created": "创建了实体类型",
       "entity_type.updated": "更新了实体类型",

@@ -181,6 +181,11 @@ export interface AuditEvent {
   declared_client?: string;
   /** 令牌成批调用的一笔才有（0076）：服务端发的那一批的号 */
   batch_id?: string;
+  /** 人答令牌提议的那一行才有（批准、拒绝、过时关闭，0076 决定 8）：提议它的令牌在提议
+   *  那一刻的名字快照。actor 仍是答的这个人 */
+  proposed_by_token?: string;
+  /** 那枚令牌的主人；账号已移除时没有 */
+  proposed_by_owner?: string;
 }
 
 export interface KbMember {

@@ -1841,8 +1841,10 @@ async fn every_action_reads_owner_via_token_name_in_agent_history_and_activity(
                 "{what}: {event}"
             );
         }
-        // 人的回答：拒绝与过时那两行说出提议它的令牌（存下的名字）；批准的那一行是人的
-        // 决定，指着提议、不带令牌（N2）——令牌的名字在那条提议自己的行上
+        // 人的回答：拒绝、过时、批准那三行都是这个人的（N2），不带令牌；读的时候从提议的
+        // 台账行取出提议它的令牌（存下的名字，改名、撤销之后照旧）与主人，写在
+        // `proposed_by_token` / `proposed_by_owner` 上
+        let mut answers = Vec::new();
         for (id, action) in [
             (declined, "agent.proposal.declined"),
             (superseded, "agent.proposal.superseded"),
@@ -1851,12 +1853,12 @@ async fn every_action_reads_owner_via_token_name_in_agent_history_and_activity(
                 .iter()
                 .find(|e| e["action"] == action && e["target_id"] == json!(id))
                 .ok_or_else(|| anyhow::anyhow!("no {action} row"))?;
+            // 存下的 detail 原样：拒绝与过时那两行本来就记着令牌名
             anyhow::ensure!(
-                event["actor_name"] == "Editor"
-                    && event["detail"]["proposed_by_token"] == TOKEN_NAME
-                    && event.get("token_id").is_none(),
+                event["detail"]["proposed_by_token"] == TOKEN_NAME,
                 "{action}: {event}"
             );
+            answers.push((action, event));
         }
         let event = events
             .iter()
@@ -1864,10 +1866,230 @@ async fn every_action_reads_owner_via_token_name_in_agent_history_and_activity(
                 e["detail"]["agent_proposal"] == json!(approved) && e["action"] == "defect.decided"
             })
             .ok_or_else(|| anyhow::anyhow!("no defect.decided row for the approval"))?;
+        answers.push(("defect.decided", event));
+        for (action, event) in answers {
+            anyhow::ensure!(
+                event["actor_id"] == json!(f.editor)
+                    && event["actor_name"] == "Editor"
+                    && event["proposed_by_token"] == TOKEN_NAME
+                    && event["proposed_by_owner"] == "Editor",
+                "{action}: {event}"
+            );
+            for key in ["token_id", "token_name", "declared_client", "batch_id"] {
+                anyhow::ensure!(event.get(key).is_none(), "{action}: {key} in {event}");
+            }
+        }
+        Ok(())
+    }
+    .await;
+    finish(f, result).await
+}
+
+/// 这个库的 Activity（库 Admin 读），一页读完
+async fn activity(f: &Fx) -> anyhow::Result<Vec<Value>> {
+    let path = format!("/kbs/{}/audit?limit=200", f.kb);
+    let (status, body) = f.call(&f.editor_session, "GET", &path, None).await?;
+    anyhow::ensure!(status == StatusCode::OK, "Activity: {status} {body}");
+    anyhow::ensure!(
+        body["total"].as_i64().unwrap_or(i64::MAX) <= 200,
+        "Activity has more than one page: {}",
+        body["total"]
+    );
+    Ok(body["events"].as_array().cloned().unwrap_or_default())
+}
+
+/// Activity 里人答一条令牌提议的一行：actor 是这个人，不带令牌的键，提议它的令牌与主人
+/// 由读的时候从台账行取出
+fn ensure_names_the_proposer(f: &Fx, what: &str, event: &Value) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        event["actor_id"] == json!(f.editor)
+            && event["actor_name"] == "Editor"
+            && event["proposed_by_token"] == TOKEN_NAME
+            && event["proposed_by_owner"] == "Editor",
+        "{what}: {event}"
+    );
+    for key in ["token_id", "token_name", "declared_client", "batch_id"] {
+        anyhow::ensure!(event.get(key).is_none(), "{what}: {key} in {event}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn activity_names_the_proposing_token_on_every_approval_decline_and_supersession(
+) -> anyhow::Result<()> {
+    let Some(f) = seeded().await? else {
+        return Ok(());
+    };
+    let result = async {
+        let c = Callers::new(&f).await?;
+        let s = Seeds::new(&f, f.kb).await?;
+        // 每一行只能提议的操作各两条提议：一条批准、一条拒绝
+        let mut answered: Vec<(String, Uuid, Uuid)> = Vec::new();
+        for case in CASES.into_iter().filter(|c| c.proposes()) {
+            let t = case.seed(&f, &s, &c.write).await?;
+            let approve = propose_rest(&f, &c.write, case, &t).await?;
+            let t = case.seed(&f, &s, &c.write).await?;
+            let decline = propose_rest(&f, &c.write, case, &t).await?;
+            answered.push((format!("{case:?}"), approve, decline));
+        }
         anyhow::ensure!(
-            event["actor_name"] == "Editor" && event.get("token_id").is_none(),
-            "{event}"
+            answered.len() == 13,
+            "{} propose-only entries",
+            answered.len()
         );
+        // M003 的合并：闸门留下的两对（派生规则一个关系只能有一条：每一对各种一套本体）
+        let mut gated = Vec::new();
+        for _ in 0..2 {
+            let held = held_pair(&f, &Seeds::new(&f, f.kb).await?).await?;
+            let (status, body) = post(
+                &f,
+                &c.write,
+                &format!("review/{held}"),
+                json!({ "action": "merge" }),
+            )
+            .await?;
+            anyhow::ensure!(
+                status == StatusCode::OK && body["outcome"] == "held",
+                "a held merge: {status} {body}"
+            );
+            gated.push(uuid_at(&body, "action_id")?);
+        }
+        answered.push(("gated merge".into(), gated[0], gated[1]));
+        for (what, approve, decline) in &answered {
+            let (status, body) = answer_one(&f, &f.editor_session, *approve, "approve").await?;
+            anyhow::ensure!(body["state"] == "approved", "{what}: {status} {body}");
+            let (status, body) = answer_one(&f, &f.editor_session, *decline, "decline").await?;
+            anyhow::ensure!(body["state"] == "declined", "{what}: {status} {body}");
+        }
+        // 一条过时：人先把缺陷裁了，再批准那条提议
+        let defect = Case::Defect.seed(&f, &s, &c.write).await?;
+        let stale = propose_rest(&f, &c.write, Case::Defect, &defect).await?;
+        let (status, body) = post(
+            &f,
+            &f.editor_session,
+            &format!("review/defects/{}", defect.id),
+            json!({ "resolution": "fixed" }),
+        )
+        .await?;
+        anyhow::ensure!(status == StatusCode::OK, "{status} {body}");
+        let (status, body) = answer_one(&f, &f.editor_session, stale, "approve").await?;
+        anyhow::ensure!(body["state"] == "superseded", "{status} {body}");
+
+        // 这个人自己做的同一种决定（没有提议）：记下这之前的审计行
+        sqlx::query("UPDATE kb_members SET role = 'admin' WHERE kb_id = $1 AND user_id = $2")
+            .bind(f.kb)
+            .bind(f.editor)
+            .execute(&f.pool)
+            .await?;
+        let before_own: HashSet<String> = activity(&f)
+            .await?
+            .iter()
+            .filter_map(|e| e["id"].as_str().map(str::to_string))
+            .collect();
+        let mut own = 0;
+        for case in CASES.into_iter().filter(|c| c.proposes()) {
+            let t = case.seed(&f, &s, &c.write).await?;
+            let (status, answer) =
+                post(&f, &f.editor_session, &case.person(&t), case.rest(&t).1).await?;
+            anyhow::ensure!(
+                status.is_success(),
+                "{case:?} by a person: {status} {answer}"
+            );
+            own += 1;
+        }
+        let (pair, ..) = pair_in(&f, f.kb).await?;
+        let (status, answer) = post(
+            &f,
+            &f.editor_session,
+            &format!("review/{pair}"),
+            json!({ "action": "merge" }),
+        )
+        .await?;
+        anyhow::ensure!(
+            status == StatusCode::OK,
+            "a person's merge: {status} {answer}"
+        );
+        anyhow::ensure!(own == 13, "{own} own decisions");
+
+        // 令牌改名、撤销：Activity 写的是提议那一刻存下的名字
+        sqlx::query("UPDATE personal_tokens SET name = 'renamed' WHERE id = $1")
+            .bind(c.token_id)
+            .execute(&f.pool)
+            .await?;
+        utopia_store::tokens::revoke(&f.pool, f.editor, c.token_id).await?;
+
+        let events = activity(&f).await?;
+        for (what, approve, decline) in &answered {
+            // 批准：这个人自己的决定行（一笔批准可以写几行，每一行都指着提议）
+            let approvals: Vec<&Value> = events
+                .iter()
+                .filter(|e| e["detail"]["agent_proposal"] == json!(approve))
+                .filter(|e| e["action"] != "agent.proposal.declined")
+                .collect();
+            anyhow::ensure!(!approvals.is_empty(), "{what}: no row for the approval");
+            for event in approvals {
+                ensure_names_the_proposer(&f, &format!("{what} approved"), event)?;
+            }
+            let declined = events
+                .iter()
+                .find(|e| {
+                    e["action"] == "agent.proposal.declined" && e["target_id"] == json!(decline)
+                })
+                .ok_or_else(|| anyhow::anyhow!("{what}: no decline row"))?;
+            ensure_names_the_proposer(&f, &format!("{what} declined"), declined)?;
+        }
+        let superseded = events
+            .iter()
+            .find(|e| e["action"] == "agent.proposal.superseded" && e["target_id"] == json!(stale))
+            .ok_or_else(|| anyhow::anyhow!("no supersession row"))?;
+        ensure_names_the_proposer(&f, "superseded", superseded)?;
+
+        // 人自己的决定：不带提议人的键
+        let fresh: Vec<&Value> = events
+            .iter()
+            .filter(|e| e["id"].as_str().is_some_and(|id| !before_own.contains(id)))
+            .collect();
+        // 人自己拒绝本体提案不留审计行（照旧），别的决定都留：至少有几行
+        anyhow::ensure!(!fresh.is_empty(), "no row of own decisions");
+        for event in fresh {
+            for key in [
+                "proposed_by_token",
+                "proposed_by_owner",
+                "token_id",
+                "token_name",
+            ] {
+                anyhow::ensure!(event.get(key).is_none(), "{key} on a person's own: {event}");
+            }
+        }
+        // 令牌自己的行仍是令牌的：不挂提议人
+        for event in events.iter().filter(|e| e.get("token_id").is_some()) {
+            for key in ["proposed_by_token", "proposed_by_owner"] {
+                anyhow::ensure!(event.get(key).is_none(), "{key} on a token row: {event}");
+            }
+        }
+
+        // 决策台账（共用同一个结构）：哪一行都没有这两个键
+        let (status, history) = f
+            .call(
+                &f.editor_session,
+                "GET",
+                &format!("/kbs/{}/review/history?per=100", f.kb),
+                None,
+            )
+            .await?;
+        anyhow::ensure!(status == StatusCode::OK, "history: {status} {history}");
+        let rows = history["events"].as_array().cloned().unwrap_or_default();
+        anyhow::ensure!(!rows.is_empty(), "{history}");
+        anyhow::ensure!(
+            rows.iter()
+                .any(|e| e["detail"].get("agent_proposal").is_some()),
+            "no approval in Decisions: {history}"
+        );
+        for event in &rows {
+            for key in ["proposed_by_token", "proposed_by_owner"] {
+                anyhow::ensure!(event.get(key).is_none(), "{key} in Decisions: {event}");
+            }
+        }
         Ok(())
     }
     .await;

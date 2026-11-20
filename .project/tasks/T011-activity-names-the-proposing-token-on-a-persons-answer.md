@@ -3,9 +3,9 @@ id: T011
 title: Name the proposing token on a person's approval, decline and supersession rows in Activity
 wave: 6
 deps: [T003, T009, T010]
-status: pending
-agent: null
-base: null
+status: done
+agent: build_T011
+base: 65c3e88f4a0b254bc09cee0aceead4d45b29625f
 worktree: null
 task_branch: null
 files:
@@ -69,3 +69,137 @@ Heavy: yes
 ## Log
 
 - 2026-11-20 — created by planner (patch mode, finding P001)
+- 2026-11-20 — build_T011 (coder), base 65c3e88, serial round in D:\utopia. Preflight: `kbs::audit_log` serializes `list_for_kb` rows as-is, so no edit to `kbs.rs` was needed; `AuditEventView` has no struct-literal constructor anywhere; no existing test outside `files` asserts an exact key set of an `/audit` event.
+  - Built: `audit::list_for_kb` LEFT JOINs `token_agent_actions p` on `p.kb_id = e.kb_id`, `e.detail->>'token_id' IS NULL`, and `p.id` = `detail.agent_proposal` cast to uuid only when it matches a strict uuid regex (CASE, so a non-uuid value never fails the page), plus `users o` on `p.owner_id`; it returns `proposed_by_token` (`p.token_name` snapshot) and `proposed_by_owner` (owner display name). The total query, filters and binds are unchanged; no stored detail, write path or migration changed. `AuditEventView` gained both as `#[sqlx(default)]` + `skip_serializing_if`, so `review_history` and events with no proposal keep their keys. Web: `AuditEvent` gained both optional fields; `KbActivity` keeps the actor part unchanged and, on a row without `token_name` that has `proposed_by_token`, appends ` · ` + `kbset.auditProposedBy(viaToken(owner, token))` ("proposed by Mira Okafor via graph-curator" / "由 Mira Okafor 经 graph-curator 提议"). No `auditActions` entry was added. ADR 0076: one dated revision (2026-11-20) under decision 8, no other change.
+  - Tests: `every_action_reads_owner_via_token_name_in_agent_history_and_activity` now asserts on the decline, supersession and approval rows: `proposed_by_token` == stored name after a rename and revoke, `proposed_by_owner` the owner, the actor the person, and no `token_id`/`token_name`/`declared_client`/`batch_id`. The new `activity_names_the_proposing_token_on_every_approval_decline_and_supersession` approves one and declines one proposal for all 13 propose-only entries (`CASES` filtered by `agent_policy`, ontology reject and adopt both included) and for a gated merge, plus one supersession. It checks every answer row in `GET /audit` the same way, checks that the person's own decisions of the same operations (and a person's merge) and token rows carry neither key, and checks that every `GET /review/history` row carries neither key. KbActivity.test.ts: the absence assertions of the two person-answer tests were replaced (actor part `<span class="text-ink">Mira Okafor</span>` alone, proposer phrase after the action), and the new test `names the token whose proposal a person declined, closed or approved` was added (decline, supersession, `violation.decided` approval; Chinese string; removed owner; a row with no proposal renders without a proposer).
+  - Results (own DBs m004_t011_dev / m004_t011_dev_store, freshly migrated; CARGO_TARGET_DIR coder-m004): the two named server tests: 2 passed (each `... ok`). Whole `cargo test -p utopia-server` (UTOPIA_TEST_REQUIRE_DB=1): 976 passed, 0 failed, 2 ignored. This run includes every module in the Verify group filter, and both known flaky tests passed. `cargo test -p utopia-store` (whole crate, own DB): 535 passed, 0 failed across 23 test binaries. `cargo fmt --all --check`: clean. `cargo clippy --workspace --all-targets -- -D warnings`: exit 0. Web: `pnpm install --frozen-lockfile` ok. `vitest run KbActivity -t "names the token whose proposal a person declined, closed or approved"`: 1 passed (13 skipped). `pnpm test`: 418 passed. `pnpm build`: built (existing chunk-size warning only).
+  - Deviation: the literal Verify uses database `m004_t011`; per dispatch I ran the same steps against `m004_t011_dev`. The orchestrator brief said the ADR revision belongs under `## Status history`; the task contract (Approach, AC5) says under decision 8, and I followed the contract.
+  - Render tests only: the Activity proposer phrase is checked by static render (KbActivity.test.ts) and not clicked in a browser.
+- 2026-11-20 — orchestrator Verify (sidecar gsd-path-verify/task-t011-verify): pass, exit 0; output tail:
+  ```
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:1052) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:24668) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:37128) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:32000) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:24440) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:32584) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:39736) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  [33m
+  (!) Some chunks are larger than 500 kB after minification. Consider:
+  - Using dynamic import() to code-split the application
+  - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+  - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+  ```
+- 2026-11-20 — orchestrator regression Verify of T001 (sidecar gsd-path-verify/task-t011-verify): pass, exit 0; output tail:
+  ```
+  test api::review_token_reads_tests::agent_history_without_a_token_action_reads_governor_rows_only_and_a_ledger_row_keeps_its_stored_token_name ... ok
+  test api::review_totals_tests::a_session_list_response_differs_from_before_only_by_the_added_total_key ... ok
+  test api::review_token_reads_tests::a_token_paging_alignment_with_equal_timestamps_visits_each_waiting_item_exactly_once ... ok
+  test api::review_token_reads_tests::a_token_asking_for_mappings_or_an_unknown_section_is_refused_with_unknown_queue ... ok
+  test api::review_token_reads_tests::a_dead_token_gets_401_and_an_excluded_token_gets_404_on_the_api_and_403_on_the_mcp_endpoint ... ok
+  test api::review_totals_tests::the_alignment_low_confidence_and_agent_totals_follow_the_list_while_counts_keep_their_values ... ok
+  test api::review_totals_tests::alignment_items_with_one_timestamp_are_each_listed_once_across_pages ... ok
+  test api::review_totals_tests::a_token_reading_duplicates_receives_the_same_total_as_a_session ... ok
+  test api::review_totals_tests::an_empty_queue_has_total_0_and_an_offset_past_the_end_returns_no_items_with_the_true_total ... ok
+  test api::review_routes::attribution_tests::agent_history_merges_ledger_rows_by_action_time_and_keeps_governor_order ... ok
+  test api::review_token_reads_tests::a_token_receives_each_sections_items_in_the_session_order ... ok
+  test api::review_token_reads_tests::a_read_token_of_a_viewer_lists_each_of_the_thirteen_sections_as_a_session_editor_sees_them ... ok
+  test api::review_totals_tests::the_seed_puts_items_in_every_one_of_the_thirteen_sections ... ok
+  test api::review_token_reads_tests::a_tokens_total_counts_the_listed_rows_and_counts_keep_their_values ... ok
+  test api::review_totals_tests::the_total_of_every_list_queue_is_the_number_of_rows_its_pages_return ... ok
+  test api::review_token_reads_tests::a_token_whose_kb_ids_exclude_the_base_gets_404_on_every_review_read ... ok
+  test api::review_token_reads_tests::a_token_page_size_is_clamped_and_an_offset_at_or_past_the_total_returns_no_items ... ok
+  
+  test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 952 filtered out; finished in 14.54s
+  ```
+- 2026-11-20 — orchestrator regression Verify of T003 (sidecar gsd-path-verify/task-t011-verify): pass, exit 0; output tail:
+  ```
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:40628) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:38228) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:31692) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:31420) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:29268) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:13848) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:14444) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  [33m
+  (!) Some chunks are larger than 500 kB after minification. Consider:
+  - Using dynamic import() to code-split the application
+  - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+  - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+  ```
+- 2026-11-20 — orchestrator regression Verify of T006 (sidecar gsd-path-verify/task-t011-verify): pass, exit 0; output tail:
+  ```
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:3216) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:38600) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:37992) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:24244) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:27740) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:34408) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:38092) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  [33m
+  (!) Some chunks are larger than 500 kB after minification. Consider:
+  - Using dynamic import() to code-split the application
+  - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+  - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+  ```
+- 2026-11-20 — orchestrator regression Verify of T009 (sidecar gsd-path-verify/task-t011-verify): pass, exit 0; output tail:
+  ```
+  test api::review_totals_tests::the_alignment_low_confidence_and_agent_totals_follow_the_list_while_counts_keep_their_values ... ok
+  test api::review_totals_tests::a_token_reading_duplicates_receives_the_same_total_as_a_session ... ok
+  test api::review_totals_tests::alignment_items_with_one_timestamp_are_each_listed_once_across_pages ... ok
+  test api::review_token_revert_tests::review_revert_is_listed_only_to_a_write_token_of_an_editor_and_says_what_a_revert_does_not_recall ... ok
+  test api::review_token_revert_tests::a_token_reverts_its_own_merge_over_the_api_and_over_mcp_and_a_second_revert_answers_already_decided ... ok
+  test api::review_token_run_tests::a_token_consistency_check_and_inference_run_each_write_one_applied_row ... ok
+  test api::review_token_reads_tests::a_tokens_total_counts_the_listed_rows_and_counts_keep_their_values ... ok
+  test api::review_totals_tests::an_empty_queue_has_total_0_and_an_offset_past_the_end_returns_no_items_with_the_true_total ... ok
+  test api::review_token_run_tests::the_call_after_the_200th_finalized_write_answers_429_and_changes_nothing ... ok
+  test api::review_totals_tests::the_seed_puts_items_in_every_one_of_the_thirteen_sections ... ok
+  test api::review_token_revert_tests::a_token_reverts_any_token_agents_merge_of_the_base_and_an_unknown_or_foreign_merge_id_is_not_found ... ok
+  test api::review_totals_tests::the_total_of_every_list_queue_is_the_number_of_rows_its_pages_return ... ok
+  test api::review_token_revert_tests::after_a_token_merge_and_its_revert_every_fact_entity_and_evidence_row_is_as_before ... ok
+  test api::review_token_reads_tests::a_token_whose_kb_ids_exclude_the_base_gets_404_on_every_review_read ... ok
+  test api::review_token_merge_tests::of_a_person_the_governor_and_a_token_deciding_one_pair_exactly_one_is_applied_and_the_losing_token_gets_already_decided ... ok
+  test api::review_token_violation_tests::a_token_violation_decision_waits_as_a_proposal_and_a_person_applies_it ... ok
+  test api::review_token_reads_tests::a_token_page_size_is_clamped_and_an_offset_at_or_past_the_total_returns_no_items ... ok
+  
+  test result: ok. 148 passed; 0 failed; 0 ignored; 0 measured; 830 filtered out; finished in 32.47s
+  ```
+- 2026-11-20 — orchestrator regression Verify of T010 (sidecar gsd-path-verify/task-t011-verify): pass, exit 0; output tail:
+  ```
+  DROP DATABASE
+  CREATE DATABASE
+  数据库迁移完成
+      Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.26s
+       Running `C:/Users/Owner/.gsd-path/cargo-target/finish-m004-T011\debug\examples\migrate.exe`
+      Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+       Running unittests src\main.rs (C:/Users/Owner/.gsd-path/cargo-target/finish-m004-T011\debug\deps\utopia_server-0a73fc6c26d41d5f.exe)
+  
+  running 1 test
+  test docs_corpus::tests::every_corpus_md_file_is_indexed ... ok
+  
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 977 filtered out; finished in 0.00s
+  ```

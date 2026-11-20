@@ -196,6 +196,23 @@ is written before the first route or schema change.
    parsed. **A failed snapshot or audit write fails the action**: attribution is
    part of the write, not a best-effort trailer.
 
+   **Revision 2026-11-20 (who proposed what a person answered).** The paragraph
+   above names the token on the token's own rows only. A person's answer to a
+   token proposal (the person's decision row written by an approval, and the
+   `agent.proposal.declined` and `agent.proposal.superseded` rows) is the
+   person's act and carries no `token_id` or `token_name`, so Activity showed it
+   without the token that proposed it. Every such row already names its proposal
+   in `detail.agent_proposal`. `GET /kbs/{kb_id}/audit` now reads that proposal's
+   ledger row in the same base when it lists the event and returns two more
+   keys: `proposed_by_token`, the token name snapshot stored at propose time
+   (unchanged by a later rename or revoke), and `proposed_by_owner`, the display
+   name of the token's owner (absent when that account is gone). The person
+   stays the actor (`actor_id`, `actor_name`); the stored audit detail is not
+   changed and no migration is needed. An event that answers no token proposal,
+   and every row of `GET /kbs/{kb_id}/review/history`, has the keys it had
+   before. Activity shows such a row as the person and the action, followed by
+   "proposed by owner via token name".
+
 9. **A token decision is never human precedent.** The governor's precedent queries
    and `settled_by_people` exclude audit rows whose detail carries a token id and
    review rows marked by the new nullable `resolution_reviews.decided_token`.

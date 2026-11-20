@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it } from "vitest";
 import { ApiError, type AuditEvent } from "../api";
 import { S } from "../i18n";
+import { zh } from "../i18n/zh";
 import { KbActivity } from "./KbSettings";
 import { batchLabel } from "./TokenAgentRow";
 
@@ -184,22 +185,43 @@ it("shows a proposal of every operation as owner via the token name stored with 
   }
 });
 
-it("shows a person's rejection of an ontology proposal, made by approving an agent's proposal, in words", () => {
-  const rejected: AuditEvent = {
+/** 人答令牌提议的一行（0076 决定 8）：actor 是这个人，服务端从台账读出提议它的令牌与主人 */
+function answeredBy(
+  action: string,
+  detail: Record<string, unknown>,
+  target_kind = "agent_action",
+): AuditEvent {
+  const answered: AuditEvent = {
     ...tokenKeep,
-    action: "ontology_proposal.rejected",
-    target_kind: "ontology_proposal",
-    detail: { section: "entity_types", agent_proposal: "019a0000-0000-7000-8000-000000000041" },
+    action,
+    target_kind,
+    detail,
+    proposed_by_token: "graph-curator",
+    proposed_by_owner: "Mira Okafor",
   };
-  delete rejected.token_id;
-  delete rejected.token_name;
-  delete rejected.declared_client;
+  delete answered.token_id;
+  delete answered.token_name;
+  delete answered.declared_client;
+  return answered;
+}
+
+/** actor 那一格只有这个人：「via」不在动作之前 */
+const PERSON_ALONE = '<span class="text-ink">Mira Okafor</span>';
+
+it("shows a person's rejection of an ontology proposal, made by approving an agent's proposal, in words", () => {
+  const rejected = answeredBy(
+    "ontology_proposal.rejected",
+    { section: "entity_types", agent_proposal: "019a0000-0000-7000-8000-000000000041" },
+    "ontology_proposal",
+  );
   const rows = rowsOf(renderEvents([rejected]));
-  expect(rows).toContain("Mira Okafor");
-  // 批准之后做决定的是这个人：不写成令牌做的
-  expect(rows).not.toContain(" via ");
-  expect(rows).toContain(S.review.tokenOperations["ontology_proposal.rejected"]);
+  // 批准之后做决定的是这个人：actor 不写成令牌做的，提议它的令牌写在动作后面
+  expect(rows).toContain(PERSON_ALONE);
+  const label = S.review.tokenOperations["ontology_proposal.rejected"];
+  expect(rows).toContain(label);
   expect(rows).not.toContain("ontology_proposal.rejected");
+  const proposer = S.kbset.auditProposedBy("Mira Okafor via graph-curator");
+  expect(rows.indexOf(proposer)).toBeGreaterThan(rows.indexOf(label));
 });
 
 it("shows the batch label on a batch member and none on a single call", () => {
@@ -219,21 +241,74 @@ it("shows the batch label on a batch member and none on a single call", () => {
 
 it("shows a person's answer to an agent proposal in words, as that person's", () => {
   for (const action of ["agent.proposal.declined", "agent.proposal.superseded"]) {
-    const answered: AuditEvent = {
-      ...tokenKeep,
-      action,
-      target_kind: "agent_action",
-      detail: { operation: "review.merge", proposed_by_token: "graph-curator" },
-    };
-    delete answered.token_id;
-    delete answered.token_name;
-    delete answered.declared_client;
+    const answered = answeredBy(action, {
+      operation: "review.merge",
+      proposed_by_token: "graph-curator",
+    });
     const rows = rowsOf(renderEvents([answered]));
-    expect(rows).toContain("Mira Okafor");
-    expect(rows).not.toContain(" via ");
+    expect(rows).toContain(PERSON_ALONE);
+    expect(rows).toContain(S.kbset.auditProposedBy("Mira Okafor via graph-curator"));
     expect(rows).toContain(S.review.tokenOperations[action]);
     expect(rows).not.toContain(action);
   }
+});
+
+it("names the token whose proposal a person declined, closed or approved", () => {
+  const proposal = "019a0000-0000-7000-8000-000000000041";
+  const answers: [AuditEvent, string][] = [
+    [
+      answeredBy("agent.proposal.declined", {
+        agent_proposal: proposal,
+        operation: "violation.decide",
+        proposed_by_token: "graph-curator",
+      }),
+      S.review.tokenOperations["agent.proposal.declined"],
+    ],
+    [
+      answeredBy("agent.proposal.superseded", {
+        agent_proposal: proposal,
+        operation: "violation.decide",
+        proposed_by_token: "graph-curator",
+      }),
+      S.review.tokenOperations["agent.proposal.superseded"],
+    ],
+    // 批准：这个人自己的决定行，动作照旧（不给人的 Review 动作加标签，D128）
+    [
+      answeredBy(
+        "violation.decided",
+        { resolution: "accepted", agent_proposal: proposal },
+        "axiom_violation",
+      ),
+      "violation.decided",
+    ],
+  ];
+  for (const [event, label] of answers) {
+    const rows = rowsOf(renderEvents([event]));
+    // actor 那一格只有这个人
+    expect(rows, event.action).toContain(PERSON_ALONE);
+    expect(rows, event.action).toContain(label);
+    // 动作之后写出提议它的是谁：主人 via 存下的令牌名
+    const proposer = S.kbset.auditProposedBy("Mira Okafor via graph-curator");
+    expect(rows, event.action).toContain("Mira Okafor via graph-curator");
+    expect(rows.indexOf(proposer), event.action).toBeGreaterThan(rows.indexOf(label));
+  }
+  // 中文同样写出提议人
+  expect(zh.kbset.auditProposedBy(zh.review.tokenVia("Mira Okafor", "graph-curator"))).toBe(
+    "由 Mira Okafor 经 graph-curator 提议",
+  );
+  // 主人的账号已移除：照旧写那句「一位已移除的用户」
+  const gone = answeredBy("agent.proposal.declined", { agent_proposal: proposal });
+  delete gone.proposed_by_owner;
+  expect(rowsOf(renderEvents([gone]))).toContain(
+    S.kbset.auditProposedBy(`${S.kbset.deletedUser} via graph-curator`),
+  );
+  // 没有 proposed_by_token 的人的决定：照旧，没有提议人
+  const own = answeredBy("violation.decided", { resolution: "accepted" }, "axiom_violation");
+  delete own.proposed_by_token;
+  delete own.proposed_by_owner;
+  const rows = rowsOf(renderEvents([own]));
+  expect(rows).not.toContain(" via ");
+  expect(rows).not.toContain(S.kbset.auditProposedBy(""));
 });
 
 it("leaves events without a token name exactly as they were", () => {

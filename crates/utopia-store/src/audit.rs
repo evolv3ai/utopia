@@ -189,6 +189,13 @@ pub async fn list_for_kb(
     // 「主人 via 令牌名」。`declared_client` 是请求自己报的 User-Agent——只在带令牌的行上回，
     // 而且只是展示：它由调用方完全控制，不是验证过的身份。`batch_id` 是成批调用的号，
     // 只有批里的一笔带着它（detail 里的 `batch_id`）；别的行读到的是 NULL，不序列化
+    //
+    // 人答令牌提议的那几行（批准时这个人自己的决定行、拒绝、过时关闭）：detail 里的
+    // `agent_proposal` 指着台账里那条提议，读的时候从那一行取提议它的令牌名快照与主人的
+    // 显示名，回成 `proposed_by_token` / `proposed_by_owner`。actor 仍是这个人（N2），存下的
+    // detail 一个字节不动。`agent_proposal` 是 detail 里的自由文本：先按 uuid 的样子认，
+    // 认不出就当没有——不能因为一行怪值让整页 500；只认同一个库的台账行。带令牌的行
+    // 本身就写着令牌，不再挂提议人
     let rows: Vec<AuditEventView> = sqlx::query_as(&format!(
         "SELECT e.id, e.action, e.target_kind, e.target_id, e.detail,
                 e.actor_id, u.display_name AS actor_name, e.created_at,
@@ -196,8 +203,18 @@ pub async fn list_for_kb(
                 e.detail->>'token_name' AS token_name,
                 e.detail->>'batch_id' AS batch_id,
                 CASE WHEN e.detail->>'token_id' IS NOT NULL THEN e.user_agent END
-                    AS declared_client
+                    AS declared_client,
+                p.token_name AS proposed_by_token,
+                CASE WHEN p.id IS NOT NULL THEN o.display_name END AS proposed_by_owner
          FROM audit_events e LEFT JOIN users u ON u.id = e.actor_id
+         LEFT JOIN token_agent_actions p
+                ON p.kb_id = e.kb_id
+               AND e.detail->>'token_id' IS NULL
+               AND p.id = CASE
+                   WHEN e.detail->>'agent_proposal'
+                        ~ '^[0-9a-fA-F]{{8}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{4}}-[0-9a-fA-F]{{12}}$'
+                   THEN (e.detail->>'agent_proposal')::uuid END
+         LEFT JOIN users o ON o.id = p.owner_id
          {WHERE}
          ORDER BY e.created_at DESC, e.id DESC LIMIT $6 OFFSET $7"
     ))

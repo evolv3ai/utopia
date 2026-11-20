@@ -467,6 +467,16 @@ pub struct AuditEventView {
     #[sqlx(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub batch_id: Option<String>,
+    /// 人答令牌提议的那一行（批准时人自己的决定行、拒绝、过时关闭）才有（0076 决定 8）：
+    /// 提议它的令牌在提议那一刻叫什么，读的时候从 detail 的 `agent_proposal` 指着的台账行
+    /// 取。存下的 detail 不动，actor 仍是答的这个人。同样「有才序列化」
+    #[sqlx(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proposed_by_token: Option<String>,
+    /// 那枚令牌的主人的显示名；主人的账号已移除时没有，而 `proposed_by_token` 仍在
+    #[sqlx(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proposed_by_owner: Option<String>,
 }
 
 /// 账户层"我的知识库"行信息（成员行可空：open 库凭部署身份进入，无矩阵记录）。

@@ -2688,6 +2688,8 @@ export const en = {
     engine: "the engine",
     // 令牌行上调用方自己报的 User-Agent：是声明，不是验证过的身份，所以写明 declared
     auditDeclaredClient: (client: string) => `client (declared): ${client}`,
+    // 人答令牌提议的那一行：动作是这个人的，后面另写提议它的是谁（「主人 via 令牌名」）
+    auditProposedBy: (proposer: string) => `proposed by ${proposer}`,
     auditActions: {
       "entity_type.created": "created entity type",
       "entity_type.updated": "updated entity type",
