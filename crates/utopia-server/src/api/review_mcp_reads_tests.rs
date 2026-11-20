@@ -16,7 +16,8 @@
 //!   同一个 `not_found`，不带任何字段
 //! - **`section` 不给就是重复项；类别词按存着的词原样认；Agent 的行不分来源按 `id` 认**（E9）
 //! - **十三档以外的名字是 `unknown_queue`**，`mappings` 也算；总览没有条目，是 `not_found`
-//! - **Review 的工具还是那三个**（N4）：读开了，写的一个没多
+//! - **Review 的工具正好是裁定表开的那几个**（N4）：两个读工具，加写令牌的 `review_keep`、
+//!   `review_merge` 与 `review_revert`；没有能替人点头或答提议的工具
 //!
 //! 全部经路由进去（`POST /api/v1/kbs/{kb}/mcp` 与 REST 路由）。夹具在
 //! `review_session_unchanged_tests.rs`，种子在 `review_totals_tests.rs`。
@@ -1036,7 +1037,8 @@ async fn review_item_refuses_mappings_and_an_unknown_section_with_unknown_queue(
 }
 
 #[tokio::test]
-async fn the_mcp_endpoint_offers_no_review_tool_beyond_list_item_and_keep() -> anyhow::Result<()> {
+async fn the_mcp_endpoint_offers_exactly_the_review_tools_the_ruled_table_opens(
+) -> anyhow::Result<()> {
     let Some(f) = Fx::new(false).await? else {
         return Ok(());
     };
@@ -1059,7 +1061,14 @@ async fn the_mcp_endpoint_offers_no_review_tool_beyond_list_item_and_keep() -> a
             (
                 "write token of an editor",
                 &editor_write,
-                vec!["review_item", "review_keep", "review_list"],
+                vec![
+                    "review_batch",
+                    "review_item",
+                    "review_keep",
+                    "review_list",
+                    "review_merge",
+                    "review_revert",
+                ],
             ),
         ] {
             let tools = listed_tools(&f, token).await?;
@@ -1070,15 +1079,26 @@ async fn the_mcp_endpoint_offers_no_review_tool_beyond_list_item_and_keep() -> a
                 .collect();
             review.sort_unstable();
             anyhow::ensure!(review == expected, "{who}: {review:?}");
-            for tool in tools.iter().filter(|t| {
-                t["name"]
-                    .as_str()
-                    .is_some_and(|n| n.starts_with("review") && n != "review_keep")
-            }) {
-                anyhow::ensure!(
-                    tool["annotations"] == json!({ "readOnlyHint": true }),
-                    "{who}: {tool}"
-                );
+            // 写工具（分开、合并、撤回、成批）不是只读；别的 Review 工具都是
+            for tool in tools
+                .iter()
+                .filter(|t| t["name"].as_str().is_some_and(|n| n.starts_with("review")))
+            {
+                let writes = tool["name"] == "review_keep"
+                    || tool["name"] == "review_merge"
+                    || tool["name"] == "review_revert"
+                    || tool["name"] == "review_batch";
+                if writes {
+                    anyhow::ensure!(
+                        tool["annotations"]["readOnlyHint"] == false,
+                        "{who}: {tool}"
+                    );
+                } else {
+                    anyhow::ensure!(
+                        tool["annotations"] == json!({ "readOnlyHint": true }),
+                        "{who}: {tool}"
+                    );
+                }
             }
         }
 
@@ -1137,7 +1157,18 @@ async fn the_mcp_endpoint_offers_no_review_tool_beyond_list_item_and_keep() -> a
             "{list_text}"
         );
 
-        // 读「等你点头」给不了令牌点头的办法：条目里没有能调的东西，工具里也没有第四个
+        // `review_merge`：没有必填参数（`id`，或 `source` 加 `target`），三个 id 都是 uuid
+        let merge = find("review_merge")?;
+        anyhow::ensure!(
+            merge["inputSchema"].get("required").is_none()
+                && keys(&merge["inputSchema"]["properties"])
+                    == ["id", "rationale", "source", "target"]
+                && ["id", "source", "target"]
+                    .iter()
+                    .all(|key| merge["inputSchema"]["properties"][key]["format"] == "uuid"),
+            "{merge}"
+        );
+        // 读「等你点头」给不了令牌点头的办法：条目里没有能调的东西，工具里也没有能点头的
         let pending = read(
             &f,
             &editor_write,
@@ -1149,7 +1180,7 @@ async fn the_mcp_endpoint_offers_no_review_tool_beyond_list_item_and_keep() -> a
         for name in [
             "review_decide",
             "review_confirm",
-            "review_merge",
+            "review_approve",
             "review_pending",
         ] {
             let (status, body) = rpc(

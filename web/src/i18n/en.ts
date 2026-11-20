@@ -2139,12 +2139,64 @@ export const en = {
     tokenVia: (owner: string, token: string) => `${owner} via ${token}`,
     tokenOperations: {
       "review.keep": "kept a duplicate pair apart",
+      "review.merge": "merged a duplicate pair",
+      "merge.manual": "merged two entities",
+      "merge.revert": "reverted a merge",
+      // Activity 里与提议有关的三种事件：令牌的调用被留成提议；人拒绝了它；它过时了
+      "agent.proposal": "proposed a change that waits for a person",
+      "agent.proposal.declined": "declined an agent proposal",
+      "agent.proposal.superseded": "closed an agent proposal that no longer applies",
+    } as Record<string, string>,
+    // 成批调用的号（0076）：只写号的末八位，够把同一批的几行认到一起
+    tokenBatch: (id: string) => `batch ${id}`,
+    // 同一个动作没落地、留成提议时的说法（0076）：它想做，还没做
+    tokenProposes: {
+      "review.merge": "wants to merge a duplicate pair",
+      "merge.manual": "wants to merge two entities",
+      "merge.revert": "wants to revert a merge",
     } as Record<string, string>,
     tokenOutcome: {
       applied: "Applied",
       held: "Held",
       proposed: "Proposed",
     } as Record<string, string>,
+    // 为什么没有直接落地：闸门的六个理由（held），只能提议的三个理由（proposed）。键是服务端的 code
+    tokenReasons: {
+      identity: "One side is named by an identity source",
+      contradiction: "The merge would contradict a single-valued fact",
+      derived: "A derived fact rests on one side",
+      answered: "One side is named in an answer",
+      kept_by_person: "A person kept this pair apart",
+      reverted_merge: "A merge of this pair was reverted before",
+      merge_by_person: "A person made this merge",
+      merge_by_governor: "The governor made this merge",
+      breaker: "This token's merges were reverted twice; it can only propose for now",
+    } as Record<string, string>,
+    // 后来怎样了：人答了提议，或者落地的合并被撤回了
+    tokenStates: {
+      approved: "Approved",
+      declined: "Declined",
+      superseded: "Superseded",
+      undone: "Undone",
+    } as Record<string, string>,
+    tokenApprove: "Approve",
+    tokenDecline: "Decline",
+    tokenApproveSelected: "Approve selected",
+    tokenDeclineSelected: "Decline selected",
+    tokenPickProposal: "Select this proposal",
+    tokenSelectOpen: "Select open proposals",
+    tokenProposalsSelected: (n: number) => (n === 1 ? "1 selected" : `${n} selected`),
+    tokenAnswered: (ok: number, failed: number) =>
+      failed === 0
+        ? ok === 1
+          ? "1 proposal answered"
+          : `${ok} proposals answered`
+        : `${ok} answered, ${failed} could not be`,
+    tokenAnswerSuperseded: "The target was already decided, so nothing was applied.",
+    tokenAlreadyAnswered: "This proposal was already answered.",
+    // 卡片上的提议：谁（主人 via 令牌名）想做什么
+    tokenProposalChip: (who: string, what: string) => `${who} ${what}`,
+    mergedByToken: (via: string) => `by ${via}`,
     overviewAgent: "Agent",
     overviewAgentOff: "Governance is off for this base.",
     overviewAgentSettings: "Turn it on in settings",

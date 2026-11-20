@@ -108,6 +108,7 @@ fn item(f: &Fixture) -> ReviewItem {
         stage: "human".into(),
         created_at: chrono::Utc::now(),
         proposal: None,
+        agent_proposal: None,
     }
 }
 

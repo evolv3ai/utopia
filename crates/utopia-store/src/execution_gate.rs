@@ -31,12 +31,20 @@ pub struct Impact {
 }
 
 /// 留给人的理由。`review_reason` 写卡片的 code，`explain` 写决策台账的句子。
+///
+/// 前四种是 [`hold_for_merge`] 给的，产品自己的两个裁决者（攒批裁决器、治理 agent）只会
+/// 见到这四种。后两种只有 [`hold_for_token_merge`] 给（0076）：令牌 agent 要合的一对，
+/// 人分开过，或者合过又撤回过
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Hold {
     Identity,
     Contradiction(String),
     Derived(i64),
     Answered(i64),
+    /// 这两个实体最近一次被裁，是人亲手分开的
+    KeptByPerson,
+    /// 这两个实体之间有过一次合并，后来被撤回了
+    RevertedMerge,
 }
 
 impl std::fmt::Display for Hold {
@@ -46,6 +54,8 @@ impl std::fmt::Display for Hold {
             Hold::Contradiction(p) => write!(f, "contradiction {p}"),
             Hold::Derived(n) => write!(f, "derived {n}"),
             Hold::Answered(n) => write!(f, "answered {n}"),
+            Hold::KeptByPerson => write!(f, "kept_by_person"),
+            Hold::RevertedMerge => write!(f, "reverted_merge"),
         }
     }
 }
@@ -58,6 +68,19 @@ impl Hold {
         }
     }
 
+    /// 台账 `token_agent_actions.gate_reason` 存的稳定 code（0076）：只说是哪一种，
+    /// 不带谓词、不带数目——那些在请求的 payload 里
+    pub fn code(&self) -> &'static str {
+        match self {
+            Hold::Identity => "identity",
+            Hold::Contradiction(_) => "contradiction",
+            Hold::Derived(_) => "derived",
+            Hold::Answered(_) => "answered",
+            Hold::KeptByPerson => "kept_by_person",
+            Hold::RevertedMerge => "reverted_merge",
+        }
+    }
+
     /// 写给 `agent_decisions.reason` 的一句：人在 Agent 队列里看到 agent 为什么没动手
     pub fn explain(&self) -> String {
         match self {
@@ -67,6 +90,8 @@ impl Hold {
             }
             Hold::Derived(n) => format!("{n} derived facts rest on one side"),
             Hold::Answered(n) => format!("one side was named in {n} answers"),
+            Hold::KeptByPerson => "a person kept these two apart".into(),
+            Hold::RevertedMerge => "a merge of these two was reverted".into(),
         }
     }
 }
@@ -196,7 +221,8 @@ pub fn agent_ruling(op: AgentOperation) -> AgentRuling {
 }
 
 /// 这一次调用落地、被闸门留下，还是只成为提议。`hold` 是这一行的闸门给的理由
-/// （合并是 `hold_for_merge`）；没有闸门的行不看它
+/// （产品自己的裁决者是 `hold_for_merge`，令牌的合并是 `hold_for_token_merge`）；
+/// 没有闸门的行不看它
 pub fn agent_policy(op: AgentOperation, hold: Option<&Hold>) -> AgentOutcome {
     match agent_ruling(op) {
         AgentRuling::Finalize => AgentOutcome::Applied,
@@ -238,6 +264,57 @@ pub async fn hold_for_merge(
         return Ok(Some(Hold::Identity));
     }
     Ok(hold(&impact_of(pool, kb_id, a, b).await?))
+}
+
+/// 令牌 agent 的合并过的闸门（0076）：先问 [`hold_for_merge`]——身份来源、矛盾、派生、
+/// 回答，与产品自己的裁决者同一道；它不拦，再看两件只对令牌问的事，**都按实体 id、
+/// 不分左右**（手动合并没有审核行，只有两个实体）：
+///
+/// - **人分开过**：这两个实体最近一次裁掉的审核行是 kept，是人裁的、不是经令牌裁的。
+///   只看最近一次：人分开之后又有人合过（再撤回），或者令牌后来又分开了一次，
+///   都不算「人分开的一对」。合并时顺手关掉的行（`superseded by merge`）没有裁决人，不算
+/// - **合过又撤回**：两者之间任何一次合并（哪个方向都算）带着 `reverted_at`
+///
+/// [`hold_for_merge`] 与它的两个调用方不变，也永远不会给出这两种
+pub async fn hold_for_token_merge(
+    pool: &PgPool,
+    kb_id: Uuid,
+    a: Uuid,
+    b: Uuid,
+) -> AppResult<Option<Hold>> {
+    if let Some(hold) = hold_for_merge(pool, kb_id, a, b).await? {
+        return Ok(Some(hold));
+    }
+    let kept_by_person: Option<bool> = sqlx::query_scalar(
+        "SELECT status = 'kept' AND decided_by IS NOT NULL AND decided_token IS NULL
+           FROM resolution_reviews
+          WHERE kb_id = $1 AND status IN ('merged', 'kept')
+            AND ((left_id = $2 AND right_id = $3) OR (left_id = $3 AND right_id = $2))
+          ORDER BY decided_at DESC NULLS LAST, id DESC LIMIT 1",
+    )
+    .bind(kb_id)
+    .bind(a)
+    .bind(b)
+    .fetch_optional(pool)
+    .await?;
+    if kept_by_person == Some(true) {
+        return Ok(Some(Hold::KeptByPerson));
+    }
+    let reverted: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+             SELECT 1 FROM entity_merges
+              WHERE kb_id = $1 AND reverted_at IS NOT NULL
+                AND ((source_id = $2 AND target_id = $3) OR (source_id = $3 AND target_id = $2)))",
+    )
+    .bind(kb_id)
+    .bind(a)
+    .bind(b)
+    .fetch_one(pool)
+    .await?;
+    if reverted {
+        return Ok(Some(Hold::RevertedMerge));
+    }
+    Ok(None)
 }
 
 /// 取一对实体合并会牵动什么。三条查询，只在裁决器有把握要合的时候才跑。

@@ -41,6 +41,11 @@ impl IntoResponse for ApiErr {
                 code = Some(c);
                 (StatusCode::CONFLICT, message.clone())
             }
+            // 0076：令牌 agent 的限速。与别的带 code 的拒绝同一个信封，状态码是 429
+            AppError::RateLimited { code: c, message } => {
+                code = Some(c);
+                (StatusCode::TOO_MANY_REQUESTS, message.clone())
+            }
             AppError::Conflict(m) => (StatusCode::CONFLICT, m.clone()),
             AppError::Validation(m) => (StatusCode::UNPROCESSABLE_ENTITY, m.clone()),
             AppError::Db(e) => {
@@ -112,6 +117,14 @@ mod tests {
                 AppError::Other(anyhow::anyhow!("private detail")),
                 500,
                 None,
+            ),
+            (
+                AppError::RateLimited {
+                    code: "agent_rate_limited",
+                    message: "slow down".into(),
+                },
+                429,
+                Some("agent_rate_limited"),
             ),
         ] {
             let response = ApiErr(error).into_response();

@@ -187,12 +187,14 @@ pub async fn list_for_kb(
 
     // 经令牌做的动作（0076 决定 8）：detail 里的令牌 id 与名字快照单独回出来，界面写成
     // 「主人 via 令牌名」。`declared_client` 是请求自己报的 User-Agent——只在带令牌的行上回，
-    // 而且只是展示：它由调用方完全控制，不是验证过的身份
+    // 而且只是展示：它由调用方完全控制，不是验证过的身份。`batch_id` 是成批调用的号，
+    // 只有批里的一笔带着它（detail 里的 `batch_id`）；别的行读到的是 NULL，不序列化
     let rows: Vec<AuditEventView> = sqlx::query_as(&format!(
         "SELECT e.id, e.action, e.target_kind, e.target_id, e.detail,
                 e.actor_id, u.display_name AS actor_name, e.created_at,
                 e.detail->>'token_id' AS token_id,
                 e.detail->>'token_name' AS token_name,
+                e.detail->>'batch_id' AS batch_id,
                 CASE WHEN e.detail->>'token_id' IS NOT NULL THEN e.user_agent END
                     AS declared_client
          FROM audit_events e LEFT JOIN users u ON u.id = e.actor_id

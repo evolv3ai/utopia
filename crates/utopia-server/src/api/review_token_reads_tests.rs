@@ -1046,7 +1046,8 @@ async fn a_read_token_of_a_viewer_reads_both_proof_routes_as_a_session_does() ->
 }
 
 #[tokio::test]
-async fn a_token_cannot_nod_and_no_review_write_but_keep_answers_a_token() -> anyhow::Result<()> {
+async fn a_token_cannot_nod_and_every_review_write_outside_the_ruled_table_answers_401(
+) -> anyhow::Result<()> {
     let Some(f) = Fx::new(false).await? else {
         return Ok(());
     };
@@ -1092,12 +1093,8 @@ async fn a_token_cannot_nod_and_no_review_write_but_keep_answers_a_token() -> an
                 "nod {action}: {status} {body}"
             );
         }
-        // 批量、回答治理 agent 的建议：同样没开给令牌
+        // 回答治理 agent 的建议：同样没开给令牌（批量已经开给了编辑者的写令牌，不在这里）
         let writes = [
-            (
-                format!("/kbs/{kb}/review/batch"),
-                json!({ "ids": [duplicates[0], duplicates[1]], "action": "keep" }),
-            ),
             (
                 format!("/kbs/{kb}/review/agent/{}", agent[0]),
                 json!({ "action": "keep" }),
@@ -1133,10 +1130,6 @@ async fn a_token_cannot_nod_and_no_review_write_but_keep_answers_a_token() -> an
             ),
             (
                 format!("/kbs/{kb}/facts/{}/reject", Uuid::now_v7()),
-                json!({}),
-            ),
-            (
-                format!("/kbs/{kb}/merges/{}/revert", Uuid::now_v7()),
                 json!({}),
             ),
         ];

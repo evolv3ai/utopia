@@ -179,6 +179,8 @@ export interface AuditEvent {
   token_name?: string;
   /** 调用方**自己报的** User-Agent，只在带令牌的行上有。是声明，不是验证过的身份 */
   declared_client?: string;
+  /** 令牌成批调用的一笔才有（0076）：服务端发的那一批的号 */
+  batch_id?: string;
 }
 
 export interface KbMember {
@@ -693,7 +695,31 @@ export interface ReviewItem {
   left: ReviewSide;
   right: ReviewSide;
   proposal: ReviewProposal | null;
+  /** 令牌 agent 在这一对上留下的、还开着的提议（0076）；没有就没有这个键 */
+  agent_proposal?: AgentProposal;
 }
+
+/** 令牌 agent 的一条开着的提议，挂在它指着的卡片上（0076）。`reason` 是稳定的 code，
+ *  措辞在 i18n；`token_name` 是提议那一刻的名字，`owner_name` 为 null = 账号已移除 */
+export interface AgentProposal {
+  id: string;
+  /** review.merge | merge.manual | merge.revert */
+  operation: string;
+  reason: string | null;
+  owner_name: string | null;
+  token_name: string;
+  created_at: string;
+}
+
+/** 一次合并是哪枚令牌做的（0076）。有它，合并历史写「主人 via 令牌名」 */
+export interface MergeAgent {
+  action_id: string;
+  owner_name: string | null;
+  token_name: string;
+}
+
+/** 答一条提议之后它成了什么 */
+export type ProposalAnswerState = "approved" | "declined" | "superseded";
 
 /** agent 的一笔（0025）：看了哪一对、想怎么办、凭什么、人怎么答的 */
 export interface AgentDecision {
@@ -728,7 +754,7 @@ export interface AgentDecision {
 export interface TokenAgentAction {
   source: "token";
   id: string;
-  /** 这一刀只有 review.keep */
+  /** review.keep | review.merge | merge.manual | merge.revert */
   operation: string;
   target_kind: string;
   target_id: string;
@@ -742,6 +768,14 @@ export interface TokenAgentAction {
   right: string | null;
   rationale: string | null;
   created_at: string;
+  /** 下面几个键有值才出现。`reason`：没有直接落地的理由（闸门的，或只能提议的），是 code */
+  reason?: string;
+  batch_id?: string;
+  merge_id?: string;
+  /** approved | declined | superseded（人答提议）| undone（落地的合并被撤回了）。
+   *  `held` / `proposed` 的行没有它 = 提议还开着 */
+  state?: string;
+  state_at?: string;
 }
 
 /** Agent 一档的一行：治理 agent 的一笔，或令牌 agent 台账的一行，靠 `source` 分 */
@@ -1084,6 +1118,10 @@ export interface MergeLog {
   reason: string | null;
   created_at: string;
   reverted_at: string | null;
+  /** 令牌 agent 做的合并才有（0076）。`merged_by_name` 仍是令牌的主人 */
+  agent?: MergeAgent;
+  /** 令牌想撤这次合并、还等着人答的提议（0076） */
+  agent_proposal?: AgentProposal;
 }
 
 /** 边上的属性（0037）：`{ key: "amount", value: { value: 4e9, unit: "$" } }` */
@@ -2830,6 +2868,28 @@ export const api = {
     request<{ ok: boolean }>(`/api/v1/kbs/${kbId}/review/agent/${decisionId}`, {
       method: "POST",
       body: JSON.stringify({ action, rationale: rationale || null }),
+    }),
+  /** 答令牌 agent 的一条提议（0076）。只有登录的人能答；批准跑的是人自己的合并或撤回，
+   *  目标已经没法裁时回 `superseded`，什么都不做 */
+  answerAgentProposal: (kbId: string, proposalId: string, action: "approve" | "decline") =>
+    request<{ ok: boolean; state: ProposalAnswerState; merge_id?: string }>(
+      `/api/v1/kbs/${kbId}/review/agent-proposals/${proposalId}`,
+      { method: "POST", body: JSON.stringify({ action }) },
+    ),
+  /** 一次答多条提议（1 到 500 条），回来逐条一个结果，次序是请求的次序 */
+  answerAgentProposals: (kbId: string, ids: string[], action: "approve" | "decline") =>
+    request<{
+      answered: number;
+      outcomes: {
+        id: string;
+        state: ProposalAnswerState | null;
+        merge_id: string | null;
+        code: string | null;
+        error: string | null;
+      }[];
+    }>(`/api/v1/kbs/${kbId}/review/agent-proposals`, {
+      method: "POST",
+      body: JSON.stringify({ ids, action }),
     }),
   reviewHistory: (kbId: string, page: number, per = 20) =>
     request<{ events: ReviewHistoryEvent[]; total: number }>(

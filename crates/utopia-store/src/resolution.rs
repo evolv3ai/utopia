@@ -1823,9 +1823,15 @@ pub(crate) async fn assemble_reviews(
             )
         })
         .collect();
+    // 令牌 agent 在这一页上开着的提议（0076）：同样一趟查完。没有提议的卡片不多一个键
+    let pairs: Vec<(Uuid, Uuid, Uuid)> =
+        rows.iter().map(|r| (r.id, r.left_id, r.right_id)).collect();
+    let mut agent_proposals =
+        crate::token_agent_actions::open_proposals_on_pairs(pool, kb_id, &pairs).await?;
     let mut items = Vec::with_capacity(rows.len());
     for r in rows {
         let proposal = proposals.get(&r.id).cloned();
+        let agent_proposal = agent_proposals.remove(&r.id);
         items.push(ReviewItem {
             id: r.id,
             score: r.score,
@@ -1835,6 +1841,7 @@ pub(crate) async fn assemble_reviews(
             left: sides.get(&r.left_id).cloned().ok_or(AppError::NotFound)?,
             right: sides.get(&r.right_id).cloned().ok_or(AppError::NotFound)?,
             proposal,
+            agent_proposal,
         });
     }
     Ok(items)
@@ -2173,6 +2180,37 @@ async fn entity_full(pool: &PgPool, kb_id: Uuid, id: Uuid) -> AppResult<EntityFu
     .ok_or(AppError::NotFound)
 }
 
+/// [`entity_full`] 走调用方的连接：令牌的合并在自己的事务里读两边（0076）
+async fn entity_full_on(
+    conn: &mut sqlx::PgConnection,
+    kb_id: Uuid,
+    id: Uuid,
+) -> AppResult<EntityFull> {
+    sqlx::query_as(
+        "SELECT type_id, canonical_name, profile_embedding, profile_n, merged_into
+         FROM entities WHERE kb_id = $1 AND id = $2",
+    )
+    .bind(kb_id)
+    .bind(id)
+    .fetch_optional(conn)
+    .await?
+    .ok_or(AppError::NotFound)
+}
+
+/// 一侧已经并进别人时 [`merge_entities`] 的那一句。令牌的路径（0076）认这一句，
+/// 把它答成 `already_decided`；人的路径照旧把它原样给出去
+pub(crate) const ALREADY_MERGED: &str = "Entity already merged";
+
+/// 合并在事务里的那一半做完之后留下的东西：合并日志的 id，加上提交之后那几步
+/// （[`merge_follow_up`]）要用的——搬动过的事实、两边的名字
+#[derive(Debug)]
+pub(crate) struct MergeDone {
+    pub merge_id: Uuid,
+    moved: Vec<Uuid>,
+    source_name: String,
+    target_name: String,
+}
+
 /// 合并 source → target：事实改挂 target、互指事实与合并后的重复事实作废、
 /// 画像加权合并、source 标记 merged_into。全程记日志可回滚。
 ///
@@ -2195,11 +2233,65 @@ pub async fn merge_entities(
     let source = entity_full(pool, kb_id, source_id).await?;
     let target = entity_full(pool, kb_id, target_id).await?;
     if source.merged_into.is_some() || target.merged_into.is_some() {
-        return Err(AppError::Conflict("Entity already merged".into()));
+        return Err(AppError::Conflict(ALREADY_MERGED.into()));
     }
 
     let mut tx = pool.begin().await?;
+    let done = merge_core(
+        &mut tx, kb_id, source_id, target_id, &source, &target, merged_by, reason,
+    )
+    .await?;
+    tx.commit().await?;
 
+    merge_follow_up(pool, kb_id, &done).await?;
+    Ok(done.merge_id)
+}
+
+/// 令牌的合并（0076）用的入口：[`merge_entities`] 的同一组检查、同一个事务里的合并，
+/// 但跑在**调用方的事务**里，不提交。调用方在同一个事务里再写审核行、台账行、审计行，
+/// 提交之后自己调 [`merge_follow_up`]——那几步失败时合并已经在了，不能报成「没合」。
+///
+/// 两边在事务里读；之后到真正改实体行之间别人先合了，[`merge_core`] 的守卫会答
+/// [`ALREADY_MERGED`]
+pub(crate) async fn merge_entities_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    kb_id: Uuid,
+    source_id: Uuid,
+    target_id: Uuid,
+    merged_by: Option<Uuid>,
+    reason: &str,
+) -> AppResult<MergeDone> {
+    if source_id == target_id {
+        return Err(AppError::invalid(
+            "self_merge",
+            "Cannot merge an entity into itself",
+        ));
+    }
+    let source = entity_full_on(tx, kb_id, source_id).await?;
+    let target = entity_full_on(tx, kb_id, target_id).await?;
+    if source.merged_into.is_some() || target.merged_into.is_some() {
+        return Err(AppError::Conflict(ALREADY_MERGED.into()));
+    }
+    merge_core(
+        tx, kb_id, source_id, target_id, &source, &target, merged_by, reason,
+    )
+    .await
+}
+
+/// 合并在事务里的那一半：从锁时间线到写合并日志，不开事务也不提交。
+/// [`merge_entities`]（人、攒批裁决器、治理 agent）与 [`merge_entities_in`]（令牌）
+/// 跑的是这同一段，所以令牌合出来的图与人合出来的一模一样（0076）
+#[allow(clippy::too_many_arguments)]
+async fn merge_core(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    kb_id: Uuid,
+    source_id: Uuid,
+    target_id: Uuid,
+    source: &EntityFull,
+    target: &EntityFull,
+    merged_by: Option<Uuid>,
+    reason: &str,
+) -> AppResult<MergeDone> {
     // 搬动会牵连的时间线先按固定顺序锁上，再改任何一行（撤回合并同一个顺序，见 temporal
     // 模块头）：不锁的话，合并与撤回、合并与落库对账会各拿一半行锁互相等
     let moving: Vec<Uuid> = sqlx::query_scalar(
@@ -2207,12 +2299,12 @@ pub async fn merge_entities(
     )
     .bind(kb_id)
     .bind(source_id)
-    .fetch_all(&mut *tx)
+    .fetch_all(&mut **tx)
     .await?;
     let timelines =
-        crate::temporal::timelines_of(&mut *tx, kb_id, &moving, Some((&[source_id], target_id)))
+        crate::temporal::timelines_of(&mut **tx, kb_id, &moving, Some((&[source_id], target_id)))
             .await?;
-    crate::temporal::lock_timelines(&mut tx, kb_id, &timelines).await?;
+    crate::temporal::lock_timelines(tx, kb_id, &timelines).await?;
 
     // 互指事实（合并后变自环）→ 作废
     let cross: Vec<(Uuid,)> = sqlx::query_as(
@@ -2224,7 +2316,7 @@ pub async fn merge_entities(
     .bind(kb_id)
     .bind(source_id)
     .bind(target_id)
-    .fetch_all(&mut *tx)
+    .fetch_all(&mut **tx)
     .await?;
     let mut invalidated: Vec<Uuid> = cross.into_iter().map(|(id,)| id).collect();
 
@@ -2234,7 +2326,7 @@ pub async fn merge_entities(
     .bind(source_id)
     .bind(target_id)
     .bind(kb_id)
-    .fetch_all(&mut *tx)
+    .fetch_all(&mut **tx)
     .await?
     .into_iter()
     .map(|(id,)| id)
@@ -2245,7 +2337,7 @@ pub async fn merge_entities(
     .bind(source_id)
     .bind(target_id)
     .bind(kb_id)
-    .fetch_all(&mut *tx)
+    .fetch_all(&mut **tx)
     .await?
     .into_iter()
     .map(|(id,)| id)
@@ -2267,7 +2359,7 @@ pub async fn merge_entities(
     )
     .bind(kb_id)
     .bind(target_id)
-    .fetch_all(&mut *tx)
+    .fetch_all(&mut **tx)
     .await?;
     let mut dup_ids = Vec::new();
     let (mut copied_to, mut copied_chunks) = (Vec::new(), Vec::new());
@@ -2281,7 +2373,7 @@ pub async fn merge_entities(
         )
         .bind(ids[0])
         .bind(&ids[1..])
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
         // 证据也抄一份（#1426）：身份来源的名字证据要是只留在作废的那条上，存活方就不再是
         // 身份实体，精确名挂靠和合并前的人工把关（0071 决定 2、7）都认不出它。
@@ -2298,7 +2390,7 @@ pub async fn merge_entities(
         )
         .bind(ids[0])
         .bind(&ids[1..])
-        .fetch_all(&mut *tx)
+        .fetch_all(&mut **tx)
         .await?;
         copied_to.extend(std::iter::repeat_n(ids[0], copied.len()));
         copied_chunks.extend(copied);
@@ -2307,12 +2399,12 @@ pub async fn merge_entities(
     if !dup_ids.is_empty() {
         sqlx::query("UPDATE facts SET invalidated_at = now() WHERE id = ANY($1)")
             .bind(&dup_ids)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
         invalidated.extend(dup_ids);
     }
     // 抄过去的若是身份证据，存活的名字就不该再留向量（0071 决定 5）
-    crate::name_vectors::drop_with_identity_evidence(&mut tx, &copied_to).await?;
+    crate::name_vectors::drop_with_identity_evidence(tx, &copied_to).await?;
 
     // 画像加权合并
     let (profile, profile_n) = match (&target.profile_embedding, &source.profile_embedding) {
@@ -2344,21 +2436,37 @@ pub async fn merge_entities(
     // 现在是 `None`（0009），一个 `or` 就说完了，那次查询也省了
     let new_type_id = target.type_id.or(source.type_id);
 
-    sqlx::query(
+    // **两条 UPDATE 都带着 `merged_into IS NULL`**（0076）。调用方的检查是先读的：读完到
+    // 这里之间，另一个调用（人、治理 agent、令牌）可能已经把同一侧并走了。行锁让后到的
+    // 等前一个提交，等到之后 WHERE 按新行重算——守卫不过就是零行，整个事务回滚，答的是
+    // 检查本来就会答的那一句。没有这一道，输了的一方会再写一条合并日志：同一对合两次。
+    // 语句与加锁的次序都和从前一样（先事实，再目标实体，再源实体）
+    let kept = sqlx::query(
         "UPDATE entities SET profile_embedding = $2, profile_n = $3,
-                type_id = $4, updated_at = now() WHERE id = $1",
+                type_id = $4, updated_at = now() WHERE id = $1 AND merged_into IS NULL",
     )
     .bind(target_id)
     .bind(&profile)
     .bind(profile_n)
     .bind(new_type_id)
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query("UPDATE entities SET merged_into = $2, updated_at = now() WHERE id = $1")
-        .bind(source_id)
-        .bind(target_id)
-        .execute(&mut *tx)
-        .await?;
+    .execute(&mut **tx)
+    .await?
+    .rows_affected();
+    if kept != 1 {
+        return Err(AppError::Conflict(ALREADY_MERGED.into()));
+    }
+    let gone = sqlx::query(
+        "UPDATE entities SET merged_into = $2, updated_at = now()
+          WHERE id = $1 AND merged_into IS NULL",
+    )
+    .bind(source_id)
+    .bind(target_id)
+    .execute(&mut **tx)
+    .await?
+    .rows_affected();
+    if gone != 1 {
+        return Err(AppError::Conflict(ALREADY_MERGED.into()));
+    }
 
     // 其余涉及 source 的 pending 审核项：**改指到合并目标，不是关掉**。
     //
@@ -2392,7 +2500,7 @@ pub async fn merge_entities(
     .bind(kb_id)
     .bind(source_id)
     .bind(target_id)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
     // 剩下的改指到目标，问题继续挂在队列上等裁决。
     // (source, target) 这一对本身除外——它正是本次合并的裁决对象，由调用方标记 merged，
@@ -2409,7 +2517,7 @@ pub async fn merge_entities(
     .bind(kb_id)
     .bind(source_id)
     .bind(target_id)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
 
     let merge_id = Uuid::now_v7();
@@ -2434,29 +2542,41 @@ pub async fn merge_entities(
     .bind(reason)
     .bind(&copied_to)
     .bind(&copied_chunks)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
 
-    tx.commit().await?;
+    let moved: Vec<Uuid> = moved_subject
+        .iter()
+        .chain(moved_object.iter())
+        .copied()
+        .collect();
+    Ok(MergeDone {
+        merge_id,
+        moved,
+        source_name: source.canonical_name.clone(),
+        target_name: target.canonical_name.clone(),
+    })
+}
 
+/// 合并提交之后的那几步：签名检查、时态对账、消歧后缀。**都在事务之外**，所以失败时
+/// 合并已经在库里了。[`merge_entities`] 照旧把这里的错误原样返回；令牌的路径（0076）
+/// 把它记在一个 `applied` 的结果上，而不是报成合并失败
+pub(crate) async fn merge_follow_up(pool: &PgPool, kb_id: Uuid, done: &MergeDone) -> AppResult<()> {
+    let merge_id = done.merge_id;
     // 搬移后的时态对账：换了主/宾的事实等价于新观察落库——两个对象折成一个后，
     // 唯一性不变量才第一次看得到旧开放区间与继任者相撞（如"星尘"并入"星尘项目"，
     // 旧负责人的 leads 应在新任起点闭合）。
     // 修正行 id 记入合并账本，供审计。回滚不靠它：回滚按搬走之后剩下的行重算时间线，
     // 这些引擎画的终点自然跟着变（0057）。
     // 注：本步在事务外，失败有自愈性——这条时间线下一次有事实落库时整条重算。
-    let moved_all: Vec<Uuid> = moved_subject
-        .iter()
-        .chain(moved_object.iter())
-        .copied()
-        .collect();
+    let moved_all = &done.moved;
 
     // **合并是第三条改写事实的路**（#196）：换掉主语或宾语，就可能把一条合法事实
     // 变成签名违规——抽取写入时掰正过的方向，合并一次就能再反回去。这里不掰、不改，
     // 只报：对搬动过的事实查一遍 domain / range，违反的进 `axiom_violations`
     //（kind = signature），与其它公理违规同一个队列、同样三个出路。
     // 放在事务之后：目标实体的类型在事务里刚调和过，提交了才看得见
-    match crate::reasoning::signature_breaks(&mut *pool.acquire().await?, kb_id, Some(&moved_all))
+    match crate::reasoning::signature_breaks(&mut *pool.acquire().await?, kb_id, Some(moved_all))
         .await
     {
         Ok(broken) if !broken.is_empty() => {
@@ -2467,7 +2587,7 @@ pub async fn merge_entities(
         Ok(_) => {}
         Err(e) => tracing::warn!(%kb_id, error = %e, "合并后的签名检查失败"),
     }
-    let report = crate::temporal::reconcile_moved_facts(pool, kb_id, &moved_all).await?;
+    let report = crate::temporal::reconcile_moved_facts(pool, kb_id, moved_all).await?;
     if !report.corrected.is_empty() {
         sqlx::query("UPDATE entity_merges SET temporal_corrections = $2 WHERE id = $1")
             .bind(merge_id)
@@ -2476,14 +2596,11 @@ pub async fn merge_entities(
             .await?;
     }
 
-    refresh_disambiguators(pool, kb_id, &source.canonical_name).await?;
-    if !source
-        .canonical_name
-        .eq_ignore_ascii_case(&target.canonical_name)
-    {
-        refresh_disambiguators(pool, kb_id, &target.canonical_name).await?;
+    refresh_disambiguators(pool, kb_id, &done.source_name).await?;
+    if !done.source_name.eq_ignore_ascii_case(&done.target_name) {
+        refresh_disambiguators(pool, kb_id, &done.target_name).await?;
     }
-    Ok(merge_id)
+    Ok(())
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -2672,7 +2789,7 @@ pub async fn list_merges(
     limit: i64,
     offset: i64,
 ) -> AppResult<Vec<MergeLogView>> {
-    let rows: Vec<MergeLogView> = sqlx::query_as(
+    let mut rows: Vec<MergeLogView> = sqlx::query_as(
         "SELECT m.id, s.canonical_name AS source_name, t.canonical_name AS target_name,
                 u.display_name AS merged_by_name, m.reason, m.created_at, m.reverted_at
          FROM entity_merges m
@@ -2687,6 +2804,16 @@ pub async fn list_merges(
     .bind(offset)
     .fetch_all(pool)
     .await?;
+    // 令牌 agent 的那两样（0076），从台账读：哪些合并是令牌做的，哪些合并上有一条等人答的
+    // 撤回提议。别的行两个键都不出，与从前一个字节不差
+    let ids: Vec<Uuid> = rows.iter().map(|m| m.id).collect();
+    let mut agents = crate::token_agent_actions::merge_agents(pool, kb_id, &ids).await?;
+    let mut proposals =
+        crate::token_agent_actions::open_revert_proposals(pool, kb_id, &ids).await?;
+    for m in &mut rows {
+        m.agent = agents.remove(&m.id);
+        m.agent_proposal = proposals.remove(&m.id);
+    }
     Ok(rows)
 }
 

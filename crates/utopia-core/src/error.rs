@@ -15,6 +15,11 @@ pub enum AppError {
     /// Localizable conflict; legacy internal callers may still use Conflict.
     #[error("{message}")]
     CodedConflict { code: &'static str, message: String },
+    /// 带 code 的 429：调用本身没有错，只是这一段时间里做得太多了，等一等再来（0076：
+    /// 令牌 agent 落地的写入按令牌、按库限速，code 是 `agent_rate_limited`）。
+    /// 什么都没改——与 409 不同，重试是对的，只是不是现在
+    #[error("{message}")]
+    RateLimited { code: &'static str, message: String },
     #[error("{0}")]
     Validation(String),
     /// 带稳定 code 的校验错误。**message 仍是英文原句**——它是给不做本地化的

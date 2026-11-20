@@ -1,15 +1,15 @@
 ---
 pipeline: gsd-path/v2
 project: utopia
-milestone: token-review-reads
+milestone: gated-merge-proposals-revert-batch
 phase: shipped
                     # inspect only for brownfield; greenfield starts at define
                     # roadmap only in program flow (CHARTER.md exists)
 status: done
-branch: gsd-path/M002
+branch: gsd-path/M003
                     # the router rebinds before any next-milestone file change
                     # the bound branch is never main; ship integrates it there
-archive: .project/archive/002-token-review-reads
+archive: .project/archive/003-gated-merge-proposals-revert-batch
 integration_default: direct
 integration: direct
 integration_source: default
@@ -63,3 +63,24 @@ it on completion. If this file and the artifacts disagree, the artifacts win
 - 2026-11-19 — ship — build done; final review pending
 - 2026-11-19 — ship — final gate passed; shipping approval pending
 - 2026-11-19 — shipped — archive preflight passed; shipment recorded
+- 2026-11-19 — inspect — next milestone bound: gsd-path/M003 at base 6c52ce8f8091b18d8713ce8d509fec756644a4f1; previous archive .project/archive/002-token-review-reads, ship dc385d45b5be5947a1a18171c79c9f34b8b2bc80, integration 6c52ce8f8091b18d8713ce8d509fec756644a4f1, branch gsd-path/M002
+- 2026-11-19 — inspect — inspection artifacts passed
+- 2026-11-19 — define — definition started
+- 2026-11-19 — define — milestone intent approved
+- 2026-11-19 — plan — planning started
+- 2026-11-19 — plan — plan approved
+- 2026-11-19 — build — build started
+- 2026-11-19 — build — build blocked: T001 found edge E12 false for typed_fact_sources (merge copies statement links the unchanged revert never removes); ruling Delegated (driver D116) corrects the edge through build recovery
+- 2026-11-19 — define — build intent corrections requested
+- 2026-11-19 — define — build recovery: {"base": "f1cd6504cc583eccddeb7a72a4f809ff734ebbd1", "branch": "gsd-path/M003", "kind": "define", "source": "build"}
+- 2026-11-19 — define — milestone intent approved
+- 2026-11-19 — plan — planning started
+- 2026-11-19 — plan — plan approved
+- 2026-11-19 — build — build started
+- 2026-11-19 — build — T004 brief repaired: two test helpers that build ReviewItem added to its files (driver D119)
+- 2026-11-19 — build — wave 3 review passed; T005 Verify filter repaired to the mounted module path (wave 3 review observation)
+- 2026-11-19 — build — T005 brief repaired: review_token_revert_tests.rs added to its files for one schema assertion (driver D120); committed before re-activation
+- 2026-11-19 — build — T007 brief repaired: accepted deviations and known limits from the wave reviews are documented as landed (driver D121)
+- 2026-11-19 — ship — build done; final review pending
+- 2026-11-20 — ship — final gate passed; shipping approval pending
+- 2026-11-20 — shipped — archive preflight passed; shipment recorded
