@@ -103,3 +103,4 @@ it on completion. If this file and the artifacts disagree, the artifacts win
 - 2026-11-20 — plan — plan approved
 - 2026-11-20 — build — build started
 - 2026-11-20 — build — T004 brief repaired: conflicts.rs added to files (driver D138); task returned to pending
+- 2026-11-20 — build — T006 brief repaired: ontology_agent.rs added to files (driver D139); task returned to pending
