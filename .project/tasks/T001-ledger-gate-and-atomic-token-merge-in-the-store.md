@@ -3,10 +3,10 @@ id: T001
 title: Burn down the store risks: ledger columns by migration 0129, the token merge gate with six holds, a token merge and revert atomic with their ledger and audit rows, and the precedent rule
 wave: 1
 deps: []
-status: in-progress
-agent: build_T001
-base: 545b54c681e31b45bac88b183deabc76ae864b55
-worktree: D:\utopia
+status: pending
+agent: null
+base: null
+worktree: null
 task_branch: null
 files:
   - migrations/0129_a_token_agent_action_keeps_its_reason_its_batch_its_merge_and_its_later_state.sql
@@ -80,3 +80,4 @@ Heavy: yes
 - 2026-11-19 — the five assumptions. 1 ledger shape: true (`migration_0129_..._replays_as_a_no_op`; `a_second_migration_run_changes_no_schema` ok). 2 atomic merge with its rows, nothing without a token name, follow-up failure on an applied outcome: true (three tests). 3 six holds, one open proposal per target under repeats and simultaneous calls: true (two tests). 4 merge then revert restores state: FALSE for `typed_fact_sources`, see the NEEDS-ORCHESTRATOR entry; the rest of that test (revert row, `undone`, second revert `already_decided`) is not reached after the failing assertion; the person/governor proposal test passes. 5 token merges and token-reverted token merges are no governor precedent, a person's revert of a token merge counts: true. Race: exactly one merge, losing token `already_decided` (6 rounds x 4 pairings).
 - 2026-11-19 — failure window of the token revert. `resolution::revert_merge` owns its transaction, so the revert and its ledger and audit rows are not one transaction (holding a second transaction open while it takes another connection is the pool-starvation pattern). Order: token name read first; revert commits; then one transaction writes the ledger row and the `merge.revert` audit row under an advisory lock, retried 3 times, then surfaced as an error saying the merge was reverted but its rows were not written. If the process dies between the two: the merge is reverted, its applied merge row reads `undone`, there is no `merge.revert` ledger or audit row, `type_pair_stats` counts it as a revert (the governor's bar only rises), and a repeated token revert answers `already_decided`.
 - 2026-11-19 — commands and results (cargo target `C:/Users/Owner/.gsd-path/cargo-target/coder-m003`). Verify on fresh `m003_t001_store`: migrate ok; `cargo test -p utopia-cli` 15 + 13 passed, 0 failed; `cargo check -p utopia-server --all-targets` finished clean; `--test a_token_merge_is_gated_recorded_and_undone` 9 passed, 1 failed (the E12 test above) — the Verify does not pass; `--test a_token_keep_is_never_human_precedent` 8 passed, `--test a_second_migration_run_changes_no_schema` 1 passed; the six named `--test store` tests each `... ok`. Whole `UTOPIA_TEST_REQUIRE_DB=1 cargo test -p utopia-store --no-fail-fast` on fresh `m003_t001_whole_store`: 526 passed, 1 failed (the same E12 test), 4 ignored. Whole `cargo test -p utopia-server --no-fail-fast` on fresh `m003_t001_whole_server`: 878 passed, 0 failed, 2 ignored. `cargo fmt --all --check` clean. `cargo clippy -p utopia-store -p utopia-cli -p utopia-server --all-targets`: no warnings. No guard refusal. Databases created: `m003_t001_scratch`, `m003_t001_store`, `m003_t001_whole_store`, `m003_t001_whole_server` (left in place).
+- 2026-11-19 — orchestrator: coder returned `blocked` on E12 (see NEEDS-ORCHESTRATOR above). Ruling Delegated (driver D116): the edge is corrected through the build recovery contract (define corrections, then plan repair); `resolution::revert_merge` stays unchanged. The coder's uncommitted work is held in a Git stash (`T001 coder work held during build recovery`) and is restored when the task is dispatched again. Task returned to `pending` with null dispatch metadata.
