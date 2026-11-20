@@ -2,10 +2,10 @@
 pipeline: gsd-path/v2
 project: utopia
 milestone: gated-merge-proposals-revert-batch
-phase: build
+phase: plan
                     # inspect only for brownfield; greenfield starts at define
                     # roadmap only in program flow (CHARTER.md exists)
-status: blocked
+status: done
 branch: gsd-path/M003
                     # the router rebinds before any next-milestone file change
                     # the bound branch is never main; ship integrates it there
@@ -71,3 +71,8 @@ it on completion. If this file and the artifacts disagree, the artifacts win
 - 2026-11-19 — plan — plan approved
 - 2026-11-19 — build — build started
 - 2026-11-19 — build — build blocked: T001 found edge E12 false for typed_fact_sources (merge copies statement links the unchanged revert never removes); ruling Delegated (driver D116) corrects the edge through build recovery
+- 2026-11-19 — define — build intent corrections requested
+- 2026-11-19 — define — build recovery: {"base": "f1cd6504cc583eccddeb7a72a4f809ff734ebbd1", "branch": "gsd-path/M003", "kind": "define", "source": "build"}
+- 2026-11-19 — define — milestone intent approved
+- 2026-11-19 — plan — planning started
+- 2026-11-19 — plan — plan approved
