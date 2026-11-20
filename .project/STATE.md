@@ -2,14 +2,14 @@
 pipeline: gsd-path/v2
 project: utopia
 milestone: gated-merge-proposals-revert-batch
-phase: ship
+phase: shipped
                     # inspect only for brownfield; greenfield starts at define
                     # roadmap only in program flow (CHARTER.md exists)
-status: active
+status: done
 branch: gsd-path/M003
                     # the router rebinds before any next-milestone file change
                     # the bound branch is never main; ship integrates it there
-archive: null
+archive: .project/archive/003-gated-merge-proposals-revert-batch
 integration_default: direct
 integration: direct
 integration_source: default
@@ -82,3 +82,5 @@ it on completion. If this file and the artifacts disagree, the artifacts win
 - 2026-11-19 — build — T005 brief repaired: review_token_revert_tests.rs added to its files for one schema assertion (driver D120); committed before re-activation
 - 2026-11-19 — build — T007 brief repaired: accepted deviations and known limits from the wave reviews are documented as landed (driver D121)
 - 2026-11-19 — ship — build done; final review pending
+- 2026-11-20 — ship — final gate passed; shipping approval pending
+- 2026-11-20 — shipped — archive preflight passed; shipment recorded

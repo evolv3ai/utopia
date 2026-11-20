@@ -116,8 +116,8 @@ Open questions
 Goal: An agent merges, reverts and batches duplicate pairs behind the server gate, a held or propose-only call waits as a proposal that only a signed-in person can answer, and every agent merge can be reverted by the agent or by a person.
 Depends on: [M001, M002]
 Surfaces: token-authenticated HTTP API, MCP endpoint, Review tab in the web app (Agent History, Duplicates and Merges sections)
-Status: active
-Archive: null
+Status: shipped
+Archive: .project/archive/003-gated-merge-proposals-revert-batch
 Integrated: null
 
 Scope: in
