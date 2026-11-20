@@ -3,9 +3,9 @@ id: T007
 title: Document token merge, revert, batch, proposals, the limit and the breaker for the API and MCP, and amend ADR 0076 with what this milestone built
 wave: 4
 deps: [T002, T003, T004, T005, T006]
-status: pending
-agent: null
-base: null
+status: done
+agent: build_T007
+base: b0a3929a5611ef77528fb5249350a7858802d493
 worktree: null
 task_branch: null
 files:
@@ -67,3 +67,33 @@ Heavy: yes
 ## Log
 
 - 2026-11-19 — created by planner
+- 2026-11-19 — build_T007 (coder), base `b0a3929`: implemented; result `ready`.
+  - Preflight: both `files` paths exist; every route, handler and symbol the Interface contract names was found in the code at base (`api/mod.rs:537-630`, `review_routes.rs`, `review_ops.rs`, `review_tools.rs`, `auth.rs:247-268`, `error.rs:45-48`, `token_agent_actions.rs`, `execution_gate.rs`, `governance.rs:1088-1089`, `migrations/0129_…sql`, `models.rs:1081-1128`). No disagreement between code and contract outside the Brief repair bullet.
+  - `web/src/docs/mcp.md`: intro, tools table and "Structured results" now say six Review tools; "Review over MCP" gains the three write tools (arguments, who sees them, results), the new Agent History keys (`reason`, `batch_id`, `merge_id`, `state`, `state_at`), `agent_proposal` on a Duplicates item, `agent` and `agent_proposal` on a Merges item, the rewritten "Who may call", the extended error table and the message-only tool errors; "Review over the token API" gains the five write routes and the subsections Merging (answers, `follow_up_error`, the nine reason codes), Proposals (one open per base, operation and target; `already_proposed`; the session-only `agent-proposals` routes with their codes and the approval limit), Reverting a merge (N6 wording: "does not recall", "untyped", "statement links"; `invalid_body`; the two limits), Batches (1 to 50, `batch_id`, per-item outcomes, unit revert at `agent-batches`, keep-only batch), The limit and the breaker (200 per rolling hour, 429 `agent_rate_limited`, checked before the gate, overshoot, what the breaker counts), the extended code table with the check order, and "What stays closed to tokens" in place of "Not open to tokens".
+  - ADR 0076: status line names the gated-write slice and migration 0129 and its `open:` part no longer lists what the slice opened; dated revisions in place on decisions 2, 5, 7, 10, 11 and 12; new decision 14 (shapes ruled for this cut and the four known limits); `## Status history` records the previous `open:` text. Decision 4's table is untouched (12 / 3 / 4 cells). Revisions on decisions 2 and 5 are beyond the required four: their text ("three tools", "only the Keep row is reachable") was made stale by this cut.
+  - Verify: ran the full command in `D:\utopia` with `CARGO_TARGET_DIR=C:/Users/Owner/.gsd-path/cargo-target/coder-m003` and the shim and pg16 PATH; exit 0. Database `m003_t007` created and migrated; `test docs_corpus::tests::every_corpus_md_file_is_indexed ... ok` (1 passed, 915 filtered out). The one `tr` whose argument is a literal newline in the task file was typed as `'\n'`, the same character.
+  - Found in the code, not in the briefs: (1) `merge_by_governor` is given to any merge with no `merged_by` person that is not a token agent's, so it also covers the automatic adjudicator's merges; documented as "the governor or the automatic adjudicator". (2) A tripped breaker replaces the gate's reason: the row's reason is `breaker` even when the gate would also hold. (3) The limit is checked before the store reads the target, so a token past the limit gets 429 for an unknown id too. (4) A unit revert called by a token whose breaker is tripped returns its items as `proposed`, not reverted. (5) The description of `review_batch` in `review_tools.rs:328-329` can be read as saying an unknown action is refused "with code batch_size"; the code answers an uncoded 422, which is what the documentation says. Not edited (outside `files`).
+  - Not claimed: that migration number 0129 was re-checked with `scripts/check-upstream-numbers.sh` (no record found in the T001 Log), so the ADR's Numbers section is unchanged. The ADR's open question "The precedent exclusion has not been exercised end to end" is left as written; whether T001/T006's tests settle it is the owner's call.
+  - Guard refusals: none.
+- 2026-11-20 — orchestrator Verify (sidecar gsd-path-verify/task-t007-verify): pass, exit 0; output tail:
+  ```
+     Compiling utopia-store v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t007-verify\crates\utopia-store)
+     Compiling tracing-subscriber v0.3.23
+     Compiling oxrdfio v0.2.5
+     Compiling object_store v0.14.1
+     Compiling sqlparser v0.62.0
+     Compiling tantivy v0.26.1
+     Compiling include-flate v0.3.4
+     Compiling jieba-rs v0.10.3
+     Compiling tantivy-jieba v0.20.0
+     Compiling utopia-search v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t007-verify\crates\utopia-search)
+     Compiling rig-agent v0.42.0
+     Compiling utopia-server v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t007-verify\crates\utopia-server)
+      Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 44s
+       Running unittests src\main.rs (C:/Users/Owner/.gsd-path/cargo-target/finish-m003-T007\debug\deps\utopia_server-0a73fc6c26d41d5f.exe)
+  
+  running 1 test
+  test docs_corpus::tests::every_corpus_md_file_is_indexed ... ok
+  
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 915 filtered out; finished in 0.04s
+  ```

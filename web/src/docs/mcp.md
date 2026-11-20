@@ -1,6 +1,6 @@
 # Agents over MCP
 
-Utopia serves every knowledge base as a **Model Context Protocol** server. Any MCP client — Claude Desktop, Cursor, an agent framework, a script — can search a base, read a document, look up an entity and ask what changed, with the same permissions as the person whose token it carries. Reading needs nothing but a token. One tool records: `remember` asks a `write` token held by an editor, and what it records **waits for a person's nod** before it reaches the graph. Three tools reach the Review tab: two read all thirteen of its sections, and `review_keep` keeps one duplicate pair apart for a `write` token held by an editor.
+Utopia serves every knowledge base as a **Model Context Protocol** server. Any MCP client — Claude Desktop, Cursor, an agent framework, a script — can search a base, read a document, look up an entity and ask what changed, with the same permissions as the person whose token it carries. Reading needs nothing but a token. One tool records: `remember` asks a `write` token held by an editor, and what it records **waits for a person's nod** before it reaches the graph. Six tools reach the Review tab. Two read all thirteen of its sections. Four write, for a `write` token held by an editor: `review_keep` keeps one duplicate pair apart, `review_merge` merges a pair or two entities **behind the server's merge gate**, `review_revert` reverts a merge, and `review_batch` decides up to 50 duplicate pairs in one call. A merge the gate holds changes nothing and waits as a proposal that only a signed-in person can answer; no token and no tool answers a proposal.
 
 ## Get a token
 
@@ -52,6 +52,9 @@ Three methods are served:
 | `review_list` | One section of the base's Review tab, any of the thirteen: a page of one of the eleven queue sections with its `total`, a page of the Decisions history, or the Overview summary. See [Review over MCP](#review-over-mcp) |
 | `review_item` | One item that `review_list` lists, by its `section` and `id`, exactly as the list returns it; an Axioms item also carries its `proof` |
 | `review_keep` | Keep one pending duplicate pair apart. **Needs a `write` token held by an editor**; a token without it does not see this tool in `tools/list`, and calling it anyway returns a tool error with a code that says why |
+| `review_merge` | Merge one pending duplicate pair, or two entities named by id. The server's merge gate is asked first: a merge it passes is applied at once, a merge it holds changes nothing and waits as a proposal for a signed-in person. Listed and refused as `review_keep` is |
+| `review_revert` | Revert one merge, or every merge one `review_batch` call made. A merge a token agent made is reverted at once; a revert of a person's or the governor's merge waits as a proposal. A revert restores graph state only. Listed and refused as `review_keep` is |
+| `review_batch` | Decide 1 to 50 pending duplicate pairs with one action, `merge` or `keep`. Each pair goes through the single-pair path, so the gate is asked for every merge. Listed and refused as `review_keep` is |
 
 The two time axes matter here. `at` reads **world time** (when something was true); `as_of` reads **record time** (what Utopia held at that moment, before it revised it), and `changes` lists what moved on that axis in a window. They are separate parameters on purpose: folded into one they would answer "what happened in March" with "what we learned in March", and both look plausible.
 
@@ -110,7 +113,7 @@ versioned snapshot of the evidence set.
 
 `find_entities`, `search_chunks`, `entity_facts` and `changes` return a JSON object
 in `result.structuredContent`, beside the unchanged human-readable `content`.
-No extra argument or protocol upgrade is needed. The three Review tools also return
+No extra argument or protocol upgrade is needed. The six Review tools also return
 structured results, with their own shapes and structured errors; they are described
 under [Review over MCP](#review-over-mcp), and the rest of this section does not
 apply to them. Other tools remain text-only.
@@ -197,13 +200,18 @@ The Review card names the agent, not only the person: several clients can share 
 
 ## Review over MCP
 
-Three tools serve the Review tab. They call the same server functions as the token routes described in the next section, so for one token a tool and its route return the same data and refuse with the same code.
+Six tools serve the Review tab: two reads and four writes. They call the same server functions as the token routes described in the next section, so for one token a tool and its route return the same data and refuse with the same code.
 
 | Tool | Arguments | Listed in `tools/list` for | Successful `structuredContent` |
 |---|---|---|---|
 | `review_list` | `section` (required string); `limit` and `offset` (optional integers, queue sections only); `page` and `per` (optional integers, `decisions` only) | Every token that reaches the base, `read` or `write`, with an owner who is at least a viewer | The body the token route of that section returns: `{"counts", "queue", "items", "total"}` for a queue section, the summary object for `overview`, `{"events", "total"}` for `decisions` |
 | `review_item` | `section` (optional string, default `duplicates`); `id` (required string) | The same | That item exactly as `review_list` returns it. For section `violations`, the same object plus `proof` |
 | `review_keep` | `id` (required), `rationale` (optional string) | Only a `write` token whose owner is at least an editor of the base | `{"ok": true, "outcome": "applied", "action_id": "<uuid>"}`, the body of the keep route |
+| `review_merge` | Either `id` (the review id of a pending duplicate pair) or both `source` and `target` (two entity ids; `source` is merged into `target`); `rationale` (optional string). No argument is marked required in the schema, because "one form or the other" cannot be expressed there; the server checks it | The same as `review_keep` | The body of the matching merge route: `{"ok": true, "outcome": "applied", "action_id", "merge_id"}`, or `{"ok": true, "outcome": "held" or "proposed", "action_id", "reason", "explanation"}` when the call became a proposal |
+| `review_revert` | Exactly one of `merge_id` (one merge) and `batch_id` (every merge of one batch); `rationale` (optional string). No argument is marked required | The same as `review_keep` | With `merge_id`, the body of the revert route: `{"ok": true, "outcome": "applied", "action_id", "merge_id"}` or `{"ok": true, "outcome": "proposed", "action_id", "reason", "explanation"}`. With `batch_id`, the body of the unit revert: `{"batch_id", "reverted", "outcomes"}` |
+| `review_batch` | `ids` (required list of review ids), `action` (required, `merge` or `keep`), `rationale` (optional string) | The same as `review_keep` | The body of the token batch: `{"batch_id", "decided", "outcomes"}` |
+
+What each write does, every key of its answer and every reason a call becomes a proposal are described once, under [Review over the token API](#review-over-the-token-api): a tool and its route run the same server function, so the answers are the same object.
 
 **Sections served.** `review_list` reads all thirteen sections of the Review tab. Eleven are queue sections that share one list route; Overview and Decisions each have their own route. Every route below is under `/api/v1`.
 
@@ -231,37 +239,43 @@ A paging argument the section does not take is ignored: `overview` reads none, `
 
 **Decisions.** `section: "decisions"` pages with the history route's own `page` and `per`, not with `limit` and `offset`. `page` is zero-based and defaults to 0 (a negative value is served as 0); `per` defaults to 20 and is served as 1 to 100. The result is `{"events", "total"}`: one page of decision events, newest first, each with `id`, `action`, `target_kind`, `target_id`, `detail`, `actor_id`, `actor_name` and `created_at`, and the number of events in the history. A page past the end has no events and the same `total`.
 
-**Agent History.** `section: "agent"` returns rows from two sources in one sequence, newest first, and `limit`, `offset` and `total` apply to the merged sequence. A governor row is the row the Review tab has always shown and has no `source` key. A row for an action made with a token has `"source": "token"` and names both the person and the token: `owner_id` and `owner_name` for the token's owner, `token_id` and `token_name` for the token (the name is the snapshot stored with the action, so a renamed or revoked token still reads as it was), beside `id`, `operation`, `target_kind`, `target_id`, `outcome`, `left`, `right`, `rationale` and `created_at`. On a base where no token has acted, the section holds the governor's rows only.
+**Agent History.** `section: "agent"` returns rows from two sources in one sequence, newest first, and `limit`, `offset` and `total` apply to the merged sequence. A governor row is the row the Review tab has always shown and has no `source` key. A row for an action made with a token has `"source": "token"` and names both the person and the token: `owner_id` and `owner_name` for the token's owner, `token_id` and `token_name` for the token (the name is the snapshot stored with the action, so a renamed or revoked token still reads as it was), beside `id`, `operation`, `target_kind`, `target_id`, `outcome`, `left`, `right`, `rationale` and `created_at`. `operation` is `review.keep`, `review.merge` (a queue merge), `merge.manual` (a merge of two entities named by id) or `merge.revert`; `outcome` is `applied`, `held` (the merge gate held the call) or `proposed` (the call may only propose). Five more keys are present only when they have a value, so the row of a single keep has none of them: `reason` (why a `held` or `proposed` call was not applied; the reason codes are listed in the next section), `batch_id` (the call was a member of that batch, or a revert made by the unit revert of that batch), `merge_id` (on an applied merge the merge it made, on a `merge.revert` row the merge it targets, on an approved merge proposal the merge the person's approval made), and `state` with `state_at`. A row with outcome `held` or `proposed` and no `state` is an open proposal. `state` is `approved`, `declined` or `superseded` once a person answered the proposal, and `undone` on an applied merge row whose merge has since been reverted, by anyone; `state_at` is the time of the answer or of the revert. On a base where no token has acted, the section holds the governor's rows only.
 
 **One item.** `review_item` takes the `section` an item is listed in and the item's `id`, and returns that item with the fields `review_list` returns for it. `section` may be any of the eleven queue sections or `decisions`; left out, it is `duplicates`.
 
 - `id` is the item's `id` from the list: a uuid. For `decisions` it is the event's `id`; for `agent` it is the row's `id`, whichever source the row has.
 - An Alignment item of kind `kind_word` has no `id`. Pass its `kind_word` as `id`; it is compared exactly as stored, with the same letter case and spacing.
-- A Duplicates item is the pair: `id`, `score`, `reason`, `stage`, `created_at`, `left` and `right` (each with `id`, `name`, `type_label`, `color`, `disambiguator`, `degree`, `top_facts`), and `proposal` (the governor's open proposal, or `null`).
+- A Duplicates item is the pair: `id`, `score`, `reason`, `stage`, `created_at`, `left` and `right` (each with `id`, `name`, `type_label`, `color`, `disambiguator`, `degree`, `top_facts`), and `proposal` (the governor's open proposal, or `null`). When a token agent's proposal is open on the pair, the item also has `agent_proposal`: `{"id", "operation", "reason", "owner_name", "token_name", "created_at"}`. That is an open queue-merge proposal for this review id or, when there is none, an open manual-merge proposal naming the pair's two entities in either direction. The key is absent when no such proposal is open; it is never `null`.
+- A Merges item has `id` (the merge id that `review_revert` takes), `source_name`, `target_name`, `merged_by_name`, `reason`, `created_at` and `reverted_at`. A merge that a token agent made also has `agent`: `{"action_id", "owner_name", "token_name"}`, where `action_id` is the ledger row of the merge; `merged_by_name` on such a row is the token's owner, so read `agent` to tell an agent's merge from a merge the owner made by hand. A merge made by a person approving a proposal is that person's merge and has no `agent`. A merge with an open revert proposal has `agent_proposal`, the same object as on a Duplicates item. Both keys are absent when they have no value.
 - An Axioms item (section `violations`) carries one more key, `proof`: the proof steps when the item's `kind` is `derived_contradiction`, and `null` for any other kind, which is not an error. These are the `steps` that `GET /kbs/{kb_id}/violations/{violation_id}/proof` returns. No other section gains a key.
 - An id that is not listed in that section of this base gets one answer, `not_found`, with no evidence in it: the same for an unknown id, an id of another base and an item that is no longer waiting there. `section: "overview"` lists no items, so any id with it is `not_found`.
 
-**Who may call.** The two read tools need a token that reaches the base and an owner who is at least a viewer. `review_keep` needs the `write` scope and an owner who is at least an editor; the scope is checked before the owner's role. A caller without that right does not see `review_keep` in `tools/list`. If it calls the tool anyway, the answer is a tool error with a code, not a JSON-RPC error. A token that is unknown, revoked or expired gets HTTP 401 from the endpoint. A token whose knowledge-base list excludes the base is turned away by the endpoint itself with HTTP 403 before any tool runs, and gets no tool list, item, count or evidence. The token API answers that same token with 404 (next section); the two answers differ, and neither carries anything from the base.
+**Who may call.** The two read tools need a token that reaches the base and an owner who is at least a viewer. The four write tools (`review_keep`, `review_merge`, `review_revert`, `review_batch`) need the `write` scope and an owner who is at least an editor; the scope is checked before the owner's role. A caller without that right does not see any of the four in `tools/list`. If it calls one anyway, the answer is a tool error with a code (`token_read_only` or `token_owner_below_editor`), not a JSON-RPC error. No tool answers a proposal, the token's own included: a call to any other name beginning `review_` is JSON-RPC error -32601, and the proposal stays open. A token that is unknown, revoked or expired gets HTTP 401 from the endpoint. A token whose knowledge-base list excludes the base is turned away by the endpoint itself with HTTP 403 before any tool runs, and gets no tool list, item, count or evidence. The token API answers that same token with 404 (next section); the two answers differ, and neither carries anything from the base.
 
-**A keep made by an agent is recorded under the token's owner and the token's name**: the audit row has the owner as its actor and carries the token's id and the name the token had at that moment, and the same keep is one row in the token-agent ledger (`action_id`). The keep is applied at once, changes no entity and no fact, and is not treated as a person's decision; the paragraph on keeps in the next section applies unchanged. Each call to any of the three tools also writes the `mcp.tool_called` row that every MCP tool call writes.
+**A keep made by an agent is recorded under the token's owner and the token's name**: the audit row has the owner as its actor and carries the token's id and the name the token had at that moment, and the same keep is one row in the token-agent ledger (`action_id`). The keep is applied at once, changes no entity and no fact, and is not treated as a person's decision; the paragraph on keeps in the next section applies unchanged. Merges, reverts and proposals made through the tools are recorded the same way, as the next section describes for the routes. Each call to any of the six tools, a refused one included, also writes the `mcp.tool_called` row that every MCP tool call writes.
 
 **Errors.** A refused or failed call is a normal `tools/call` result with `isError: true`. Its `structuredContent` is `{"code": "<code>", "message": "<text>"}`, where `code` and `message` are the `code` and `error` of the response the matching token route gives. `content` holds the same message as text.
 
 | Code | Tool | When |
 |---|---|---|
 | `unknown_queue` | `review_list`, `review_item` | `section` is not one of the thirteen keys above. `mappings`, a list queue the browser uses that is not a Review section, is refused the same way |
-| `not_found` | `review_item`, `review_keep` | The id is not listed in the named section of this base, or the section is `overview` (`review_item`); no pair with that id is in this base (`review_keep`). The routes answer a missing item with 404 and no code |
-| `token_read_only` | `review_keep` | The token has the `read` scope |
-| `token_owner_below_editor` | `review_keep` | The token's owner is below editor in the base |
-| `already_decided` | `review_keep` | The pair was decided before this call: a repeated call, a lost race, or a person decided it first |
+| `not_found` | `review_item` and the four write tools | The id is not listed in the named section of this base, or the section is `overview` (`review_item`); no pair with that id is in this base (`review_keep`, `review_merge` with `id`); an entity id is unknown or of another base (`review_merge` with `source` and `target`); the merge id is unknown or of another base, or no token action of this base carries the batch id (`review_revert`). The routes answer these with 404 and no code |
+| `token_read_only` | the four write tools | The token has the `read` scope |
+| `token_owner_below_editor` | the four write tools | The token's owner is below editor in the base |
+| `already_decided` | the four write tools | The pair was decided before this call, or one of the two entities was already merged into another (`review_keep`, `review_merge`); the merge was already reverted, by anyone (`review_revert`) |
+| `self_merge` | `review_merge` | `source` and `target` are the same entity |
+| `batch_size` | `review_batch` | `ids` is empty or has more than 50 entries. The whole batch is refused and nothing is changed |
+| `agent_rate_limited` | the four write tools | The token has finalized 200 writes on this base in the last hour. Nothing is changed |
 
-An error for which the route has no code has no `code` field: the governor is deciding the pair right now (try again after its proposal), or the server failed. A failed keep writes nothing, and the pair stays in the Duplicates section. A call with a missing or malformed argument (no `section` for `review_list`, a `limit` that is not an integer, a `section` that is not a string, an `id` for `review_keep` that is not a uuid) is not run; it returns `isError: true` with a text message and no `structuredContent`. For `review_item`, an `id` that is not a uuid is not malformed, because a kind word is not a uuid: outside the Alignment section it is answered `not_found`.
+In the result of `review_batch`, and of `review_revert` with `batch_id`, a refusal of one member is not a tool error: it is that member's `code` and `error` in `outcomes`, and the call itself succeeds. `already_proposed` is not an error either: it is the `code` key of a successful `held` or `proposed` answer that met an open proposal.
 
-The annotations on these tools (`readOnlyHint` on the two reads; `readOnlyHint`, `destructiveHint` and `idempotentHint`, all `false`, on `review_keep`) are hints for the client. The server does not read them, and it does not use elicitation: what a token may do is decided by the checks above.
+An error for which the route has no code has `structuredContent` `{"message": "<text>"}` with no `code` key: the governor is deciding the pair right now (nothing was decided; try again after its proposal), `review_batch` was called with an `action` other than `merge` or `keep` (the whole batch is refused), or the server failed. A refused call writes no ledger row and changes nothing. A call with a missing or malformed argument is not run; it returns `isError: true` with a text message and no `structuredContent`. That covers: no `section` for `review_list`, a `limit` that is not an integer, a `section` that is not a string, an id argument of a write tool that is not a uuid (one entry of `ids` is enough to stop the whole batch), `review_merge` called with both forms, half of the `source` and `target` form or neither form, and `review_revert` called with both `merge_id` and `batch_id` or with neither. For `review_item`, an `id` that is not a uuid is not malformed, because a kind word is not a uuid: outside the Alignment section it is answered `not_found`.
+
+The annotations on these tools (`readOnlyHint` on the two reads; `readOnlyHint`, `destructiveHint` and `idempotentHint`, all `false`, on `review_keep`; `readOnlyHint: false`, `destructiveHint: true` and `idempotentHint: false` on `review_merge`, `review_revert` and `review_batch`) are hints for the client. The server does not read them, and it does not use elicitation: what a token may do is decided by the checks above.
 
 ## Review over the token API
 
-A token can also call six of the Review tab's own HTTP routes: five reads and the keep. They are the routes the browser uses — same URLs, same handlers — so an agent reads what a signed-in editor sees. All are under `/api/v1` and take `Authorization: Bearer utp_pat_…`.
+A token can also call ten of the HTTP routes behind the Review tab and the entity panel's "Merge into…": five reads and five writes (the decision route for a keep or a merge, the manual merge, the merge revert, the batch, and the unit revert of a batch). Nine are the routes the browser uses — same URLs, same handlers — so an agent reads what a signed-in editor sees; the unit revert is new and has no button in the Review tab. On every write route a signed-in person's request runs the code it ran before and gets the answer it got before: the gate, the proposals, the limit and the breaker described below apply to token callers only. All are under `/api/v1` and take `Authorization: Bearer utp_pat_…`.
 
 | Route | What it does | Who may call it |
 |---|---|---|
@@ -271,29 +285,170 @@ A token can also call six of the Review tab's own HTTP routes: five reads and th
 | `GET /kbs/{kb_id}/violations/{violation_id}/proof` | The proof behind one Axioms item, as `{"steps"}`: the proof steps for a violation of kind `derived_contradiction`, and `"steps": null` for any other kind or an id that is not a violation of this base | The same |
 | `GET /kbs/{kb_id}/derived/{derived_id}/proof` | The proof of one derived fact, as `{"proof"}`: its premises in order, each with its evidence. `"proof": null` when the derivation is withdrawn or does not exist | The same |
 | `POST /kbs/{kb_id}/review/{review_id}` with `{"action": "keep", "rationale": "…"}` | Keeps one pending duplicate pair apart. `rationale` is optional (a string or `null`). Answers `{"ok": true, "outcome": "applied", "action_id": "<uuid>"}` | A `write` token that reaches the base, with an owner who is at least an editor |
+| `POST /kbs/{kb_id}/review/{review_id}` with `{"action": "merge", "rationale": "…"}` | The queue merge: merges one pending duplicate pair behind the merge gate, in the direction a person's queue merge takes for that pair. See [Merging](#merging) | The same |
+| `POST /kbs/{kb_id}/entities/merge` with `{"source": "<entity id>", "target": "<entity id>", "rationale": "…"}` | The manual merge: merges `source` into `target` behind the same gate | The same |
+| `POST /kbs/{kb_id}/merges/{merge_id}/revert` with no body or `{"rationale": "…"}` | Reverts one merge, or proposes its revert. See [Reverting a merge](#reverting-a-merge) | The same |
+| `POST /kbs/{kb_id}/review/batch` with `{"ids": ["<review id>", …], "action": "merge" or "keep", "rationale": "…"}` | Decides 1 to 50 pending duplicate pairs under one `batch_id`. See [Batches](#batches) | The same |
+| `POST /kbs/{kb_id}/review/agent-batches/{batch_id}/revert` with no body or `{"rationale": "…"}` | The unit revert: reverts every merge that batch made | The same, and also a signed-in editor of the base |
+
+`rationale` is optional on every write (a string or `null`).
 
 What `total` counts, why three sections are paged by it and not by `counts`, the page clamp, an offset past the end, the Alignment order and the two kinds of Agent History row are described under [Review over MCP](#review-over-mcp); they are properties of the list itself and are the same on this route. `total` is on every list response, for a signed-in session as well; it is the only key the list response gained. The token API has no route for a single item: an item's fields are the list's, and the fact evidence and entity reads a token already had, with the two proof routes above, give the rest.
 
 A keep made with a token is applied at once and is recorded three ways in one transaction: the pair is marked kept by the token's owner through that token, a row is written to the token-agent ledger (`action_id` is its id), and an audit row is written with the owner as actor plus the token's id and the name it had at that moment. If any of the three cannot be written, the keep fails and the pair stays in the queue. A token's keep is **not** treated as a person's decision: the governor does not read it as precedent, it starts no governor round, and a governor proposal open on the pair stays open for a person to answer.
 
+### Merging
+
+Both merge routes ask the server's merge gate before anything is written; there is no token merge that skips it. The queue merge names a pending pair by its review id and merges in the direction a person's queue merge takes for that pair: the entity with more live facts survives, and on a tie the one created earlier. The manual merge names two entities and merges `source` into `target`, as the caller says.
+
+**The gate passes.** The merge is applied at once and the answer is HTTP 200:
+
+```json
+{"ok": true, "outcome": "applied", "action_id": "<uuid>", "merge_id": "<uuid>"}
+```
+
+`merge_id` names the merge (it is the id the revert route takes) and `action_id` the ledger row. The merge, the pair's review row (marked merged by the token's owner through that token), the ledger row and the audit row are written in one transaction: if the ledger or audit row cannot be written, the merge is not made. The audit row is `review.merge` for a queue merge and `merge.manual` for a manual merge, with the owner as actor and the token's id, the token's name at that moment, the `action_id` and the `merge_id` in its detail. A manual merge that applies also closes the two entities' own pending duplicate pair, if there is one, as merged. Some steps run after the merge is committed (re-checking signatures, reconciling timelines, refreshing disambiguators). If one of them fails, the merge still exists, so the answer is still 200 and `applied`, with one more key, `"follow_up_error": "<text>"`. The key is absent when nothing failed. Do not read it as a failed merge.
+
+**The gate holds, or the token may only propose.** Nothing in the graph changes: no fact, entity or review row is touched, and retrieval and reasoning see what they saw before. The call is stored as a proposal and the answer is still HTTP 200:
+
+```json
+{"ok": true, "outcome": "held", "action_id": "<uuid>", "reason": "kept_by_person", "explanation": "Not applied: a person kept these two apart. Nothing was changed; the call waits as a proposal that a signed-in editor answers in the Review tab."}
+```
+
+`outcome` is `held` when the gate held the merge and `proposed` when the call may only propose. `reason` is a stable code; `explanation` is a sentence for the reader and may be reworded. `action_id` is the proposal, a ledger row holding the full request; an `agent.proposal` audit row is written with it.
+
+| `reason` | `outcome` | When |
+|---|---|---|
+| `identity` | `held` | A source that declares its names to be identifiers stands behind a name of one of the two entities |
+| `contradiction` | `held` | The merge would put two values of a one-value relation on one entity, and they cannot be ordered in time |
+| `derived` | `held` | Live derived facts rest on one of the two entities |
+| `answered` | `held` | One of the two entities was named in a chat answer |
+| `kept_by_person` | `held` | The latest decided duplicate pair of these two entities, in either order, was kept apart by a person and not through a token |
+| `reverted_merge` | `held` | A merge between these two entities, in either direction, has been reverted |
+| `merge_by_person` | `proposed` | Revert only: a person made the merge, including a merge made by approving a proposal |
+| `merge_by_governor` | `proposed` | Revert only: the merge has no person behind it; the governor or the automatic adjudicator made it |
+| `breaker` | `proposed` | The token's breaker is tripped (see [The limit and the breaker](#the-limit-and-the-breaker)); merges and reverts |
+
+The first six are the gate's holds, checked in the order of the table; the first that applies is the reason. `kept_by_person` and `reverted_merge` are looked up by the two entity ids, for the queue merge and the manual merge alike. When the breaker is tripped the reason is `breaker` whatever the gate would have said.
+
+A token's merge, like its keep, is **not** treated as a person's decision: the governor does not read a live token merge as precedent, it starts no governor round, and a governor proposal open on the pair is not answered by it.
+
+### Proposals
+
+There is one open proposal per base, operation and target. The target of a queue merge is its review id; the target of a manual merge is the unordered pair of entity ids, so `A` into `B` and `B` into `A` are the same proposal and it keeps the direction of the first call; the target of a revert is the merge id. A repeated call, or a second call arriving at the same moment, writes nothing and returns the open proposal: the same 200 answer with the existing `action_id` and one more key, `"code": "already_proposed"`.
+
+An open proposal is read as a row of Agent History (outcome `held` or `proposed`, no `state`) and as `agent_proposal` on the Duplicates item or Merges item it targets; both are described under [Review over MCP](#review-over-mcp).
+
+**Only a signed-in person answers a proposal.** The two answer routes take a browser session and nothing else. Every personal token gets 401 from them, the token that made the proposal included, and no MCP tool answers one.
+
+| Route | Body | Answer |
+|---|---|---|
+| `POST /kbs/{kb_id}/review/agent-proposals/{proposal_id}` | `{"action": "approve"}` or `{"action": "decline"}` | `{"ok": true, "state": "approved"}`, with `state` one of `approved`, `declined`, `superseded`, plus `"merge_id"` when a merge was made or reverted |
+| `POST /kbs/{kb_id}/review/agent-proposals` | `{"ids": ["<proposal id>", …], "action": "approve" or "decline"}`, 1 to 500 ids | `{"answered": n, "outcomes": [{"id", "state", "merge_id", "code", "error"}]}`, one outcome per id in request order, all five keys always present |
+
+- The caller must be an editor of the base; a signed-in person below editor gets 403.
+- **Approve** runs the person's own merge or revert, with that person as actor and no gate, exactly as if they had done it in the Review tab; the audit row of that merge or revert carries `agent_proposal`, the proposal's id. It counts as that person's decision everywhere, so the governor reads it as human precedent and the governance fuse counts an approved revert as that person's revert.
+- Approving a proposal whose target can no longer be decided closes it as `superseded` and applies nothing: the pair was decided meanwhile, one of the entities was merged into another, the pair now names other entities, or the merge was already reverted.
+- **Decline** closes the proposal and changes nothing else.
+- A proposal that was already answered gets 409 `already_decided`; an id that is unknown, of another base or not a proposal gets 404. In the bulk answer these are that item's `code` (`already_decided`, `not_found`) with `state` null, and the other items are still answered.
+- An `action` other than `approve` or `decline` is 422 `unknown_action`; an empty list or more than 500 ids is 422 `batch_size`. Both refuse the whole request and answer nothing.
+- While a running governor round holds the pair, approving the queue-merge proposal on it answers 409 with no code (in the bulk answer: `code` null with the message in `error`). Nothing was decided and the proposal stays open; answer it again later.
+- Approving a manual-merge proposal leaves the two entities' own pending duplicate pair open, as a person's manual merge does. (A token's own applied manual merge closes it.)
+
+Known limit: an approval is not one transaction with the merge or revert it runs. If the server stops between the two, the merge exists as the person's merge and the proposal is still open; answering it later closes it `superseded` with no `merge_id`.
+
+### Reverting a merge
+
+`POST /kbs/{kb_id}/merges/{merge_id}/revert` takes no body, or `{"rationale": "…"}`.
+
+- **A merge a token agent made** on this base, through this token or another one, and that has not been reverted, is reverted at once: `{"ok": true, "outcome": "applied", "action_id": "<uuid>", "merge_id": "<uuid>"}`, where `merge_id` is the merge that was reverted. A `merge.revert` ledger row and audit row are written under the token's owner and the token's name. `follow_up_error` can appear here as it can on a merge.
+- **A merge a person or the governor made** is not reverted by a token. Nothing changes and the call waits as a proposal: `{"ok": true, "outcome": "proposed", "action_id": "<uuid>", "reason": "merge_by_person", "explanation": "…"}`, with `reason` one of `merge_by_person`, `merge_by_governor` and `breaker`. A repeat carries `"code": "already_proposed"`. A token therefore cannot move the governance fuse. When a person approves the proposal, the revert runs as that person's and the fuse counts it as it counts any revert by a person.
+- A merge that was already reverted, by anyone, is 409 `already_decided`. A merge id that is unknown or of another base is 404.
+- A body that is neither empty nor a JSON object (with `rationale`, if present, a string or `null`) is 422 `invalid_body`, after the scope and role checks.
+
+**A revert is not a full undo.** It restores graph state only: the facts, the entities and the evidence go back to where they were before the merge. It does not recall derivations, violations, exports or answers drawn while the merge was live: a fact derived from the merged entity, a violation recorded on it, a triple already exported and an answer already given stay as they are. Two differences from the state before the merge also remain in the graph:
+
+- **The untyped target.** A target that had no type before the merge (an untyped entity) keeps the type it took from the source.
+- **Copied statement links.** When both entities held the same typed fact, the merge kept one of them and copied the duplicate's statement links onto the surviving fact. A revert does not remove those statement links; the surviving fact keeps them.
+
+Review rows are not restored either: a pair the merge closed stays closed. After a revert the merge's own ledger row reads `state: "undone"`, whoever reverted it. A signed-in person reverts an agent's merge from the Merges section as before, on this same route.
+
+Known limits: a token revert is not one transaction with its ledger and audit rows. The server writes them right after the revert and retries; if they still cannot be written the call fails although the merge is reverted, the merge's ledger row reads `undone`, and a second revert answers `already_decided`. A person's revert and a token's revert of one merge sent at the same moment can both run the revert; nothing on the token path prevents it, as nothing prevents two people's reverts from doing so.
+
+### Batches
+
+`POST /kbs/{kb_id}/review/batch` from a token takes 1 to 50 review ids and one action, `merge` or `keep`. (A signed-in person's batch on the same route is unchanged: up to 500 ids, no gate, and its old answer `{"decided", "outcomes": [{"id", "error"}]}`.) The server issues one `batch_id` and passes each id, in request order, through the single-pair path above. A batch member gets nothing a single call would not: the gate is asked for every merge, and the limit and the breaker apply per member. The answer is HTTP 200:
+
+```json
+{"batch_id": "<uuid>", "decided": 1, "outcomes": [
+  {"id": "<review id>", "outcome": "applied", "action_id": "<uuid>", "merge_id": "<uuid>", "reason": null, "code": null, "error": null},
+  {"id": "<review id>", "outcome": "held", "action_id": "<uuid>", "merge_id": null, "reason": "derived", "code": null, "error": null},
+  {"id": "<review id>", "outcome": null, "action_id": null, "merge_id": null, "reason": null, "code": "not_found", "error": "…"}
+]}
+```
+
+- One outcome per id, in request order. All seven keys are always present and `null` when they do not apply. `outcome` is `applied`, `held` or `proposed`; it is `null` when that pair was refused, and then `code` and `error` say why: `not_found` for an unknown id, `already_decided`, `agent_rate_limited` for each pair past the limit, or `code` null with a message when the governor is deciding that pair. `code` is `already_proposed` on a `held` or `proposed` member that met an open proposal. An applied member can also carry `follow_up_error`.
+- `decided` counts the `applied` members. One refused pair does not stop the others, and the batch is not atomic.
+- An id given twice gets, the second time, the answer its state then gives: `already_decided` after an applied first time, the same proposal with `already_proposed` after a held one.
+- Refused as a whole, with nothing changed and no ledger row: an empty list or more than 50 ids (422 `batch_size`), and an action other than `merge` or `keep` (422 with no code). The scope and role checks come first, so a `read` token sending 51 ids gets `token_read_only`.
+- Every ledger row and audit row of the batch carries the `batch_id`, in Agent History and in Activity.
+- Revoking the token does not stop a batch that is already running; the cap of 50 bounds what one call can do.
+
+**The unit revert.** `POST /kbs/{kb_id}/review/agent-batches/{batch_id}/revert` reverts every merge the batch made, best effort. A `write` token of an editor and a signed-in editor may both call it; there is no button for it in the Review tab. Answer, HTTP 200:
+
+```json
+{"batch_id": "<uuid>", "reverted": 1, "outcomes": [
+  {"merge_id": "<uuid>", "outcome": "applied", "code": null, "error": null},
+  {"merge_id": "<uuid>", "outcome": null, "code": "already_decided", "error": "…"}
+]}
+```
+
+- One outcome per merge the batch applied, in the order the merges were made; `reverted` counts the `applied` ones. A merge that was already reverted is that item's `already_decided`, so a second unit revert changes nothing.
+- Pairs the batch kept apart and members that became proposals are left as they are. A batch that made no merge (all keeps, or all held) answers 200 with `"reverted": 0` and `"outcomes": []`. 404 is only for a batch id that no token action of this base carries.
+- Called with a token, each merge goes through the token revert above, with its limit and breaker: an item can come back `proposed` (the breaker is tripped) or with `code` `agent_rate_limited`, and the revert rows carry the `batch_id`. Called by a signed-in editor, each merge goes through the person's revert, recorded as that person's.
+- A token's body follows the rule of the revert route (empty or `{"rationale": "…"}`, otherwise 422 `invalid_body`).
+
+### The limit and the breaker
+
+Both are checked for every token write that would finalize, in the one place all entries share, so they hold alike for the decision route, the manual merge, the revert, each batch member and the MCP tools. Neither is a per-base setting.
+
+**The limit.** A token finalizes at most 200 writes per base in a rolling hour. Keeps, queue merges, manual merges and reverts count, each when its ledger row is `applied`; proposals and refused calls do not. The 200th write applies; the next call answers **HTTP 429 with code `agent_rate_limited`**, changes nothing and writes no ledger row, until earlier writes are more than an hour old. Two things to know: the limit is checked before the gate, so a call past the limit answers 429 even if it would only have become a proposal; and the count is read before the write, not in its transaction, so calls of one token that are in flight at the same moment can overshoot the limit by the number in flight.
+
+**The breaker.** When people have reverted two merges made by one token on one base within seven days, that token's merges and reverts on that base stop being applied: each lands as a proposal with reason `breaker`, batch merge members and unit revert items included. Its keeps still finalize. The breaker closes by itself when fewer than two such reverts lie within the last seven days, counted from the time of each revert.
+
+- Counted: a revert by a person of a merge this token made — from the Merges section, by approving a revert proposal, or by a signed-in unit revert.
+- Not counted: a revert made by a token (this one or another), and a revert of a merge another token made. One revert by a person does not trip it.
+- A person's revert is recognised from the ledger (the merge is reverted and no applied token revert names it) and also from the person's own `merge.revert` audit row, so it still counts when a token reverted the same merge at the same moment.
+
+The breaker uses the numbers of the governance fuse (two reverts, seven days) but is separate from it: it is per token and base, and a token's own reverts never move the fuse.
+
+### Refusal codes
+
 Refusals carry a stable `code` beside the `error` message where one is listed:
 
 | Status | Code | When |
 |---|---|---|
-| 401 | none | The token is unknown, revoked or expired; or the route is one of the Review routes that take a signed-in session only (see below) |
-| 404 | none | On the five reads: the token's knowledge-base list excludes the base, or its owner cannot open it. The answer is the same as for a base that does not exist, and carries no item, count, total, summary or proof. (The MCP endpoint answers a token whose list excludes the base with HTTP 403 instead.) On the keep: no pair with that id in this base |
+| 401 | none | The token is unknown, revoked or expired; or the route is one of the Review routes that take a signed-in session only (see below), the two proposal answer routes included |
+| 404 | none | On the five reads: the token's knowledge-base list excludes the base, or its owner cannot open it. The answer is the same as for a base that does not exist, and carries no item, count, total, summary or proof. (The MCP endpoint answers a token whose list excludes the base with HTTP 403 instead.) On a write: no pair with that id in this base (keep, queue merge); an entity id that is unknown or of another base (manual merge); a merge id that is unknown or of another base (revert); a batch id that no token action of this base carries (unit revert) |
 | 422 | `unknown_queue` | A token asks the list for `mappings` or for any name that is not one of the eleven queue keys. No items are returned |
 | 422 | `unknown_type_filter` | `types` on the Duplicates section is not `any`, `same` or `conflict` |
-| 403 | `token_read_only` | A `read` token calls the keep route |
-| 403 | `token_kb_out_of_scope` | A `write` token whose knowledge-base list excludes the base calls the keep route |
+| 422 | `self_merge` | The manual merge names one entity as both `source` and `target` |
+| 422 | `batch_size` | A token batch has no ids or more than 50 (a signed-in person's batch: more than 500). The whole batch is refused |
+| 422 | none | A batch names an action other than `merge` or `keep`. The whole batch is refused |
+| 422 | `invalid_body` | A token sends the revert or the unit revert a body that is neither empty nor a JSON object such as `{"rationale": "why"}` |
+| 403 | `token_read_only` | A `read` token calls any of the five write routes |
+| 403 | `token_kb_out_of_scope` | A `write` token whose knowledge-base list excludes the base calls any of the five write routes |
 | 403 | `token_owner_below_editor` | The token's owner is below editor in the base |
-| 403 | `token_operation_not_open` | A `write` token of an editor sends any action other than `keep` (for example `merge`) to the decision route. Nothing is written |
-| 409 | `already_decided` | The pair was decided before this call: a repeated call, a lost race, or a person decided it first |
-| 409 | none | The governor is deciding this pair right now; nothing was decided, so try again after its proposal |
+| 403 | `token_operation_not_open` | A `write` token of an editor sends the decision route an action other than `keep` or `merge`. Nothing is written |
+| 409 | `already_decided` | The item was decided before this call: a repeated call, a lost race, or a person decided it first. For a keep or a queue merge, the pair is no longer pending; for either merge, one of the entities was already merged into another; for a revert, the merge was already reverted |
+| 409 | none | The governor is deciding this pair right now (keep, queue merge, or a manual merge of two entities whose own pending pair it holds); nothing was decided, so try again after its proposal |
+| 429 | `agent_rate_limited` | The token has finalized 200 writes on this base in the last hour. Nothing is changed and no ledger row is written |
 
-Scope is checked before the owner's role, so a `read` token whose owner is a viewer gets `token_read_only`. A refusal changes nothing: the pair stays as it was and no ledger or audit row is written.
+`already_proposed` is not a refusal: it is the `code` key of a 200 answer whose call met an open proposal. `unknown_action` and the 500-id `batch_size` of the proposal answer routes are listed under [Proposals](#proposals); a token never sees them, because those routes answer it with 401.
 
-**Not open to tokens.** A token reads every Review section and decides nothing in them beyond the keep. Merge, manual merge, merge revert and batch decisions are not open: `merge` on the decision route answers `token_operation_not_open`, and the batch (`POST /kbs/{kb_id}/review/batch`, whatever its action — a batch of keeps included), revert (`POST /kbs/{kb_id}/merges/{merge_id}/revert`) and manual-merge (`POST /kbs/{kb_id}/entities/merge`) routes take a session only and answer a token with 401 until a later change opens them. Every other route that decides a Review item — confirming or rejecting facts, resolving a conflict, answering the governor, deciding an errata action, a violation or a defect, the nod on what `remember` recorded — is also session only. Reading "Awaiting your nod" gives a token no way to nod: the list shows what waits, and the nod route answers a token with 401. One Review write was open to `write` tokens before the Review tools existed and is unchanged: deciding an Alignment kind word (`POST /kbs/{kb_id}/review/alignment/kind-words/{kind_word}`), for a backend that sets up a base. A signed-in person's requests and responses on all of these routes are unchanged, apart from the added `total` on list responses.
+The checks run in a fixed order: the token's scope, then its knowledge-base list, then the owner's role, and only then the request itself (batch size, batch action, the revert body, an action that is not open) and the limit. So a `read` token whose owner is a viewer gets `token_read_only`, whatever it sent. A refusal changes nothing: the item stays as it was and no ledger or audit row is written.
+
+**What stays closed to tokens.** A token reads every Review section, and on duplicate pairs and merges it has the writes described above: keep, merge behind the gate, revert and batch. Nothing else in Review is decided by a token. Answering a proposal — approving or declining it at the `agent-proposals` routes — is session only, for every token and for the proposal's own token. Every other route that decides a Review item — confirming, rejecting or closing a fact, resolving a conflict, answering the governor's own decisions, deciding an errata action, an ontology proposal, a mapping, a violation or a defect, an Alignment phrase or rule, running the consistency check, the nod on what `remember` recorded — is also session only and answers a token with 401. On the decision route itself, an action other than `keep` or `merge` answers `token_operation_not_open`. Reading "Awaiting your nod" gives a token no way to nod: the list shows what waits, and the nod route answers a token with 401. One Review write was open to `write` tokens before the Review tools existed and is unchanged: deciding an Alignment kind word (`POST /kbs/{kb_id}/review/alignment/kind-words/{kind_word}`), for a backend that sets up a base. A signed-in person's requests and responses on all of these routes are unchanged, apart from the added `total` on list responses.
 
 ## Try it from a shell
 
