@@ -40,6 +40,11 @@ Review depth: full
 Goal: ADR 0076 and the API and MCP documentation match every opened route and tool, and the four ruled documentation fixes are applied.
 Review depth: full
 
+## Wave 6 — patch: Activity names the proposing token on a person's answer
+
+Goal: Repair final-review finding P001 (SC7): in Activity, a person's approval, decline and supersession of a token proposal name the proposing token as "owner via token name" while the person stays the actor, read from the proposal's ledger row with no migration and no write path changed.
+Review depth: full
+
 ## Surface contract
 
 ### token-authenticated HTTP API — T002
@@ -85,6 +90,7 @@ Walkthrough:
 8. Select several proposals of different sections and approve them in one bulk answer: each row shows its own outcome.
 9. In Agent History find the rows of a token's mapping decision, consistency check and kind-word decision: each reads owner via token name.
 10. Sign in as an Admin and open Activity: the proposal, its approval or decline, the mapping decision, the run and the kind-word decision each read owner via token name with a worded label.
+11. (Patch wave 6, T011.) In Activity, the row of a person's decline, the row of a supersession and each row of a person's approval of a token proposal name the person as actor and, after the action, the proposer as owner via token name (e.g. "Mira Okafor declined an agent proposal · proposed by Mira Okafor via graph-curator"); a person's own decision with no proposal reads as before.
 
 ## Intent coverage
 
@@ -111,6 +117,7 @@ Walkthrough:
 | SC7 | T009 | AC7 |
 | SC8 | T010 | AC1 |
 | SC9 | T009 | AC8 |
+| SC7 | T011 | AC1 |
 
 ## Held-out checks
 
@@ -151,3 +158,4 @@ Walkthrough:
 - T008 follows T007 only because of the shared files; it needs T002's propose path and answer dispatch and T003's item attachment for the nod card.
 - T009 needs every operation landed: its table walks all nineteen rows.
 - T010 needs the shipped code of T001 to T009 as the source for the documents and carries every interface contract so the documents can be checked against them.
+- T011 (patch wave 6, finding P001) shares files with three landed tasks and needs their landed effect: T003's Activity row in `web/src/pages/KbSettings.tsx`, its `viaToken` helper and the `KbActivity.test.ts` assertions it changes; T009's E20 test `every_action_reads_owner_via_token_name_in_agent_history_and_activity` in `review_token_table_tests.rs`, which it strengthens under the same name; T010's ADR 0076, to which it adds one dated revision. A reviewer sees those files at their landed content in T011's base.

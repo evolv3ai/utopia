@@ -2,7 +2,7 @@
 pipeline: gsd-path/v2
 project: utopia
 milestone: remaining-review-writes
-phase: ship
+phase: build
                     # inspect only for brownfield; greenfield starts at define
                     # roadmap only in program flow (CHARTER.md exists)
 status: active
@@ -105,3 +105,7 @@ it on completion. If this file and the artifacts disagree, the artifacts win
 - 2026-11-20 — build — T004 brief repaired: conflicts.rs added to files (driver D138); task returned to pending
 - 2026-11-20 — build — T006 brief repaired: ontology_agent.rs added to files (driver D139); task returned to pending
 - 2026-11-20 — ship — build done; final review pending
+- 2026-11-20 — ship — final review blocked: SC7 not-met (Activity rows for a person's answer to a token proposal do not name the token); browser walkthrough run in local headless Chrome via agent-browser because the connected Chrome's proxy refuses this host; FINAL.md collected byte-identical through a fresh sidecar after the guard refused deleting a stray checker copy
+- 2026-11-20 — plan — patch plan reopened
+- 2026-11-20 — plan — patch plan approved
+- 2026-11-20 — build — build started
