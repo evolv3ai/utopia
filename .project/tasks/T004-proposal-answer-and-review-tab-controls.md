@@ -9,6 +9,8 @@ base: null
 worktree: null
 task_branch: null
 files:
+  - crates/utopia-server/src/adjudication.rs
+  - crates/utopia-store/tests/store/a_decision_records_why.rs
   - crates/utopia-server/src/api/review_routes.rs
   - crates/utopia-server/src/api/mod.rs
   - crates/utopia-store/src/token_agent_actions.rs
@@ -42,6 +44,7 @@ After wave 2 a held or propose-only token call waits as an open row of `token_ag
 - N8 (judgment prohibition, SC7). Must not: show a merge a token agent made as the owner's own merge in the Merges section. Detail: the reviewer checks that the Merges row for a token-made merge reads "owner via token name". Here: `MergeActor` and the `agent` key of the merges list; a merge a person made by approving a proposal is the person's merge and reads as today.
 - N4 and N5 are criterion prohibitions of SC3 and SC4: an approved proposal is recorded as the person's act with `detail.agent_proposal`, and no token approves or declines a proposal, its own included.
 - Conventions (bind this task): Chinese explanatory comments; sentence-named tests; English user-facing strings, each refusal with a stable code; one behaviour-sentence commit subject; DCO sign-off is deferred to the upstream submission; nothing is sent to `deeplethe/utopia` or a deployed instance. Tests seed through store functions or direct inserts, never through model jobs.
+- File-scope repair (Delegated, driver D119): `ReviewItem` is built with a full struct literal in two test helpers, `crates/utopia-server/src/adjudication.rs` (`mod tests`, `fn item`) and `crates/utopia-store/tests/store/a_decision_records_why.rs` (`fn item`). Both are in `files` for one purpose only: add the new field as `None` to each literal. No assertion and no other line in either file changes.
 
 ## Interface contract
 
@@ -86,3 +89,5 @@ Heavy: yes
 ## Log
 
 - 2026-11-19 — created by planner
+- 2026-11-19 — build_T004 preflight at `faf41df`, no product path changed. NEEDS-ORCHESTRATOR: the Approach says "add the optional `agent_proposal` to `ReviewItem`" (`crates/utopia-core/src/models.rs:1065`), but two test helpers outside `files` build that struct with a full literal and stop compiling when it gains a field — `crates/utopia-server/src/adjudication.rs:615` (`mod tests`, `fn item`, line 605; breaks the whole `utopia-server` test binary, so this task's Verify and T003's) and `crates/utopia-store/tests/store/a_decision_records_why.rs:102` (`fn item`, line 92; breaks the `utopia-store` integration test binary, so T001's Verify and the whole-store run). Rust has no way to add a field without touching those literals. May T004 edit these two files (one added line each, `agent_proposal: None`), or must `ReviewItem` stay as it is? — readings: (a) add both paths to T004 `files`; the change is the one line per literal and no assertion changes; (b) leave `ReviewItem` unchanged and attach `agent_proposal` to the serialized Duplicates items in `review_routes::queue_page` (in `files`; session, token and MCP list reads pass through it) — then the single-card read `review_item` / `resolution::pending_review` (called from `review_ops.rs`, not in `files`) carries no `agent_proposal`, and the Approach sentence "filled in `assemble_reviews`" is not met; a wrapper return type for `list_reviews` is not an option either, its callers in `extraction.rs`, `review_totals_tests.rs` and three store tests read `ReviewItem` fields. Other preflight results, for the redispatch: every path in Context, Approach and Verify exists or is declared; SC3, SC4, SC6, SC7 exist in INTENT.md; the two T004 Interface paragraphs appear verbatim in T007 (the only sibling that carries them); `MergeLogView` has no literal outside `resolution.rs`, so `agent` and `agent_proposal` fit there with `#[sqlx(skip)]`; the `undone` read is already computed in `token_agent_actions::COLS` and `history_row` by T001, so nothing is to add for it; the UI must use the `../ui` `Button` and `Checkbox` (the style guard that `pnpm build` runs rejects native controls). Verify not run. Guard refusals: none.
+- 2026-11-19 — orchestrator: coder returned `blocked` at preflight (see NEEDS-ORCHESTRATOR above). Ruling Delegated (driver D119): option (a); the two paths are added to `files` and the Approach says what may change in them. Task returned to `pending` and dispatched again.

@@ -77,3 +77,4 @@ it on completion. If this file and the artifacts disagree, the artifacts win
 - 2026-11-19 — plan — planning started
 - 2026-11-19 — plan — plan approved
 - 2026-11-19 — build — build started
+- 2026-11-19 — build — T004 brief repaired: two test helpers that build ReviewItem added to its files (driver D119)
