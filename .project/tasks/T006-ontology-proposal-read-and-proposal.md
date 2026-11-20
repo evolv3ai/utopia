@@ -3,9 +3,9 @@ id: T006
 title: Let a token read the stored ontology proposals and propose rejecting or adopting one
 wave: 2
 deps: [T005]
-status: pending
-agent: null
-base: null
+status: done
+agent: build_T006
+base: f9e8cba2f1237e7d9cb623c8960d449e46ac4bfd
 worktree: null
 task_branch: null
 files:
@@ -81,3 +81,75 @@ Heavy: yes
 - 2026-11-20 — coder build_T006: carried item 2. Approved rejection: the row `ontology_proposal.rejected` (person as actor, `agent_proposal` in the detail) is new and is written by the approve arm in `crates/utopia-server/src/api/review_routes.rs`, which is in `files`; the person's own reject route stays without an audit row. Approved adoption: NOT reachable from `files`. The only audit row of an adoption is `ontology_proposal.adopted`, written inside `ontology_agent::adopt` (`crates/utopia-server/src/ontology_agent.rs` lines 973 to 982) with the detail built by `adopt_on` (lines 1181 to 1182: `key`, `label`, `proposed_by`, `serves`); `adopt` takes no proposal id, so the approve arm cannot make that row carry `agent_proposal` (E7, N2, and the contract's "the arm [calls] with the id, which only adds `agent_proposal` to the audit detail").
 - 2026-11-20 — coder build_T006: blocked. NEEDS-ORCHESTRATOR: add `crates/utopia-server/src/ontology_agent.rs` to `files` — readings: (a, minimal, recommended) `ontology_agent::adopt` gains a last parameter `proposal: Option<Uuid>`; after `adopt_on` returns and before `audit::record`, `if let Some(p) = proposal { detail["agent_proposal"] = json!(p); }` (the `detail` binding becomes `mut`); its one caller `question_routes::adopt` (in `files`) passes `None`, so a person's own adoption row keeps its four keys; no test calls `adopt` directly (`ontology_agent_tests.rs` goes through the route). (b) keep `ontology_agent.rs` closed and have the approve arm write a second audit row naming the proposal after `adopt` returns — two rows for one adoption, and it needs an action name that has no label in `en.ts`/`zh.ts`. (c) accept that an approved adoption's audit row does not name the proposal — contradicts E7 and N2. No other out-of-`files` need was found: no existing test asserts a token refusal on the three ontology proposal routes (only `ontology_agent_tests.rs` calls them, with a session), and the i18n labels for `ontology.proposal`, its `adopt`/`reject` actions and `ontology_proposal.rejected` are present.
 - 2026-11-20 — orchestrator: brief repair (Delegated, driver D139): crates/utopia-server/src/ontology_agent.rs added to files. adopt may gain a last parameter proposal: Option<Uuid>, written as agent_proposal in the existing ontology_proposal.adopted audit detail; question_routes::adopt passes None for a signed-in person, whose audit row stays byte for byte. Task returned to pending and re-activated.
+- 2026-11-20 — coder build_T006: built at base `f9e8cba` after the orchestrator's repair. `review_ops.rs`: `ontology_proposals` (token read: `authorize_read`, then the body the session gets), `open_ontology_proposals` (open token proposals by section and key), `propose_ontology` (order: `authorize_write`; `unknown_action`; for reject the person's `status` check, `adoption_endpoint` / `bad_status`; `ontology_proposal_id`, none is 404; `target_open`; for adopt `unknown_class` on a named class that does not exist; `land_proposal` with row `OntologyProposal`, operation `ontology.proposal`, target kind `ontology_proposal`, key `section:key`). `ontology_routes.rs`: `stored_proposals` and `decide_proposal` take `SessionOrToken`, the token branch returns first; the session statements moved to `open_proposals_body` (adds `agent_proposals` only on a row with an open token proposal), `rejection_status` and `proposal_rejection` (with a proposal id: reason not passed, row re-read, one audit row `ontology_proposal.rejected` with `{section, key, agent_proposal}`; without: no audit row, ok for a missing proposal, as before). `question_routes.rs`: `adopt` takes `SessionOrToken`, token branch to `propose_ontology`; `adopt_request` builds the stored body. `review_routes.rs`: `Decision::OntologyReject` / `OntologyAdopt`, `decision_of` arm, two `approve_decision` arms (adoption `NotFound` closes `superseded`, any other error is returned and the proposal stays open). `review_tools.rs`: `review_ontology_list` (read, listed for every token that reaches the base, `{"readOnlyHint":true}`) and `review_ontology` (propose-only annotations). `review_mcp_reads_tests.rs`: the two names added to the expected lists and `review_ontology` to the `writes` expression, nothing else. `mod.rs`: `review_token_ontology_tests` declared. Web: `AgentProposalFields.agent_proposals` in `api.ts`; `Ontology.tsx` renders `AgentProposalChips` under each stored proposal row of the four sections (nothing is rendered for a row without one). New test file `review_token_ontology_tests.rs` with the seven tests the Verify names.
+- 2026-11-20 — coder build_T006: deviations and readings. (1) DEVIATION from the orchestrator's ruling: `ontology_agent::adopt` keeps its six-parameter signature. My earlier Log line "no test calls `adopt` directly" was wrong: `crates/utopia-server/src/ontology_agent_tests.rs` (not in `files`) calls `adopt(` with six arguments at four sites (multi-line calls my search missed), and a seventh parameter breaks its compilation. Instead, inside `ontology_agent.rs`: private `adopt_as(…, proposal: Option<Uuid>)` holds the unchanged body and adds `agent_proposal` to the existing `ontology_proposal.adopted` detail when given; `adopt` calls it with `None`; new `pub async fn adopt_for_proposal(…, actor, proposal: Uuid)` calls it with the id and is what the approve arm runs. No second audit row. `question_routes::adopt`'s session call is textually unchanged. Proof that a person's row is unchanged: `approving_an_ontology_adoption_adopts_it_as_the_person` asserts the session row's detail equals exactly `{key, label, proposed_by, serves}`, and the existing `ontology_agent_tests` pass unedited. If the literal seventh parameter is wanted, `ontology_agent_tests.rs` must join `files` (four `None` arguments). (2) The `reason` of a token's rejection is stored in the proposal (`request.reason` and `why`) and is NOT passed to the person's rejection on approval (contract: the token's rationale is never the person's reason); the approved row has `reason` null, as a person's rejection without a reason. (3) `review_ontology` has no `status` argument: `action` picks the route and the tool writes `status: "rejected"` into the reject body, so the stored request equals the REST body. A `reason` given with `adopt` is not read. (4) At propose time only `unknown_class` is checked for an adoption (read-only, same code and message as `lock_classes`); the other adoption refusals (`bad_property_shape`, key conflicts, `alignment_busy`) need the transaction and surface at approval with the person's code, leaving the proposal open. (5) An open proposal not made by the ontology agent is 404 for a token on both routes (carried item 1). (6) Approval of a rejection re-reads the row after the person's UPDATE: rejected by this person means `approved` plus the audit row, otherwise `superseded` and no audit row.
+- 2026-11-20 — coder build_T006: commands and results (Git Bash, database `m004_t006_dev` on 127.0.0.1:1517, `UTOPIA_TEST_REQUIRE_DB=1`, `CARGO_TARGET_DIR=C:/Users/Owner/.gsd-path/cargo-target/coder-m004`). `cargo run -p utopia-store --example migrate`: ok. Verify first filter set (the eight named tests): `test result: ok. 8 passed; 0 failed; 943 filtered out`, each of the eight names printed `... ok`, so every filter matches a mounted test. Verify second filter set (the 22 module filters): `ok. 125 passed; 0 failed; 826 filtered out`; `review_token_mapping_tests::` alone matches 1 test. Whole crate `cargo test -p utopia-server`: first run `948 passed; 1 failed; 2 ignored` — the failure was `api::chat::chat_empty_reply_tests::gathering_errors_cannot_spoof_the_private_handoff`, a chat test this task does not touch; run alone three times it passed each time, and the second whole-crate run was `ok. 949 passed; 0 failed; 2 ignored`. `cargo fmt --all --check`: exit 0. `cargo clippy --workspace --all-targets -- -D warnings`: exit 0. Web: `pnpm install --frozen-lockfile` ok; `pnpm test`: `417 passed (417)`; `pnpm build` (style guard, `tsc --noEmit`, vite): built.
+- 2026-11-20 — coder build_T006: coverage limits. The Ontology page change has no automated render test: `files` holds no web test file and `MissesPanel` loads its rows in an effect, so the chips on a stored proposal row are covered by type-check and build only (the `AgentProposalChips` component itself has T003's static-render tests). AC6's "shows the chips" and the Agent History row of an ontology proposal need the browser walkthrough at final review. Server behaviour (read, propose, approve, decline, supersede, MCP) is covered by HTTP tests against Postgres; no model job runs, proposals are seeded by direct insert, and jobs an adoption queues are counted, not executed.
+- 2026-11-20 — orchestrator Verify (sidecar gsd-path-verify/task-t006-verify): pass, exit 0; output tail:
+  ```
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:26664) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:2444) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:29048) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:38972) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:32184) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:39756) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:27224) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  [33m
+  (!) Some chunks are larger than 500 kB after minification. Consider:
+  - Using dynamic import() to code-split the application
+  - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+  - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+  ```
+- 2026-11-20 — orchestrator regression Verify of T002 (sidecar gsd-path-verify/task-t006-verify): pass, exit 0; output tail:
+  ```
+  test api::review_totals_tests::the_alignment_low_confidence_and_agent_totals_follow_the_list_while_counts_keep_their_values ... ok
+  test api::review_totals_tests::a_session_list_response_differs_from_before_only_by_the_added_total_key ... ok
+  test api::review_totals_tests::a_token_reading_duplicates_receives_the_same_total_as_a_session ... ok
+  test api::review_token_revert_tests::a_token_reverts_its_own_merge_over_the_api_and_over_mcp_and_a_second_revert_answers_already_decided ... ok
+  test api::review_token_reads_tests::a_token_receives_each_sections_items_in_the_session_order ... ok
+  test api::review_token_revert_tests::review_revert_is_listed_only_to_a_write_token_of_an_editor_and_says_what_a_revert_does_not_recall ... ok
+  test api::review_token_merge_tests::each_of_the_six_hold_reasons_lands_a_proposal_that_names_it_for_the_queue_merge_and_the_manual_merge ... ok
+  test api::review_totals_tests::an_empty_queue_has_total_0_and_an_offset_past_the_end_returns_no_items_with_the_true_total ... ok
+  test api::review_totals_tests::the_seed_puts_items_in_every_one_of_the_thirteen_sections ... ok
+  test api::review_token_reads_tests::a_tokens_total_counts_the_listed_rows_and_counts_keep_their_values ... ok
+  test api::review_token_revert_tests::a_token_reverts_any_token_agents_merge_of_the_base_and_an_unknown_or_foreign_merge_id_is_not_found ... ok
+  test api::review_totals_tests::the_total_of_every_list_queue_is_the_number_of_rows_its_pages_return ... ok
+  test api::review_token_revert_tests::after_a_token_merge_and_its_revert_every_fact_entity_and_evidence_row_is_as_before ... ok
+  test api::review_token_reads_tests::a_token_whose_kb_ids_exclude_the_base_gets_404_on_every_review_read ... ok
+  test api::review_token_merge_tests::of_a_person_the_governor_and_a_token_deciding_one_pair_exactly_one_is_applied_and_the_losing_token_gets_already_decided ... ok
+  test api::review_token_violation_tests::a_token_violation_decision_waits_as_a_proposal_and_a_person_applies_it ... ok
+  test api::review_token_reads_tests::a_token_page_size_is_clamped_and_an_offset_at_or_past_the_total_returns_no_items ... ok
+  
+  test result: ok. 122 passed; 0 failed; 0 ignored; 0 measured; 829 filtered out; finished in 28.38s
+  ```
+- 2026-11-20 — orchestrator regression Verify of T003 (sidecar gsd-path-verify/task-t006-verify): pass, exit 0; output tail:
+  ```
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:13744) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:40752) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:35800) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:33116) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:39856) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:38136) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:35484) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  [33m
+  (!) Some chunks are larger than 500 kB after minification. Consider:
+  - Using dynamic import() to code-split the application
+  - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+  - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+  ```

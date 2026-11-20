@@ -18,7 +18,9 @@
 //! 什么都不改，只留一条等人答的提议——本体缺陷（[`propose_defect`]）是第一种，事实的确认、
 //! 拒绝、闭合（[`propose_fact`]）与时态矛盾的裁决（[`propose_conflict`]）照的是它，公理
 //! 违规的裁决（[`propose_violation`]）、勘误的回答（[`propose_errata`]）、对齐一档的短语
-//! 与规则（[`propose_alignment_phrase`]、[`propose_alignment_rule`]）也是。
+//! 与规则（[`propose_alignment_phrase`]、[`propose_alignment_rule`]）也是；本体提案不在
+//! Review 的列表里，它的读（[`ontology_proposals`]）与拒绝、采纳的提议（[`propose_ontology`]）
+//! 走的是它自己的那几条路由。
 //! 别的裁决都还关着——读得到「等你点头」不等于能替人点头。
 //!
 //! 每一笔要落地的写入之前还有两道，都只在 [`guard`] 一处：限速（一枚令牌在一个库里
@@ -1103,6 +1105,171 @@ pub(crate) async fn propose_alignment_rule(
         request,
         Some(if approve { "approve" } else { "reject" }),
         None,
+    )
+    .await
+}
+
+// ───────────────────── 本体提案：读，以及拒绝与采纳的提议（0076） ─────────────────────
+//
+// 本体提案不在 Review 的列表里：它有自己的路由，按 section 与 key 认，人在本体页上定它。
+// 令牌读的是那条路由回给会话的同一份；拒绝与采纳都只留提议，台账里的目标是
+// `ontology_proposals` 那一行的 id
+
+/// 还开着的本体提案，与会话从 `GET /ontology/proposals` 读到的同一份（一条提案上有开着的
+/// 令牌提议时，那一项带 `agent_proposals`）。读的检查与 [`list`] 同一个：主人至少是
+/// Viewer、令牌的 `kb_ids` 够得着这个库，否则 404
+pub(crate) async fn ontology_proposals(
+    state: &AppState,
+    caller: &ReviewCaller,
+) -> Result<serde_json::Value, AppError> {
+    authorize_read(state, caller).await?;
+    super::ontology_routes::open_proposals_body(state, caller.kb_id).await
+}
+
+/// 这个库里还开着的本体提案上，令牌 agent 开着的提议：按（section, key）找，值就是要挂
+/// 上去的那一列（与 [`attach_agent_proposals`] 挂的同一个形状，最早提的在前）。没有开着
+/// 的提议的提案不在里面。
+///
+/// 本体提案的项没有 `id`（它按 section 与 key 认，响应里也不为这个多加一个键），所以不走
+/// `attach_agent_proposals`：这里自己把行的 id 对回 section 与 key
+pub(crate) async fn open_ontology_proposals(
+    state: &AppState,
+    kb_id: Uuid,
+) -> Result<std::collections::HashMap<(String, String), serde_json::Value>, AppError> {
+    let rows: Vec<(Uuid, String, String)> = sqlx::query_as(
+        "SELECT id, section, key FROM ontology_proposals WHERE kb_id = $1 AND status = 'open'",
+    )
+    .bind(kb_id)
+    .fetch_all(&state.pool)
+    .await?;
+    let ids: Vec<Uuid> = rows.iter().map(|(id, _, _)| *id).collect();
+    let mut open = utopia_store::token_agent_actions::open_proposals_for(
+        &state.pool,
+        kb_id,
+        "ontology_proposal",
+        &ids,
+    )
+    .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(id, section, key)| Some(((section, key), json!(open.remove(&id)?))))
+        .collect())
+}
+
+/// 请求里点了名的类这个库里有没有：没有的那一个是 `unknown_class`，与人采纳时
+/// `ontology_agent` 给的同一个 code、同一句话。这里只读，不锁
+async fn classes_exist(state: &AppState, kb_id: Uuid, keys: &[String]) -> Result<(), AppError> {
+    if keys.is_empty() {
+        return Ok(());
+    }
+    let found: Vec<String> =
+        sqlx::query_scalar("SELECT key FROM entity_types WHERE kb_id = $1 AND key = ANY($2)")
+            .bind(kb_id)
+            .bind(keys)
+            .fetch_all(&state.pool)
+            .await?;
+    match keys.iter().find(|k| !found.contains(k)) {
+        Some(k) => Err(AppError::invalid(
+            "unknown_class",
+            format!("class `{k}` does not exist"),
+        )),
+        None => Ok(()),
+    }
+}
+
+/// 一列类的键：请求里给了就用请求的，没给就是提案自己的那一列
+fn class_keys(request: &serde_json::Value, payload: &serde_json::Value, name: &str) -> Vec<String> {
+    let listed = match request.get(name) {
+        Some(keys) if !keys.is_null() => keys,
+        _ => &payload[name],
+    };
+    listed
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|k| k.as_str().map(str::to_string))
+        .collect()
+}
+
+/// 经令牌拒绝或采纳一条本体提案：**只留提议**（裁定表的 OntologyProposal 一行）。提案行与
+/// 本体都不动、不排任务，等登录的人答；批准时跑的是人自己的那段代码（`review_routes`）。
+/// `action` 是 reject / adopt；`request` 是那条路由的请求体原样。
+///
+/// 次序是契约：写的检查；请求体——拒绝的 `status`（`adoption_endpoint`、`bad_status`，与
+/// 人的路由同一个 code）；目标——这个 section 与 key 没有存着的提案、或者它不是本体代理
+/// 提的（人的采纳路由对它同样答 not found，列表里也不列它）是 404，已经定了是
+/// `already_decided`；要读本体才知道的检查——采纳时点了名的类不存在（`unknown_class`）；
+/// 留提议。哪一步没过都一行不写。
+///
+/// 一条本体提案上只有一条开着的提议，拒绝还是采纳都算它：第二次调用拿到的是那一条加
+/// `already_proposed`。提议存下提案此刻的 payload（指纹，`land_proposal` 从 store 取）：
+/// 批准时代理把它刷成了别的样子，提议就过时了。拒绝的理由是令牌写的，留在提议上（`why`）
+pub(crate) async fn propose_ontology(
+    state: &AppState,
+    caller: &ReviewCaller,
+    section: &str,
+    key: &str,
+    action: &str,
+    request: serde_json::Value,
+) -> Result<serde_json::Value, AppError> {
+    authorize_write(state, caller).await?;
+    let action: &'static str = match action {
+        "reject" => "reject",
+        "adopt" => "adopt",
+        // REST 的两条路由各给各的动作，到不了这里；MCP 工具的 `action` 是调用方写的
+        other => {
+            return Err(AppError::invalid(
+                "unknown_action",
+                format!("action must be reject or adopt, got {other}"),
+            ))
+        }
+    };
+    if action == "reject" {
+        super::ontology_routes::rejection_status(request["status"].as_str().unwrap_or_default())?;
+    }
+    let target_id =
+        utopia_store::review_targets::ontology_proposal_id(&state.pool, caller.kb_id, section, key)
+            .await?
+            .ok_or(AppError::NotFound)?;
+    target_open(state, caller, "ontology.proposal", target_id, &request).await?;
+    if action == "adopt" {
+        // 目标开着：提案在这个库里。新类要它的父类在，新属性要它的定义域（关系还要值域）在
+        let payload: serde_json::Value = sqlx::query_scalar(
+            "SELECT payload FROM ontology_proposals WHERE id = $1 AND kb_id = $2",
+        )
+        .bind(target_id)
+        .bind(caller.kb_id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
+        let named: Vec<String> = match section {
+            "entity_types" => class_keys(&request, &payload, "parents"),
+            "relation_types" => [
+                class_keys(&request, &payload, "domains"),
+                class_keys(&request, &payload, "ranges"),
+            ]
+            .concat(),
+            "attribute_types" => class_keys(&request, &payload, "domains"),
+            _ => Vec::new(),
+        };
+        classes_exist(state, caller.kb_id, &named).await?;
+    }
+    let why = if action == "reject" {
+        request["reason"].as_str().map(str::to_string)
+    } else {
+        None
+    };
+    land_proposal(
+        state,
+        caller,
+        AgentOperation::OntologyProposal,
+        "ontology.proposal",
+        "ontology_proposal",
+        target_id,
+        &format!("{section}:{key}"),
+        request,
+        Some(action),
+        why.as_deref(),
     )
     .await
 }

@@ -954,9 +954,37 @@ pub async fn adopt(
     edits: AdoptEdits,
     actor: Uuid,
 ) -> Result<Adopted, AppError> {
+    adopt_as(state, kb_id, section, key, edits, actor, None).await
+}
+
+/// 人批准令牌 agent 的一条采纳提议（0076）：跑的就是 [`adopt`] 的那一段，actor 是批准的
+/// 这个人，只在审计 detail 里多写一个 `agent_proposal`（提议在台账里的 id）
+pub async fn adopt_for_proposal(
+    state: &AppState,
+    kb_id: Uuid,
+    section: &str,
+    key: &str,
+    edits: AdoptEdits,
+    actor: Uuid,
+    proposal: Uuid,
+) -> Result<Adopted, AppError> {
+    adopt_as(state, kb_id, section, key, edits, actor, Some(proposal)).await
+}
+
+/// 采纳的全部。`proposal` 是令牌 agent 的那条提议的 id：人自己采纳时是 None，审计 detail
+/// 与从前一个键不差
+async fn adopt_as(
+    state: &AppState,
+    kb_id: Uuid,
+    section: &str,
+    key: &str,
+    edits: AdoptEdits,
+    actor: Uuid,
+    proposal: Option<Uuid>,
+) -> Result<Adopted, AppError> {
     let pool = &state.pool;
     let mut tx = pool.begin().await?;
-    let (adopted, detail) = match adopt_on(&mut tx, kb_id, section, key, edits, actor).await {
+    let (adopted, mut detail) = match adopt_on(&mut tx, kb_id, section, key, edits, actor).await {
         Ok(done) => done,
         Err(error) => {
             // 回滚完再答：马上重试的请求不会撞上这次还没放掉的锁
@@ -970,6 +998,11 @@ pub async fn adopt(
         }
     };
     tx.commit().await?;
+    // 人批准令牌 agent 的一条提议时带着提议的 id（0076）：采纳是这个人的，审计行里看得出
+    // 是从哪条提议来的。人自己采纳时没有这个键，detail 与从前一个键不差
+    if let Some(proposal) = proposal {
+        detail["agent_proposal"] = json!(proposal);
+    }
     let _ = utopia_store::audit::record(
         pool,
         Some(kb_id),

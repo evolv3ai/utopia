@@ -1,4 +1,5 @@
-//! Review 的 MCP 工具（0076 决定 2）：`review_list`、`review_item`、`review_keep`、
+//! Review 的 MCP 工具（0076 决定 2）：`review_list`、`review_item`、`review_ontology_list`、
+//! `review_ontology`、`review_keep`、
 //! `review_merge`、`review_revert`、`review_batch`，以及只能提议的 `review_defect`、
 //! `review_fact`、`review_conflict`、`review_violation`、`review_errata`、`review_alignment`。
 //!
@@ -12,7 +13,9 @@
 //! 本体缺陷表态）是第一个，`review_fact`（确认、拒绝、闭合一条事实）与 `review_conflict`
 //! （裁一处时态矛盾）照的是它，`review_violation`（裁一处公理违规）、`review_errata`（答勘误
 //! agent 留给人的一笔）、`review_alignment`（定一条短语签名或一条蕴含规则）也是：调用什么
-//! 都不改，只留一条等人答的提议。
+//! 都不改，只留一条等人答的提议。本体提案不在那十三档里，另有两个工具：
+//! `review_ontology_list` 读还开着的本体提案（会话在本体页上看到的那一份），
+//! `review_ontology` 提议拒绝或采纳其中一条。
 //! **没有哪个工具能答提议。**
 //!
 //! **这里只做两件事：把参数递给 `review_ops`，把它的回答变成工具结果。** 授权、裁定表、
@@ -49,6 +52,8 @@ const CONFLICT: &str = "review_conflict";
 const VIOLATION: &str = "review_violation";
 const ERRATA: &str = "review_errata";
 const ALIGNMENT: &str = "review_alignment";
+const ONTOLOGY_LIST: &str = "review_ontology_list";
+const ONTOLOGY: &str = "review_ontology";
 
 /// 这个名字归不归这里管。归这里的，`mcp.rs` 不再拿它去问 `is_exposed`
 pub(super) fn serves(name: &str) -> bool {
@@ -65,6 +70,8 @@ pub(super) fn serves(name: &str) -> bool {
             | VIOLATION
             | ERRATA
             | ALIGNMENT
+            | ONTOLOGY_LIST
+            | ONTOLOGY
     )
 }
 
@@ -72,7 +79,16 @@ pub(super) fn serves(name: &str) -> bool {
 fn writes(name: &str) -> bool {
     matches!(
         name,
-        KEEP | MERGE | REVERT | BATCH | DEFECT | FACT | CONFLICT | VIOLATION | ERRATA | ALIGNMENT
+        KEEP | MERGE
+            | REVERT
+            | BATCH
+            | DEFECT
+            | FACT
+            | CONFLICT
+            | VIOLATION
+            | ERRATA
+            | ALIGNMENT
+            | ONTOLOGY
     )
 }
 
@@ -714,6 +730,120 @@ fn definitions() -> Value {
                     "required": ["kind", "id"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": ONTOLOGY_LIST,
+                "description": "Read the open ontology proposals of this knowledge base: the \
+                    classes, relations and attributes the ontology agent proposes to add, and \
+                    the existing elements it proposes to reuse, that no person has adopted or \
+                    rejected yet. These are not a section of review_list; a signed-in person \
+                    sees them on the Ontology page. Returns {entity_types, relation_types, \
+                    attribute_types, map_to}, one list per section, as a signed-in person gets \
+                    them: each item has its key and the proposed fields, proposed_by, serves \
+                    (the competency questions it serves) and signatures (the shapes it would \
+                    bind), and carries agent_proposals only while a token's proposal on it is \
+                    open. An item is named by the section it is listed under and its key. \
+                    Takes no argument. Reading is all this tool offers: nothing listed here is \
+                    decided by reading it.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {}
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": ONTOLOGY,
+                "description": "Propose that a person reject or adopt one open ontology \
+                    proposal, an item of review_ontology_list named by its section and key: \
+                    \"reject\" (the ontology should not get this element; reason says why) or \
+                    \"adopt\" (the element is added to the ontology, or for a map_to item the \
+                    existing element is reused; label, description, datatype, domains, ranges \
+                    and parents replace what the ontology proposal says, each only when \
+                    given). The call changes nothing: the ontology proposal stays open, the \
+                    ontology stays as it is, no job is queued, and the call waits as a \
+                    proposal, recorded under the token's owner and the token's name, that a \
+                    signed-in editor answers in the Review tab; only when that person approves \
+                    it is the ontology proposal rejected or adopted, as that person's \
+                    decision. A reason given with \"reject\" stays on the token's proposal and \
+                    is not recorded as the person's reason. The result is {ok, outcome: \
+                    \"proposed\", action_id, reason: \"propose_only\", explanation}. One \
+                    proposal is open per ontology proposal, whichever action it asks for: \
+                    repeating the call, or calling with the other action, while it is open \
+                    returns the same proposal with code already_proposed. A section and key \
+                    that review_ontology_list does not list, in this knowledge base, is \
+                    refused with code not_found; an ontology proposal that was already adopted \
+                    or rejected with code already_decided; an action other than reject or \
+                    adopt with code unknown_action; \"adopt\" naming a class the ontology does \
+                    not have, in parents, domains or ranges, with code unknown_class. If the \
+                    ontology proposal is decided, or the ontology agent rewrites it, before \
+                    the proposal is answered, approving the proposal changes nothing and \
+                    closes it as superseded. Proposals do not count toward the limit on \
+                    finalized writes. No tool answers a proposal.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "section": {
+                            "type": "string",
+                            "description": "Section the item is listed under in \
+                                review_ontology_list: \"entity_types\", \"relation_types\", \
+                                \"attribute_types\" or \"map_to\"."
+                        },
+                        "key": {
+                            "type": "string",
+                            "description": "The item's key, exactly as review_ontology_list \
+                                gives it."
+                        },
+                        "action": {
+                            "type": "string",
+                            "description": "\"reject\" or \"adopt\"."
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "\"reject\" only, optional: one sentence on why \
+                                the ontology should not get this element."
+                        },
+                        "label": {
+                            "type": "string",
+                            "description": "\"adopt\" only, optional: the label to adopt the \
+                                element with, in place of the proposed one."
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "\"adopt\" only, optional: the description to \
+                                adopt the element with, in place of the proposed one."
+                        },
+                        "datatype": {
+                            "type": "string",
+                            "description": "\"adopt\" of an attribute only, optional: \
+                                \"text\", \"number\", \"date\" or \"bool\"."
+                        },
+                        "domains": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "\"adopt\" of a relation or attribute only, \
+                                optional: keys of the classes it applies to, in place of the \
+                                proposed ones."
+                        },
+                        "ranges": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "\"adopt\" of a relation only, optional: keys of \
+                                the classes its object may be, in place of the proposed ones."
+                        },
+                        "parents": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "\"adopt\" of a class only, optional: keys of its \
+                                parent classes, in place of the proposed ones."
+                        }
+                    },
+                    "required": ["section", "key", "action"]
+                }
+            }
         }
     ])
 }
@@ -734,14 +864,14 @@ fn annotations(name: &str) -> Value {
         }
         // 只能提议的工具：这一次调用什么都不改，只留一条提议——不是只读（台账多一行），
         // 也不破坏什么
-        DEFECT | FACT | CONFLICT | VIOLATION | ERRATA | ALIGNMENT => {
+        DEFECT | FACT | CONFLICT | VIOLATION | ERRATA | ALIGNMENT | ONTOLOGY => {
             json!({ "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false })
         }
         _ => json!({ "readOnlyHint": true }),
     }
 }
 
-/// `tools/list` 里的那几项。两个读工具对每一个进得来的调用方都列；写工具（[`writes`]）只在
+/// `tools/list` 里的那几项。读工具（两个读 Review 的、一个读本体提案的）对每一个进得来的调用方都列；写工具（[`writes`]）只在
 /// `can_write`（令牌 scope 是 write 且主人至少是 Editor）时列——列出一个注定被拒绝的
 /// 工具，等于让对面的 agent 反复去试
 pub(super) fn listed(can_write: bool) -> Vec<Value> {
@@ -1223,6 +1353,50 @@ pub(super) async fn call(
                 }
                 _ => return bad_argument(name, "kind", "\"phrase\" or \"rule\""),
             }
+        }
+        // 没有参数：读的就是会话在本体页上看到的那一份
+        ONTOLOGY_LIST => review_ops::ontology_proposals(state, caller).await,
+        ONTOLOGY => {
+            // `action` 说走哪一条路由（拒绝或采纳），其余参数是那条路由的请求体的字段；
+            // 递下去的请求体与 REST 上那条路由收到的同一个样子。动作认不认得、提案在不在、
+            // 类认不认得都由操作说（`unknown_action`、not found、`unknown_class`）
+            let (Some(section), Some(key), Some(action)) = (
+                args["section"].as_str(),
+                args["key"].as_str(),
+                args["action"].as_str().map(str::trim),
+            ) else {
+                return bad_argument(name, "section", "a string, as are `key` and `action`");
+            };
+            let mut request = json!({ "section": section, "key": key });
+            if action == "adopt" {
+                // 采纳的那条路由：人改过的几格，给了才带。拒绝的理由给了也不读
+                for field in ["label", "description", "datatype"] {
+                    match optional_string(name, &args, field) {
+                        Ok(Some(text)) => request[field] = json!(text),
+                        Ok(None) => {}
+                        Err(refused) => return refused,
+                    }
+                }
+                for field in ["domains", "ranges", "parents"] {
+                    match args.get(field) {
+                        None | Some(Value::Null) => {}
+                        Some(Value::Array(keys)) if keys.iter().all(Value::is_string) => {
+                            request[field] = json!(keys);
+                        }
+                        Some(_) => return bad_argument(name, field, "a list of class keys"),
+                    }
+                }
+            } else {
+                // 拒绝的那条路由：`status` 只有一个值，工具替调用方写上；理由给了才带。
+                // 认不出的动作也走到这里，由操作拒绝，什么都不读
+                request["status"] = json!("rejected");
+                match optional_string(name, &args, "reason") {
+                    Ok(Some(reason)) => request["reason"] = json!(reason),
+                    Ok(None) => {}
+                    Err(refused) => return refused,
+                }
+            }
+            review_ops::propose_ontology(state, caller, section, key, action, request).await
         }
         // `serves` 之外的名字到不了这里；到了也只说没有这个工具，不去碰库
         _ => {

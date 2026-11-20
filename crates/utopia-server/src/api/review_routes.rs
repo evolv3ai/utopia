@@ -968,6 +968,8 @@ enum Decision {
     Errata(DecideErrataReq),
     AlignmentPhrase(DecideAlignmentPhraseReq),
     AlignmentRule(DecideAlignmentRuleReq),
+    OntologyReject(super::ontology_routes::DecideProposalReq),
+    OntologyAdopt(super::question_routes::AdoptReq),
 }
 
 /// 这条提议的操作认不认得。`None` = 认不得：答的人拿到的还是从前那个 500
@@ -985,6 +987,14 @@ fn decision_of(
         "errata.decide" => Some(Decision::Errata(stored_request(p)?)),
         "alignment.phrase" => Some(Decision::AlignmentPhrase(stored_request(p)?)),
         "alignment.rule" => Some(Decision::AlignmentRule(stored_request(p)?)),
+        // 本体提案的两种动作各是各的路由、各是各的请求体：提议存下的 `action` 说是哪一种
+        "ontology.proposal" => Some(
+            if p.payload.get("action").and_then(|a| a.as_str()) == Some("adopt") {
+                Decision::OntologyAdopt(stored_request(p)?)
+            } else {
+                Decision::OntologyReject(stored_request(p)?)
+            },
+        ),
         _ => None,
     })
 }
@@ -1091,6 +1101,38 @@ async fn approve_decision(
                 job_id: Some(job_id),
                 ..Applied::default()
             }))
+        }
+        // 拒绝一条本体提案：上面已经读过它的状态（还开着、是代理提的、payload 没变）。人的
+        // 那一条 UPDATE 对不在的提案也答 ok，所以由它自己重读一遍：确实是这个人这一次拒掉
+        // 的才写审计行、算做完；被别人抢先定了就是过时，什么都没写
+        Decision::OntologyReject(req) => {
+            if super::ontology_routes::proposal_rejection(state, kb_id, user, &req, Some(p.id))
+                .await?
+            {
+                Ok(Approved::Done(Applied::default()))
+            } else {
+                Ok(Approved::Gone)
+            }
+        }
+        // 采纳是一个事务：`NotFound` 就是提案在检查之后被别人定了，什么都没写。别的错
+        // （`unknown_class`、`bad_property_shape`、`alignment_busy`……）整个事务回滚了，
+        // 原样报出去，提议留着
+        Decision::OntologyAdopt(req) => {
+            match crate::ontology_agent::adopt_for_proposal(
+                state,
+                kb_id,
+                &req.section,
+                &req.key,
+                req.edits,
+                user.id,
+                p.id,
+            )
+            .await
+            {
+                Ok(_) => Ok(Approved::Done(Applied::default())),
+                Err(utopia_core::AppError::NotFound) => Ok(Approved::Gone),
+                Err(e) => Err(e),
+            }
         }
     }
 }

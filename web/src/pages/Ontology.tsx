@@ -2,7 +2,7 @@
 // 左栏 = filter + Classes/Properties 两小节 + 底部 Unmatched 入口；
 // 右侧 = 选中项的详情面板（只展示；建、改、删、连都在弹窗里，见 ontologyDialogs）
 // / 未匹配信号面板 / 概览。
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
@@ -38,6 +38,7 @@ import {
   type RelationTypeView,
   type UniquenessCandidate,
 } from "../api";
+import { AgentProposalChips } from "./AgentProposal";
 import { OntologyTables, treeParent } from "./ontologyTables";
 import { S } from "../i18n";
 import { useKb } from "../kb";
@@ -2260,68 +2261,83 @@ function MissesPanel({
           <h4 className="mb-2 text-small font-semibold text-ink-2">
             {S.ontology.proposals}
           </h4>
+          {/* 一条提案上有令牌 agent 开着的提议时（0076），那一行下面多一行标签：谁经哪枚
+              令牌想让人拒绝它、采纳它。没有提议的行什么都不多，与从前一样；答在 Review 的
+              Agent 一档，在这里直接采纳或忽略是人自己的决定 */}
           <div className="space-y-2">
             {/* 排在最前：它说的是"本体已经有了"，而这正是最该先看见的一句。
                 排在新建后面的话，人一路点下来就把重复建出来了 */}
             {(proposals.map_to ?? []).map((p) => (
-              <div key={`map-${p.key}`} className="flex items-center gap-2 text-body">
-                <Chip tone="success">=</Chip>
-                <span className="font-mono text-ink-2">{p.key}</span>
-                {p.label && <span className="text-ink">{p.label}</span>}
-                {!!p.forms?.length && (
-                  <span
-                    className="text-small text-ink-2 truncate"
-                    title={p.forms.join(" · ")}
-                  >
-                    {p.forms.join(" · ")}
-                  </span>
-                )}
-                {p.reason && (
-                  <span className="text-small text-ink-2 truncate">{p.reason}</span>
-                )}
-                <AgentMeta p={p} />
-                {actions("map_to", p.key, S.ontology.mapOver)}
-              </div>
+              <Fragment key={`map-${p.key}`}>
+                <div className="flex items-center gap-2 text-body">
+                  <Chip tone="success">=</Chip>
+                  <span className="font-mono text-ink-2">{p.key}</span>
+                  {p.label && <span className="text-ink">{p.label}</span>}
+                  {!!p.forms?.length && (
+                    <span
+                      className="text-small text-ink-2 truncate"
+                      title={p.forms.join(" · ")}
+                    >
+                      {p.forms.join(" · ")}
+                    </span>
+                  )}
+                  {p.reason && (
+                    <span className="text-small text-ink-2 truncate">{p.reason}</span>
+                  )}
+                  <AgentMeta p={p} />
+                  {actions("map_to", p.key, S.ontology.mapOver)}
+                </div>
+                <AgentProposalChips proposals={p.agent_proposals} />
+              </Fragment>
             ))}
             {proposals.entity_types.map((p) => (
-              <div key={p.key} className="flex items-center gap-2 text-body">
-                <Chip tone="info">C</Chip>
-                <span className="font-mono text-ink-2">{p.key}</span>
-                <span className="text-ink">{p.label}</span>
-                {p.reason && (
-                  <span className="text-small text-ink-2 truncate">{p.reason}</span>
-                )}
-                <AgentMeta p={p} />
-                {actions("entity_types", p.key, S.ontology.approve)}
-              </div>
+              <Fragment key={p.key}>
+                <div className="flex items-center gap-2 text-body">
+                  <Chip tone="info">C</Chip>
+                  <span className="font-mono text-ink-2">{p.key}</span>
+                  <span className="text-ink">{p.label}</span>
+                  {p.reason && (
+                    <span className="text-small text-ink-2 truncate">{p.reason}</span>
+                  )}
+                  <AgentMeta p={p} />
+                  {actions("entity_types", p.key, S.ontology.approve)}
+                </div>
+                <AgentProposalChips proposals={p.agent_proposals} />
+              </Fragment>
             ))}
             {proposals.relation_types.map((p) => (
-              <div key={p.key} className="flex items-center gap-2 text-body">
-                <Chip tone="violet">P</Chip>
-                <span className="font-mono text-ink-2">{p.key}</span>
-                <span className="text-ink">{p.label}</span>
-                {p.temporal && <Chip tone="neutral">{p.temporal}</Chip>}
-                {p.reason && (
-                  <span className="text-small text-ink-2 truncate">{p.reason}</span>
-                )}
-                <AgentMeta p={p} />
-                {actions("relation_types", p.key, S.ontology.approve)}
-              </div>
+              <Fragment key={p.key}>
+                <div className="flex items-center gap-2 text-body">
+                  <Chip tone="violet">P</Chip>
+                  <span className="font-mono text-ink-2">{p.key}</span>
+                  <span className="text-ink">{p.label}</span>
+                  {p.temporal && <Chip tone="neutral">{p.temporal}</Chip>}
+                  {p.reason && (
+                    <span className="text-small text-ink-2 truncate">{p.reason}</span>
+                  )}
+                  <AgentMeta p={p} />
+                  {actions("relation_types", p.key, S.ontology.approve)}
+                </div>
+                <AgentProposalChips proposals={p.agent_proposals} />
+              </Fragment>
             ))}
             {(proposals.attribute_types ?? []).map((p) => (
-              <div key={`attr-${p.key}`} className="flex items-center gap-2 text-body">
-                {/* A 而不是 P：字面值那一档跟关系是两回事，界面上分得清 */}
-                <Chip tone="warn">A</Chip>
-                <span className="font-mono text-ink-2">{p.key}</span>
-                <span className="text-ink">{p.label}</span>
-                <Chip tone="neutral">{p.datatype ?? "text"}</Chip>
-                {p.unit && <Chip tone="neutral">{p.unit}</Chip>}
-                {p.reason && (
-                  <span className="text-small text-ink-2 truncate">{p.reason}</span>
-                )}
-                <AgentMeta p={p} />
-                {actions("attribute_types", p.key, S.ontology.approve)}
-              </div>
+              <Fragment key={`attr-${p.key}`}>
+                <div className="flex items-center gap-2 text-body">
+                  {/* A 而不是 P：字面值那一档跟关系是两回事，界面上分得清 */}
+                  <Chip tone="warn">A</Chip>
+                  <span className="font-mono text-ink-2">{p.key}</span>
+                  <span className="text-ink">{p.label}</span>
+                  <Chip tone="neutral">{p.datatype ?? "text"}</Chip>
+                  {p.unit && <Chip tone="neutral">{p.unit}</Chip>}
+                  {p.reason && (
+                    <span className="text-small text-ink-2 truncate">{p.reason}</span>
+                  )}
+                  <AgentMeta p={p} />
+                  {actions("attribute_types", p.key, S.ontology.approve)}
+                </div>
+                <AgentProposalChips proposals={p.agent_proposals} />
+              </Fragment>
             ))}
             {proposalCount(proposals) === 0 && (
               <p className="text-body text-ink-2">—</p>

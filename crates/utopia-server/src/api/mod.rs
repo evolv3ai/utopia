@@ -365,6 +365,7 @@ pub fn router(state: AppState, cfg: &AppConfig) -> Router {
             post(ontology_routes::reconcile_relation_type),
         )
         // 上次算出来、还没人表态的那些（见 `ontology_proposals`）。刷新页面靠它，不必重跑模型
+        // 令牌也读得到；写令牌的拒绝与采纳（下面的 adopt）只留一条等人答的提议（0076）
         .route(
             "/kbs/{id}/ontology/proposals",
             get(ontology_routes::stored_proposals).post(ontology_routes::decide_proposal),
@@ -763,6 +764,9 @@ mod review_token_alignment_tests;
 
 #[cfg(test)]
 mod review_token_mapping_tests;
+
+#[cfg(test)]
+mod review_token_ontology_tests;
 
 // 开着的提议挂在各档的条目上、左栏的数、Agent History 说出目标（0076）
 #[cfg(test)]

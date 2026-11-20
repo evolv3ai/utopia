@@ -11,6 +11,7 @@ use utopia_store::ontology::{Lacking, LinkEnd};
 use uuid::Uuid;
 
 use crate::api::documents_routes::require_reader_kb;
+use crate::api::review_ops::{self, ReviewCaller};
 use crate::auth::{AuthUser, SessionOrToken};
 use crate::error::ApiResult;
 use crate::state::AppState;
@@ -568,13 +569,35 @@ pub async fn reconcile_relation_type(
 /// 还等着人看的提案，按接口原来的形状拼回去。
 ///
 /// 前端因此不必区分「刚算出来的」与「上次存下的」——两者同一个类型、同一套渲染。
+///
+/// 个人令牌也能读（0076）：令牌走 `review_ops::ontology_proposals`（主人至少是 Viewer、
+/// 令牌的 `kb_ids` 够得着这个库，否则 404），会话照旧过下面的 `require_kb`。两边过了检查
+/// 拿的都是 [`open_proposals_body`] 的那一份
 pub async fn stored_proposals(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    reader: SessionOrToken,
     Path(kb_id): Path<Uuid>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    let user = reader.user;
+    if let Some(token) = reader.pat {
+        let caller = ReviewCaller { user, token, kb_id };
+        return Ok(Json(review_ops::ontology_proposals(&state, &caller).await?));
+    }
     require_kb(&state, &user, kb_id, Role::Viewer).await?;
+    Ok(Json(open_proposals_body(&state, kb_id).await?))
+}
+
+/// 还开着的提案拼成的那个响应体。**这里不做授权**：会话先过 `require_kb`，令牌先过
+/// `review_ops` 的读检查，两边过了才到这里，拿到的是同一份。
+///
+/// 一条提案上有令牌 agent 开着的提议时（0076），那一项多一个 `agent_proposals`（与 Review
+/// 各档条目上的同一个形状）；没有提议的项一个键也不多，与从前逐字相等
+pub(crate) async fn open_proposals_body(
+    state: &AppState,
+    kb_id: Uuid,
+) -> Result<serde_json::Value, AppError> {
     let stored = utopia_store::ontology::open_proposals(&state.pool, kb_id).await?;
+    let mut proposed = review_ops::open_ontology_proposals(state, kb_id).await?;
     let mut out = json!({
         "entity_types": [], "relation_types": [], "attribute_types": [], "map_to": []
     });
@@ -591,11 +614,14 @@ pub async fn stored_proposals(
                 o.insert("proposed_by".into(), json!("agent"));
                 o.insert("serves".into(), json!(p.serves));
                 o.insert("signatures".into(), p.signatures);
+                if let Some(open) = proposed.remove(&(p.section, p.key)) {
+                    o.insert("agent_proposals".into(), open);
+                }
             }
             arr.push(item);
         }
     }
-    Ok(Json(out))
+    Ok(out)
 }
 
 #[derive(Deserialize)]
@@ -613,33 +639,114 @@ pub struct DecideProposalReq {
 ///
 /// 从前这里也收 adopted，只把状态改成采纳，元素、回归用例、对齐一样都没有。采纳要把
 /// 这些和状态一起提交，只有 `/ontology/proposals/adopt` 做得到（0061 决定 3）
+///
+/// 写令牌也能调（0076）：它**只留一条提议**（`review_ops::propose_ontology`），提案不动，
+/// 等登录的人在 Review 里答。令牌在进下面这一段之前就离开了处理函数；会话照旧跑
+/// [`proposal_rejection`]：回答同从前一个字不差，仍然不写审计行，没有这条提案也仍然答 ok
 pub async fn decide_proposal(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    caller: SessionOrToken,
     Path(kb_id): Path<Uuid>,
     Json(req): Json<DecideProposalReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    let user = caller.user;
+    if let Some(token) = caller.pat {
+        let caller = ReviewCaller { user, token, kb_id };
+        // 存下的就是请求体原样：没给理由就没有那个键
+        let mut request = json!({ "section": req.section, "key": req.key, "status": req.status });
+        if let Some(reason) = &req.reason {
+            request["reason"] = json!(reason);
+        }
+        let answer = review_ops::propose_ontology(
+            &state,
+            &caller,
+            &req.section,
+            &req.key,
+            "reject",
+            request,
+        )
+        .await?;
+        return Ok(Json(answer));
+    }
     require_kb(&state, &user, kb_id, Role::Editor).await?;
-    if req.status == "adopted" {
+    proposal_rejection(&state, kb_id, &user, &req, None).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// 拒绝的请求体里 `status` 那一格的校验，人的路由与令牌的提议问的是同一处：同一个 code、
+/// 同一句话
+pub(crate) fn rejection_status(status: &str) -> Result<(), AppError> {
+    if status == "adopted" {
         return Err(AppError::invalid(
             "adoption_endpoint",
             "Adopt a proposal through /ontology/proposals/adopt; this endpoint only rejects",
-        )
-        .into());
+        ));
     }
-    if req.status != "rejected" {
-        return Err(AppError::invalid("bad_status", "status 只能是 rejected").into());
+    if status != "rejected" {
+        return Err(AppError::invalid("bad_status", "status 只能是 rejected"));
     }
+    Ok(())
+}
+
+/// 人拒绝一条提案的那几句，从会话处理函数里原样挪出来：校验、store 的那一条 UPDATE。
+/// 会话调它时 `proposal` 是 None：不写审计行，没有这条提案也照样成（这两样都是从前的
+/// 样子，留着）。
+///
+/// 批准令牌的提议时带上提议的 id（0076）：
+///
+/// - 理由不传：请求体里的那一句是令牌写的，留在提议上，不当成这个人的话存进提案
+/// - UPDATE 之后重读这一行：确实是这个人这一次拒掉的，才写一条 `ontology_proposal.rejected`
+///   审计行（actor 是这个人，detail 指着提议，不带 `token_id`），回 true；检查之后、落笔
+///   之前被别人定了就什么都没写，回 false
+pub(crate) async fn proposal_rejection(
+    state: &AppState,
+    kb_id: Uuid,
+    user: &utopia_core::models::User,
+    req: &DecideProposalReq,
+    proposal: Option<Uuid>,
+) -> Result<bool, AppError> {
+    rejection_status(&req.status)?;
+    let reason = match proposal {
+        None => req.reason.as_deref(),
+        Some(_) => None,
+    };
     utopia_store::ontology::reject_proposal(
         &state.pool,
         kb_id,
         &req.section,
         &req.key,
-        req.reason.as_deref(),
+        reason,
         user.id,
     )
     .await?;
-    Ok(Json(json!({ "ok": true })))
+    let Some(proposal) = proposal else {
+        return Ok(true);
+    };
+    let row: Option<(Uuid, String, Option<Uuid>)> = sqlx::query_as(
+        "SELECT id, status, decided_by FROM ontology_proposals
+          WHERE kb_id = $1 AND section = $2 AND key = $3",
+    )
+    .bind(kb_id)
+    .bind(&req.section)
+    .bind(&req.key)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((id, _, _)) =
+        row.filter(|(_, status, by)| status == "rejected" && *by == Some(user.id))
+    else {
+        return Ok(false);
+    };
+    let _ = utopia_store::audit::record(
+        &state.pool,
+        Some(kb_id),
+        user.id,
+        "ontology_proposal.rejected",
+        "ontology_proposal",
+        Some(id),
+        json!({ "section": req.section, "key": req.key, "agent_proposal": proposal }),
+    )
+    .await;
+    Ok(true)
 }
 
 /// OWL 导入：先看会发生什么，确认了才落库。

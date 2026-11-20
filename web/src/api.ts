@@ -1533,6 +1533,9 @@ export interface AgentProposalFields {
     }[];
     kind_words?: string[];
   };
+  /** 令牌 agent 在这条提案上开着的提议（0076）：想让人拒绝它或采纳它。只在有开着的
+      提议时才有这个键；答在 Review 的 Agent 一档 */
+  agent_proposals?: AgentProposal[];
 }
 
 export interface OntologyProposals {
