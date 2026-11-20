@@ -80,3 +80,4 @@ it on completion. If this file and the artifacts disagree, the artifacts win
 - 2026-11-19 — build — T004 brief repaired: two test helpers that build ReviewItem added to its files (driver D119)
 - 2026-11-19 — build — wave 3 review passed; T005 Verify filter repaired to the mounted module path (wave 3 review observation)
 - 2026-11-19 — build — T005 brief repaired: review_token_revert_tests.rs added to its files for one schema assertion (driver D120); committed before re-activation
+- 2026-11-19 — build — T007 brief repaired: accepted deviations and known limits from the wave reviews are documented as landed (driver D121)
