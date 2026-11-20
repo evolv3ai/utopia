@@ -1063,6 +1063,7 @@ async fn the_mcp_endpoint_offers_exactly_the_review_tools_the_ruled_table_opens(
                 &editor_write,
                 vec![
                     "review_batch",
+                    "review_defect",
                     "review_item",
                     "review_keep",
                     "review_list",
@@ -1079,7 +1080,7 @@ async fn the_mcp_endpoint_offers_exactly_the_review_tools_the_ruled_table_opens(
                 .collect();
             review.sort_unstable();
             anyhow::ensure!(review == expected, "{who}: {review:?}");
-            // 写工具（分开、合并、撤回、成批）不是只读；别的 Review 工具都是
+            // 写工具（分开、合并、撤回、成批、对缺陷的提议）不是只读；别的 Review 工具都是
             for tool in tools
                 .iter()
                 .filter(|t| t["name"].as_str().is_some_and(|n| n.starts_with("review")))
@@ -1087,7 +1088,8 @@ async fn the_mcp_endpoint_offers_exactly_the_review_tools_the_ruled_table_opens(
                 let writes = tool["name"] == "review_keep"
                     || tool["name"] == "review_merge"
                     || tool["name"] == "review_revert"
-                    || tool["name"] == "review_batch";
+                    || tool["name"] == "review_batch"
+                    || tool["name"] == "review_defect";
                 if writes {
                     anyhow::ensure!(
                         tool["annotations"]["readOnlyHint"] == false,

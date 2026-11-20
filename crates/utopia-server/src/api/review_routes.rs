@@ -609,10 +609,41 @@ fn proposal_action(action: &str) -> Result<bool, utopia_core::AppError> {
 
 /// 批准一条提议时人的路径走到了哪里
 enum Approved {
-    /// 做完了；带着做出（或撤回）的那次合并
-    Done(Option<Uuid>),
+    /// 做完了；带着人的路径留下的东西
+    Done(Applied),
     /// 目标已经没法裁了：这一对已经定了、一侧并走了、合并已经撤回了。什么都没做
     Gone,
+}
+
+/// 批准时人的路径留下的东西，回答里**有值的才出现**：合并的三种带 `merge_id`（做出或
+/// 撤回的那次合并）；排下投递任务的（短语、规则）带 `job_id`；确认一条等点头的事实带
+/// `fact_id`。别的操作三样都没有
+#[derive(Default)]
+struct Applied {
+    merge_id: Option<Uuid>,
+    job_id: Option<i64>,
+    fact_id: Option<Uuid>,
+}
+
+impl Applied {
+    fn merge(merge_id: Option<Uuid>) -> Self {
+        Self {
+            merge_id,
+            ..Self::default()
+        }
+    }
+
+    /// 把有值的那几样放进一个回答（单条的响应体、批量里的一条结果）。`merge_id` 不在
+    /// 这里放：单条有值才带、批量每一条都带，两边照 M003 各放各的
+    fn put_into(&self, answer: &mut serde_json::Value) {
+        if let Some(job_id) = self.job_id {
+            answer["job_id"] = json!(job_id);
+            answer["queued"] = json!(true);
+        }
+        if let Some(fact_id) = self.fact_id {
+            answer["fact_id"] = json!(fact_id);
+        }
+    }
 }
 
 /// 人的路径报的错：是「目标没了」就折成 [`Approved::Gone`]，别的原样报出去
@@ -724,7 +755,7 @@ async fn approve_queue_merge(
     .await;
     crate::governance::after_human_decision(state, kb_id, &[review_id], Some("merge"), user_id)
         .await;
-    Ok(Approved::Done(merge_id))
+    Ok(Approved::Done(Applied::merge(merge_id)))
 }
 
 /// 提议的 payload 里存下的一个实体 id
@@ -789,7 +820,7 @@ async fn approve_manual_merge(
         json!({ "source": s.1, "target": t.1, "why": null, "agent_proposal": p.id }),
     )
     .await;
-    Ok(Approved::Done(Some(merge_id)))
+    Ok(Approved::Done(Applied::merge(Some(merge_id))))
 }
 
 /// 批准一条撤回的提议：照会话的 `revert_merge` 走——`resolution::revert_merge`、`merge.revert`
@@ -834,11 +865,98 @@ async fn approve_revert(
     )
     .await;
     crate::governance::after_revert(state, kb_id, merge_id, user_id).await;
-    Ok(Approved::Done(Some(merge_id)))
+    Ok(Approved::Done(Applied::merge(Some(merge_id))))
 }
 
-/// 答一条提议。回关成了什么（`approved` / `declined` / `superseded`），以及批准时做出
-/// 或撤回的那次合并。
+// ── 合并之外的提议（0076）：Review 其余各档里只能提议的操作 ──
+//
+// 这些提议的 payload 里存着那次调用的请求体原样（`request`）。批准就是拿这份请求体去跑
+// **人自己的那段代码**——每个开给令牌的处理函数都把会话的语句原样挪进了一个函数，会话
+// 调它时不带提议的 id，这里带上，它只在审计 detail 里多写一个 `agent_proposal`。actor 是
+// 批准的人；detail 里**不带** `token_id`，令牌当时写的理由也不当成这个人的话传进去。
+//
+// 跑之前先问目标还裁不裁得了：读的是带类型的行（`review_targets::target_state`），
+// 不认错误的原话。那是合并的三种的做法（`gone_or`），留给它们
+
+/// 提议存下的请求体，解回它那条路由的请求结构。解不回来是台账行坏了，不是请求错了
+fn stored_request<T: serde::de::DeserializeOwned>(
+    p: &utopia_store::token_agent_actions::TokenAgentAction,
+) -> Result<T, utopia_core::AppError> {
+    let request = p
+        .payload
+        .get("request")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    serde_json::from_value(request).map_err(|e| {
+        utopia_core::AppError::Other(anyhow::anyhow!(
+            "proposal {} holds a request that no longer reads as its route's body: {e}",
+            p.id
+        ))
+    })
+}
+
+/// 一条合并之外的提议要做的那个决定，连同解回来的请求体。每一档的任务在这里加一个变体，
+/// [`decision_of`] 里加一个操作名，[`approve_decision`] 里加一支
+enum Decision {
+    Defect(DecideDefectReq),
+}
+
+/// 这条提议的操作认不认得。`None` = 认不得：答的人拿到的还是从前那个 500
+fn decision_of(
+    p: &utopia_store::token_agent_actions::TokenAgentAction,
+) -> Result<Option<Decision>, utopia_core::AppError> {
+    Ok(match p.operation.as_str() {
+        "defect.decide" => Some(Decision::Defect(stored_request(p)?)),
+        _ => None,
+    })
+}
+
+/// 批准一条合并之外的提议。
+///
+/// - 先读目标此刻的样子（带上提议存下的请求体与指纹）：不在了或已经定了就是
+///   [`Approved::Gone`]，人的代码一行不跑
+/// - 还开着：跑人的代码，actor 是这个人。它报的错原样报出去（带的是人的 code），提议留着。
+///   只有「一条带守卫的语句或一个事务」的函数报的 `NotFound`——检查之后、落笔之前目标被
+///   别人定了——才折成 `Gone`：那种函数什么都没写
+async fn approve_decision(
+    state: &AppState,
+    kb_id: Uuid,
+    user: &utopia_core::models::User,
+    p: &utopia_store::token_agent_actions::TokenAgentAction,
+    decision: Decision,
+) -> Result<Approved, utopia_core::AppError> {
+    let request = p
+        .payload
+        .get("request")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let fingerprint = p.payload.get("fingerprint").filter(|f| !f.is_null());
+    let target = utopia_store::review_targets::target_state(
+        &state.pool,
+        kb_id,
+        &p.operation,
+        p.target_id,
+        &request,
+        fingerprint,
+    )
+    .await?;
+    if target != utopia_store::review_targets::TargetState::Open {
+        return Ok(Approved::Gone);
+    }
+    match decision {
+        // 缺陷的裁决是一条带守卫的 UPDATE：`NotFound` 就是输了竞争，什么都没写
+        Decision::Defect(req) => {
+            match defect_decision(state, kb_id, user, p.target_id, &req, Some(p.id)).await {
+                Ok(()) => Ok(Approved::Done(Applied::default())),
+                Err(utopia_core::AppError::NotFound) => Ok(Approved::Gone),
+                Err(e) => Err(e),
+            }
+        }
+    }
+}
+
+/// 答一条提议。回关成了什么（`approved` / `declined` / `superseded`），以及批准时人的
+/// 路径留下的东西（做出或撤回的那次合并、排下的任务、写下的事实）。
 ///
 /// - 这个库里没有这条提议（认不出的 id、别的库的、不是提议的台账行）：`NotFound`
 /// - 已经答过：`already_decided`，什么都不动
@@ -850,35 +968,39 @@ async fn approve_revert(
 async fn answer_proposal(
     state: &AppState,
     kb_id: Uuid,
-    user_id: Uuid,
+    user: &utopia_core::models::User,
     proposal_id: Uuid,
     approve: bool,
-) -> Result<(&'static str, Option<Uuid>), utopia_core::AppError> {
+) -> Result<(&'static str, Applied), utopia_core::AppError> {
     let _one_at_a_time = ANSWERING.lock().await;
     let pool = &state.pool;
+    let user_id = user.id;
     let p = utopia_store::token_agent_actions::proposal(pool, kb_id, proposal_id)
         .await?
         .ok_or(utopia_core::AppError::NotFound)?;
     if p.state.is_some() {
         return Err(already_answered());
     }
-    let (closed_as, merge_id) = if approve {
+    let (closed_as, applied) = if approve {
         let approved = match p.operation.as_str() {
             "review.merge" => approve_queue_merge(state, kb_id, user_id, &p).await?,
             "merge.manual" => approve_manual_merge(state, kb_id, user_id, &p).await?,
             "merge.revert" => approve_revert(state, kb_id, user_id, &p).await?,
-            other => {
-                return Err(utopia_core::AppError::Other(anyhow::anyhow!(
-                    "proposal {proposal_id} has an operation nobody can approve: {other}"
-                )))
-            }
+            other => match decision_of(&p)? {
+                Some(decision) => approve_decision(state, kb_id, user, &p, decision).await?,
+                None => {
+                    return Err(utopia_core::AppError::Other(anyhow::anyhow!(
+                        "proposal {proposal_id} has an operation nobody can approve: {other}"
+                    )))
+                }
+            },
         };
         match approved {
-            Approved::Done(merge_id) => ("approved", merge_id),
-            Approved::Gone => ("superseded", None),
+            Approved::Done(applied) => ("approved", applied),
+            Approved::Gone => ("superseded", Applied::default()),
         }
     } else {
-        ("declined", None)
+        ("declined", Applied::default())
     };
     let won = utopia_store::token_agent_actions::answer(
         pool,
@@ -886,7 +1008,7 @@ async fn answer_proposal(
         proposal_id,
         closed_as,
         user_id,
-        merge_id,
+        applied.merge_id,
     )
     .await?;
     if !won {
@@ -901,6 +1023,14 @@ async fn answer_proposal(
         } else {
             "agent.proposal.superseded"
         };
+        let mut detail = json!({ "agent_proposal": proposal_id, "operation": p.operation,
+                                 "reason": p.gate_reason, "proposed_by_token": p.token_name });
+        // 一对的两侧只有合并与撤回的提议才有：payload 里有才带，别的提议不写两个空键
+        for side in ["left", "right"] {
+            if let Some(name) = p.payload.get(side) {
+                detail[side] = name.clone();
+            }
+        }
         record_approval(
             state,
             kb_id,
@@ -908,13 +1038,11 @@ async fn answer_proposal(
             action,
             "agent_action",
             proposal_id,
-            json!({ "agent_proposal": proposal_id, "operation": p.operation,
-                    "reason": p.gate_reason, "left": p.payload.get("left"),
-                    "right": p.payload.get("right"), "proposed_by_token": p.token_name }),
+            detail,
         )
         .await;
     }
-    Ok((closed_as, merge_id))
+    Ok((closed_as, applied))
 }
 
 /// 人答令牌 agent 的一条提议（0076）。只收会话；要这个库的 Editor
@@ -926,13 +1054,13 @@ pub async fn agent_proposal_answer(
 ) -> ApiResult<Json<serde_json::Value>> {
     require_kb(&state, &user, kb_id, Role::Editor).await?;
     let approve = proposal_action(&body.action)?;
-    let (closed_as, merge_id) =
-        answer_proposal(&state, kb_id, user.id, proposal_id, approve).await?;
+    let (closed_as, applied) = answer_proposal(&state, kb_id, &user, proposal_id, approve).await?;
     state.emit_review(kb_id);
     let mut answer = json!({ "ok": true, "state": closed_as });
-    if let Some(merge_id) = merge_id {
+    if let Some(merge_id) = applied.merge_id {
         answer["merge_id"] = json!(merge_id);
     }
+    applied.put_into(&mut answer);
     Ok(Json(answer))
 }
 
@@ -975,11 +1103,15 @@ pub async fn agent_proposal_answers(
     let mut answered = 0usize;
     for &id in &body.ids {
         outcomes.push(
-            match answer_proposal(&state, kb_id, user.id, id, approve).await {
-                Ok((closed_as, merge_id)) => {
+            match answer_proposal(&state, kb_id, &user, id, approve).await {
+                Ok((closed_as, applied)) => {
                     answered += 1;
-                    json!({ "id": id, "state": closed_as, "merge_id": merge_id,
-                            "code": null, "error": null })
+                    // 五个键每一条都在；`job_id` / `queued` / `fact_id` 有值才多出来
+                    let mut outcome = json!({ "id": id, "state": closed_as,
+                                              "merge_id": applied.merge_id,
+                                              "code": null, "error": null });
+                    applied.put_into(&mut outcome);
+                    outcome
                 }
                 Err(e) => {
                     let (code, error) = outcome_error(&e);
@@ -1731,22 +1863,52 @@ pub struct DecideDefectReq {
 /// 人对一处本体缺陷表态。
 ///
 /// **两个出路而不是三个**：本体缺陷压根没看数据，所以没有「数据错了」这一条。
+///
+/// 写令牌也能调（0076）：它**只留一条提议**（`review_ops::propose_defect`），缺陷行不动，
+/// 等登录的人在 Review 里答。令牌在进下面这一段之前就离开了处理函数；会话照旧跑
+/// [`defect_decision`]，回答与审计行同从前一个字不差
 pub async fn decide_defect(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    caller: SessionOrToken,
     Path((kb_id, defect_id)): Path<(Uuid, Uuid)>,
     Json(req): Json<DecideDefectReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    let user = caller.user;
+    if let Some(token) = caller.pat {
+        let caller = ReviewCaller { user, token, kb_id };
+        let answer =
+            review_ops::propose_defect(&state, &caller, defect_id, &req.resolution).await?;
+        return Ok(Json(answer));
+    }
     require_kb(&state, &user, kb_id, Role::Editor).await?;
+    defect_decision(&state, kb_id, &user, defect_id, &req, None).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// 人对一处本体缺陷表态的那几句，从会话处理函数里原样挪出来：校验、带守卫的 UPDATE、
+/// 审计行、刷新。会话调它时 `proposal` 是 None，审计 detail 与从前一个键不差；批准令牌的
+/// 提议时带上提议的 id，detail 里多一个 `agent_proposal`——这次裁决是这个人的，也看得出
+/// 是从哪条提议来的。actor 两种情形都是这个人，detail 里不放 `token_id`
+async fn defect_decision(
+    state: &AppState,
+    kb_id: Uuid,
+    user: &utopia_core::models::User,
+    defect_id: Uuid,
+    req: &DecideDefectReq,
+    proposal: Option<Uuid>,
+) -> Result<(), utopia_core::AppError> {
     if !matches!(req.resolution.as_str(), "fixed" | "accepted") {
         return Err(utopia_core::AppError::invalid(
             "bad_resolution",
             "resolution 只能是 fixed 或 accepted",
-        )
-        .into());
+        ));
     }
     utopia_store::reasoning::decide_defect(&state.pool, kb_id, defect_id, &req.resolution, user.id)
         .await?;
+    let mut detail = json!({ "resolution": req.resolution });
+    if let Some(proposal) = proposal {
+        detail["agent_proposal"] = json!(proposal);
+    }
     let _ = utopia_store::audit::record(
         &state.pool,
         Some(kb_id),
@@ -1754,11 +1916,11 @@ pub async fn decide_defect(
         "defect.decided",
         "ontology_defect",
         Some(defect_id),
-        json!({ "resolution": req.resolution }),
+        detail,
     )
     .await;
     state.emit_review(kb_id);
-    Ok(Json(json!({ "ok": true })))
+    Ok(())
 }
 
 /// 跑一遍推理（R1）。

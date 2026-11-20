@@ -7,7 +7,9 @@
 //! 先过服务端的闸门，被留下的不落地、只留一条等人答的提议；`review_revert` 撤回一次
 //! 合并——令牌 agent 做的直接撤，人或治理 agent 做的只留提议，给 `batch_id` 就是把一批
 //! 做出的合并整批撤回；`review_batch` 一次裁最多 50 对重复项，每一对走的就是单笔的那条路，
-//! 服务端发一个 `batch_id`。**没有哪个工具能答提议。**
+//! 服务端发一个 `batch_id`。裁定表里只能提议的操作各有一个工具，`review_defect`（对一处
+//! 本体缺陷表态）是第一个：调用什么都不改，只留一条等人答的提议。
+//! **没有哪个工具能答提议。**
 //!
 //! **这里只做两件事：把参数递给 `review_ops`，把它的回答变成工具结果。** 授权、裁定表、
 //! 台账、审计都在 `review_ops` 里面，REST 的令牌分支调的是同一批函数——所以同一枚令牌
@@ -34,15 +36,16 @@ const KEEP: &str = "review_keep";
 const MERGE: &str = "review_merge";
 const REVERT: &str = "review_revert";
 const BATCH: &str = "review_batch";
+const DEFECT: &str = "review_defect";
 
 /// 这个名字归不归这里管。归这里的，`mcp.rs` 不再拿它去问 `is_exposed`
 pub(super) fn serves(name: &str) -> bool {
-    matches!(name, LIST | ITEM | KEEP | MERGE | REVERT | BATCH)
+    matches!(name, LIST | ITEM | KEEP | MERGE | REVERT | BATCH | DEFECT)
 }
 
 /// 写工具：只列给写得了的调用方，标注里 `readOnlyHint` 是 false
 fn writes(name: &str) -> bool {
-    matches!(name, KEEP | MERGE | REVERT | BATCH)
+    matches!(name, KEEP | MERGE | REVERT | BATCH | DEFECT)
 }
 
 /// 工具定义，OpenAI 的形状——`chat::check_call` 认的就是这个形状，参数守卫与别的工具
@@ -350,6 +353,42 @@ fn definitions() -> Value {
                     "required": ["ids", "action"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": DEFECT,
+                "description": "Propose that a person resolve one open ontology defect, an item \
+                    of the \"defects\" (Ontology) section of review_list, as \"fixed\" (the \
+                    ontology was corrected) or \"accepted\" (it was looked at and is left as it \
+                    is). The call changes nothing: the defect stays open and the call waits as \
+                    a proposal, recorded under the token's owner and the token's name, that a \
+                    signed-in editor answers in the Review tab; only when that person approves \
+                    it is the defect resolved, as that person's decision. The result is {ok, \
+                    outcome: \"proposed\", action_id, reason: \"propose_only\", explanation}. \
+                    Repeating the call while its proposal is open returns the same proposal \
+                    with code already_proposed. A resolution other than fixed or accepted is \
+                    refused with code bad_resolution; a defect that is already resolved with \
+                    code already_decided; an id that is unknown, or of another knowledge base, \
+                    with code not_found. Proposals do not count toward the limit on finalized \
+                    writes. No tool answers a proposal.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "description": "Defect id (uuid) of an item of the \"defects\" \
+                                section from review_list."
+                        },
+                        "resolution": {
+                            "type": "string",
+                            "description": "\"fixed\" or \"accepted\"."
+                        }
+                    },
+                    "required": ["id", "resolution"]
+                }
+            }
         }
     ])
 }
@@ -367,6 +406,11 @@ fn annotations(name: &str) -> Value {
         // 一批里落地的合并同样改事实与实体
         BATCH => {
             json!({ "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false })
+        }
+        // 只能提议的工具：这一次调用什么都不改，只留一条提议——不是只读（台账多一行），
+        // 也不破坏什么
+        DEFECT => {
+            json!({ "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false })
         }
         _ => json!({ "readOnlyHint": true }),
     }
@@ -653,6 +697,20 @@ pub(super) async fn call(
                 Err(refused) => return refused,
             };
             review_ops::batch(state, caller, &ids, action.trim(), rationale).await
+        }
+        DEFECT => {
+            // 参数就是那条路由的 id 与请求体的字段；`resolution` 认不认得由操作说
+            // （`bad_resolution`，与 REST 同一个 code），这里原样递下去
+            let Some(id) = args["id"]
+                .as_str()
+                .and_then(|s| s.trim().parse::<Uuid>().ok())
+            else {
+                return bad_argument(name, "id", "a uuid returned by review_list");
+            };
+            let Some(resolution) = args["resolution"].as_str() else {
+                return bad_argument(name, "resolution", "\"fixed\" or \"accepted\"");
+            };
+            review_ops::propose_defect(state, caller, id, resolution).await
         }
         // `serves` 之外的名字到不了这里；到了也只说没有这个工具，不去碰库
         _ => {

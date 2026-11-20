@@ -3,9 +3,9 @@ id: T002
 title: Open the defect decision to a token as a proposal over REST and MCP, answered by a person
 wave: 1
 deps: [T001]
-status: pending
-agent: null
-base: null
+status: done
+agent: build_T002
+base: a22445829be2c81f3cfaf461a1e81cd1bb115246
 worktree: null
 task_branch: null
 files:
@@ -80,3 +80,43 @@ Heavy: yes
 ## Log
 
 - 2026-11-20 — created by planner
+- 2026-11-20 — coder build_T002: preflight clean (paths named in Context, Approach and the Interface contract exist at base `a224458` or are declared in `files`; SC1 and SC2 exist in INTENT.md; T001's signatures used as landed; every Verify path exists or is declared).
+- 2026-11-20 — coder build_T002: implemented.
+  - `review_ops.rs`: `target_open` (`Missing` 404, `Decided` 409 `already_decided`), `land_proposal` (lands only when `agent_policy(row, None)` is `Proposed`, else `token_operation_not_open`; label and fingerprint from `review_targets`; calls neither `guard` nor the breaker), `propose_defect`; `explanation` gains a `propose_only` sentence.
+  - `review_routes.rs`: `decide_defect` takes `SessionOrToken`; the session statements moved into `defect_decision(state, kb_id, user, defect_id, req, proposal)`. `answer_proposal` takes the person (`&User`), returns `(state, Applied)` and gains the `defect.decide` arm through `decision_of` / `approve_decision` (reads `target_state` with the stored `request` and `fingerprint` first; `Missing` or `Decided` is `superseded`; a typed `NotFound` from the guarded UPDATE is `superseded`; any other error is returned and leaves the proposal open). Unknown operation still answers 500. Decline and supersede audit detail carries `left` / `right` only when the payload has them. Single and bulk answers gain `job_id` + `queued` and `fact_id` only when set (none is set by this task).
+  - `review_tools.rs`: tool `review_defect` (`id`, `resolution`) in `serves`, `writes`, `definitions`, `annotations`, `call`.
+  - `mod.rs`: the support module and seven family test modules declared `#[cfg(test)]`; one comment on the defect route.
+  - Tests: new `review_token_write_support.rs` (`seeded`, `post`, `answer`, `tools_list`, `tool_call`, `keys`, `ensure_tool_refused`, `snapshot`, `row`, `ledger`, `open_proposals`, `audits` / `Audit`, re-export of `Fx`); new `review_token_defect_tests.rs` (six tests); the seven moved 401 tests in `review_token_fact_tests.rs` (two), `_conflict_`, `_violation_`, `_errata_`, `_alignment_`, `_mapping_tests.rs`; the eight entries removed from the `writes` array of the shared 401 test; `review_defect` added to the expected list and the `writes` expression in `review_mcp_reads_tests.rs`.
+  - No migration, no dependency, no `AgentOperation` / `AppError` variant, no item struct field; `CURRENT_SCHEMA_VERSION` untouched.
+- 2026-11-20 — coder build_T002: readings taken where the contract is silent (none changes a contract shape). (1) The token branch's `bad_resolution` message is new English text ("resolution must be fixed or accepted"); the session keeps its existing message; the code is the same. (2) `require_kb` stays in the session handler; `defect_decision` holds the statements after it (validation, store call, audit, refresh). (3) `Approved::Done` now carries a struct `Applied { merge_id, job_id, fact_id }`; the three merge arms construct it with `Applied::merge(..)` and behave as before. `job_id` is typed `i64` (the `jobs.id` type). (4) `defect.decide` proposals carry `action` = the resolution and no `why` (the route's body has no rationale). (5) `target_open`'s 409 message is "This item was already decided." (6) The support module also exposes `seeded`, `answer`, `keys` and `row` (the target's own row for E1) beyond the helpers the contract lists. (7) The seven moved 401 tests use a bare `Fx` without the section seed: the request targets a random id, as in the original.
+- 2026-11-20 — coder build_T002: commands, primary worktree, `CARGO_TARGET_DIR=C:/Users/Owner/.gsd-path/cargo-target/coder-m004`, own databases `m004_t002_dev` and `m004_t002_dev_store` (created and migrated, "数据库迁移完成"), `UTOPIA_TEST_REQUIRE_DB=1`:
+  - The eight tests the Verify names → the Verify's `grep -c` counts 8 `... ok`.
+  - The Verify's module-filter run (21 filters) → `test result: ok. 110 passed; 0 failed; 819 filtered out`. Each of the 21 filters matches at least one test in `cargo test -p utopia-server -- --list` (the seven new modules: defect 6, fact 2, conflict 1, violation 1, errata 1, alignment 1, mapping 1).
+  - `cargo test -p utopia-server` (whole crate) → `test result: ok. 927 passed; 0 failed; 2 ignored`. No test outside this task's files failed.
+  - `cargo test -p utopia-store --test a_token_proposal_waits_for_a_person` → `ok. 6 passed; 0 failed`.
+  - `cargo fmt --all --check` → exit 0 (after one `cargo fmt --all`, which changed only this task's files).
+  - `cargo clippy --workspace --all-targets -- -D warnings` → first run two errors in the new test files (`needless_lifetimes`, `type_complexity`); fixed; exit 0. The seven new test modules were rerun after that fix: `ok. 13 passed; 0 failed`; the whole-crate run above predates this two-line test-file fix.
+  - The full Verify command itself was not run (it names the orchestrator's database); each of its steps was run as above against the coder's database.
+  - No deviation from the brief or the interface contract.
+- 2026-11-20 — orchestrator Verify (sidecar gsd-path-verify/task-t002-verify): pass, exit 0; output tail:
+  ```
+  test api::review_totals_tests::alignment_items_with_one_timestamp_are_each_listed_once_across_pages ... ok
+  test api::review_token_revert_tests::a_token_revert_of_a_persons_or_the_governors_merge_lands_a_proposal_and_reverts_nothing ... ok
+  test api::review_totals_tests::an_empty_queue_has_total_0_and_an_offset_past_the_end_returns_no_items_with_the_true_total ... ok
+  test api::review_token_revert_tests::review_revert_is_listed_only_to_a_write_token_of_an_editor_and_says_what_a_revert_does_not_recall ... ok
+  test api::review_token_revert_tests::a_token_reverts_its_own_merge_over_the_api_and_over_mcp_and_a_second_revert_answers_already_decided ... ok
+  test api::review_token_reads_tests::a_token_receives_each_sections_items_in_the_session_order ... ok
+  test api::review_token_guard_tests::the_second_revert_by_a_person_within_seven_days_makes_the_tokens_merge_and_revert_proposals_and_its_keep_still_finalizes ... ok
+  test api::review_totals_tests::the_seed_puts_items_in_every_one_of_the_thirteen_sections ... ok
+  test api::review_token_guard_tests::the_limit_and_the_breaker_hold_for_the_queue_merge_the_manual_merge_batch_members_and_the_mcp_tools ... ok
+  test api::review_token_merge_tests::each_of_the_six_hold_reasons_lands_a_proposal_that_names_it_for_the_queue_merge_and_the_manual_merge ... ok
+  test api::review_token_reads_tests::a_tokens_total_counts_the_listed_rows_and_counts_keep_their_values ... ok
+  test api::review_totals_tests::the_total_of_every_list_queue_is_the_number_of_rows_its_pages_return ... ok
+  test api::review_token_revert_tests::a_token_reverts_any_token_agents_merge_of_the_base_and_an_unknown_or_foreign_merge_id_is_not_found ... ok
+  test api::review_token_revert_tests::after_a_token_merge_and_its_revert_every_fact_entity_and_evidence_row_is_as_before ... ok
+  test api::review_token_reads_tests::a_token_whose_kb_ids_exclude_the_base_gets_404_on_every_review_read ... ok
+  test api::review_token_merge_tests::of_a_person_the_governor_and_a_token_deciding_one_pair_exactly_one_is_applied_and_the_losing_token_gets_already_decided ... ok
+  test api::review_token_reads_tests::a_token_page_size_is_clamped_and_an_offset_at_or_past_the_total_returns_no_items ... ok
+  
+  test result: ok. 110 passed; 0 failed; 0 ignored; 0 measured; 819 filtered out; finished in 23.46s
+  ```

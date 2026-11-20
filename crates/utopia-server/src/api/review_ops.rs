@@ -14,7 +14,9 @@
 //! 合并什么都不改，只留一条等人答的提议；撤回一次合并（[`revert_merge`]）——令牌 agent
 //! 做的合并直接撤，人或治理 agent 做的只留提议。还有成批的两样：一次裁最多 50 对
 //! 重复项（[`batch`]），每一对走的就是上面的单笔函数；以及把一批做出的合并整批撤回
-//! （[`revert_batch`]）。别的裁决都还关着——读得到「等你点头」不等于能替人点头。
+//! （[`revert_batch`]）。裁定表里「只能提议」的操作走 [`target_open`] 与 [`land_proposal`]：
+//! 什么都不改，只留一条等人答的提议——本体缺陷（[`propose_defect`]）是第一种。
+//! 别的裁决都还关着——读得到「等你点头」不等于能替人点头。
 //!
 //! 每一笔要落地的写入之前还有两道，都只在 [`guard`] 一处：限速（一枚令牌在一个库里
 //! 一小时最多落地 [`TOKEN_WRITES_PER_HOUR`] 笔，过了答 `agent_rate_limited`）与熔断器
@@ -24,7 +26,10 @@ use serde_json::json;
 use utopia_core::models::{ReviewSummary, Role, User};
 use utopia_core::AppError;
 use utopia_store::execution_gate::{agent_policy, AgentOperation, AgentOutcome, Hold};
-use utopia_store::token_agent_actions::{TokenAgentAction, TokenWrite, TokenWriteOutcome};
+use utopia_store::review_targets::TargetState;
+use utopia_store::token_agent_actions::{
+    Proposal, TokenAgentAction, TokenWrite, TokenWriteOutcome,
+};
 use uuid::Uuid;
 
 use crate::state::AppState;
@@ -437,6 +442,8 @@ fn explanation(action: &TokenAgentAction) -> String {
         "breaker" => {
             "this token only proposes merges and reverts on this knowledge base for now".to_string()
         }
+        // 裁定表里「只能提议」的那些操作：不是闸门拦的，是这种决定本来就归人
+        "propose_only" => "a token only proposes this decision; a person makes it".to_string(),
         // 撤回的两种「只能提议」不是闸门说的，是「这次合并是谁做的」说的
         "merge_by_person" => {
             "a person made this merge, and a token does not revert a person's merge".to_string()
@@ -503,6 +510,156 @@ pub(crate) async fn merge_pair(
     .await?;
     state.emit_review(caller.kb_id);
     Ok(merge_answer(&done))
+}
+
+// ───────────────────── Review 其余各档：只能提议的操作（0076） ─────────────────────
+//
+// 裁定表里「只能提议」的每一种操作都是同一个样子：过写的检查、照人的路由校验请求体、
+// 问目标还开不开着、留一条提议。后两步是下面两个通用函数；每一档只写自己的那一个
+// 函数（校验自己的请求体、说出自己的操作名）。**这里没有一条路径会改图**：留提议只写
+// 台账行与 `agent.proposal` 审计行，批准时跑的是人自己的代码，在 `review_routes` 里
+
+/// 目标对这种操作而言还开着才往下走：这个库里没有（别的库的 id 也算）是 `NotFound`，
+/// 已经定了是 `already_decided`。读的是带类型的行（`review_targets::target_state`），
+/// 不认任何一句错误的原话。`request` 是请求体原样
+pub(crate) async fn target_open(
+    state: &AppState,
+    caller: &ReviewCaller,
+    operation: &str,
+    target_id: Uuid,
+    request: &serde_json::Value,
+) -> Result<(), AppError> {
+    match utopia_store::review_targets::target_state(
+        &state.pool,
+        caller.kb_id,
+        operation,
+        target_id,
+        request,
+        None,
+    )
+    .await?
+    {
+        TargetState::Open => Ok(()),
+        TargetState::Missing => Err(AppError::NotFound),
+        TargetState::Decided => Err(AppError::CodedConflict {
+            code: "already_decided",
+            message: "This item was already decided.".into(),
+        }),
+    }
+}
+
+/// 留一条只能提议的提议，回令牌看到的那个回答。
+///
+/// - **先问裁定表**：`row` 这一行给的不是「只能提议」就不落（`token_operation_not_open`）——
+///   表要是哪天改了，这里拒绝，而不是照旧留一条提议
+/// - 目标的那句话（`target_label`）与指纹（矛盾、本体提案才有）从 store 取，存进 payload，
+///   连同请求体原样（`request`）、动作（`action`）、理由（`why`）
+/// - **不调 [`guard`]**：提议不是落地的写入，不算进限速，也不问熔断器（E5）——所以这里
+///   永远答不出 `agent_rate_limited`
+/// - 同一个库、同一种操作、同一个目标已经有一条开着的：什么都不写，回那一条的 id，
+///   带 `code: already_proposed`
+///
+/// 调用方先过 [`authorize_write`]、校验请求体、问 [`target_open`]，再到这里
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn land_proposal(
+    state: &AppState,
+    caller: &ReviewCaller,
+    row: AgentOperation,
+    operation: &'static str,
+    target_kind: &'static str,
+    target_id: Uuid,
+    target_key: &str,
+    request: serde_json::Value,
+    action: Option<&str>,
+    rationale: Option<&str>,
+) -> Result<serde_json::Value, AppError> {
+    if agent_policy(row, None) != AgentOutcome::Proposed {
+        return Err(not_open());
+    }
+    let pool = &state.pool;
+    let label = utopia_store::review_targets::target_label(
+        pool,
+        caller.kb_id,
+        operation,
+        target_id,
+        &request,
+    )
+    .await?;
+    let fingerprint =
+        utopia_store::review_targets::fingerprint(pool, caller.kb_id, operation, target_id).await?;
+    let why = rationale.map(str::trim).filter(|s| !s.is_empty());
+    // 有值的键才出现：没有动作的操作没有 `action`，没给理由就没有 `why`
+    let mut payload = json!({ "request": request, "target_label": label });
+    if let Some(action) = action {
+        payload["action"] = json!(action);
+    }
+    if let Some(why) = why {
+        payload["why"] = json!(why);
+    }
+    if let Some(fingerprint) = fingerprint {
+        payload["fingerprint"] = fingerprint;
+    }
+    let done = utopia_store::token_agent_actions::propose(
+        pool,
+        &token_write(caller, why, None, false),
+        &Proposal {
+            operation,
+            target_kind,
+            target_id,
+            target_key,
+            payload,
+        },
+    )
+    .await?;
+    state.emit_review(caller.kb_id);
+    let action = &done.action;
+    let mut answer = json!({
+        "ok": true,
+        "outcome": action.outcome,
+        "action_id": action.id,
+        "reason": action.gate_reason,
+        "explanation": explanation(action),
+    });
+    if done.existing {
+        answer["code"] = json!("already_proposed");
+    }
+    Ok(answer)
+}
+
+/// 经令牌对一处本体缺陷表态：**只留提议**（裁定表的 Defect 一行）。缺陷行不动，
+/// 等登录的人在 Review 里答；批准时跑的是人自己的那段代码（`review_routes`）。
+///
+/// 次序是契约：写的检查；请求体（`resolution` 只能是 fixed / accepted，否则
+/// `bad_resolution`，与人的路由同一个 code）；目标（没有是 404，已经裁过是
+/// `already_decided`）；留提议。前三步哪一步没过都一行不写
+pub(crate) async fn propose_defect(
+    state: &AppState,
+    caller: &ReviewCaller,
+    defect_id: Uuid,
+    resolution: &str,
+) -> Result<serde_json::Value, AppError> {
+    authorize_write(state, caller).await?;
+    if !matches!(resolution, "fixed" | "accepted") {
+        return Err(AppError::invalid(
+            "bad_resolution",
+            "resolution must be fixed or accepted",
+        ));
+    }
+    let request = json!({ "resolution": resolution });
+    target_open(state, caller, "defect.decide", defect_id, &request).await?;
+    land_proposal(
+        state,
+        caller,
+        AgentOperation::Defect,
+        "defect.decide",
+        "ontology_defect",
+        defect_id,
+        &defect_id.to_string(),
+        request,
+        Some(resolution),
+        None,
+    )
+    .await
 }
 
 /// 一次拒绝在 REST 上的样子：code 与那一句话，**取自 `ApiErr` 渲染出来的响应本身**。

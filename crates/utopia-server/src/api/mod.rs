@@ -597,6 +597,7 @@ pub fn router(state: AppState, cfg: &AppConfig) -> Router {
             "/kbs/{id}/review/violations/{violation_id}",
             post(review_routes::decide_violation),
         )
+        // 写令牌也能调，但只留一条等人答的提议（0076）
         .route(
             "/kbs/{id}/review/defects/{defect_id}",
             post(review_routes::decide_defect),
@@ -737,3 +738,28 @@ mod review_token_batch_tests;
 
 #[cfg(test)]
 mod review_token_guard_tests;
+
+// Review 其余各档的令牌写入（0076）：一档一个测试模块，共用的夹具在 support 里
+#[cfg(test)]
+mod review_token_write_support;
+
+#[cfg(test)]
+mod review_token_defect_tests;
+
+#[cfg(test)]
+mod review_token_fact_tests;
+
+#[cfg(test)]
+mod review_token_conflict_tests;
+
+#[cfg(test)]
+mod review_token_violation_tests;
+
+#[cfg(test)]
+mod review_token_errata_tests;
+
+#[cfg(test)]
+mod review_token_alignment_tests;
+
+#[cfg(test)]
+mod review_token_mapping_tests;

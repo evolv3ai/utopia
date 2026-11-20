@@ -1093,46 +1093,13 @@ async fn a_token_cannot_nod_and_every_review_write_outside_the_ruled_table_answe
                 "nod {action}: {status} {body}"
             );
         }
-        // 回答治理 agent 的建议：同样没开给令牌（批量已经开给了编辑者的写令牌，不在这里）
-        let writes = [
-            (
-                format!("/kbs/{kb}/review/agent/{}", agent[0]),
-                json!({ "action": "keep" }),
-            ),
-            // 别的档的裁决路由也一条没开
-            (
-                format!("/kbs/{kb}/review/violations/{}", Uuid::now_v7()),
-                json!({ "action": "dismiss" }),
-            ),
-            (
-                format!("/kbs/{kb}/review/defects/{}", Uuid::now_v7()),
-                json!({ "action": "dismiss" }),
-            ),
-            (
-                format!("/kbs/{kb}/review/errata/{}", Uuid::now_v7()),
-                json!({ "action": "approve" }),
-            ),
-            (
-                format!("/kbs/{kb}/review/alignment/rules/{}", Uuid::now_v7()),
-                json!({ "action": "approve" }),
-            ),
-            (
-                format!("/kbs/{kb}/review/mappings/{}", Uuid::now_v7()),
-                json!({ "status": "confirmed" }),
-            ),
-            (
-                format!("/kbs/{kb}/conflicts/{}", Uuid::now_v7()),
-                json!({ "action": "keep_both" }),
-            ),
-            (
-                format!("/kbs/{kb}/facts/{}/confirm", Uuid::now_v7()),
-                json!({}),
-            ),
-            (
-                format!("/kbs/{kb}/facts/{}/reject", Uuid::now_v7()),
-                json!({}),
-            ),
-        ];
+        // 回答治理 agent 的建议：同样没开给令牌（批量已经开给了编辑者的写令牌，不在这里）。
+        // 别的档的裁决路由各在自己那一档的测试模块里（`review_token_*_tests`）：开给令牌的
+        // 那一档在那里钉新的行为，还没开的在那里钉同一个 401
+        let writes = [(
+            format!("/kbs/{kb}/review/agent/{}", agent[0]),
+            json!({ "action": "keep" }),
+        )];
         for (path, body) in &writes {
             let (status, answer) = f.call(&token, "POST", path, Some(body.clone())).await?;
             anyhow::ensure!(
