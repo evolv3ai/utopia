@@ -171,8 +171,8 @@ Open questions
 Goal: An agent can call every remaining Review operation of the ruled authority table over the token API and MCP, each landing as a finalized change or as a proposal exactly as ruled, completing the program with its full documentation.
 Depends on: [M001, M002, M003]
 Surfaces: token-authenticated HTTP API, MCP endpoint, Review tab in the web app (Agent History and the item cards of each section)
-Status: active
-Archive: null
+Status: shipped
+Archive: .project/archive/004-remaining-review-writes
 Integrated: null
 
 Scope: in

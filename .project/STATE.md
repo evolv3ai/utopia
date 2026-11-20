@@ -2,14 +2,14 @@
 pipeline: gsd-path/v2
 project: utopia
 milestone: remaining-review-writes
-phase: ship
+phase: shipped
                     # inspect only for brownfield; greenfield starts at define
                     # roadmap only in program flow (CHARTER.md exists)
-status: active
+status: done
 branch: gsd-path/M004
                     # the router rebinds before any next-milestone file change
                     # the bound branch is never main; ship integrates it there
-archive: null
+archive: .project/archive/004-remaining-review-writes
 integration_default: direct
 integration: direct
 integration_source: default
@@ -110,3 +110,5 @@ it on completion. If this file and the artifacts disagree, the artifacts win
 - 2026-11-20 — plan — patch plan approved
 - 2026-11-20 — build — build started
 - 2026-11-20 — ship — build done; final review pending
+- 2026-11-20 — ship — final gate passed; shipping approval pending
+- 2026-11-20 — shipped — archive preflight passed; shipment recorded
