@@ -2,10 +2,10 @@
 pipeline: gsd-path/v2
 project: utopia
 milestone: remaining-review-writes
-phase: build
+phase: plan
                     # inspect only for brownfield; greenfield starts at define
                     # roadmap only in program flow (CHARTER.md exists)
-status: blocked
+status: done
 branch: gsd-path/M004
                     # the router rebinds before any next-milestone file change
                     # the bound branch is never main; ship integrates it there
@@ -96,3 +96,8 @@ it on completion. If this file and the artifacts disagree, the artifacts win
 - 2026-11-20 — plan — plan approved
 - 2026-11-20 — build — build started
 - 2026-11-20 — build — build blocked before any dispatch: Delegated (driver D131, D132, D134) rulings correct INTENT.md edge E19 and the reading of SC2 for an ontology proposal; no task was activated
+- 2026-11-20 — define — build intent corrections requested
+- 2026-11-20 — define — build recovery: {"base": "1d99f6221c759abffd266c6f3f712c2ca3b291df", "branch": "gsd-path/M004", "kind": "define", "source": "build"}
+- 2026-11-20 — define — milestone intent approved
+- 2026-11-20 — plan — planning started
+- 2026-11-20 — plan — plan approved
