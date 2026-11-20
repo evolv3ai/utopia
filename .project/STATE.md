@@ -1,15 +1,15 @@
 ---
 pipeline: gsd-path/v2
 project: utopia
-milestone: gated-merge-proposals-revert-batch
-phase: shipped
+milestone: remaining-review-writes
+phase: plan
                     # inspect only for brownfield; greenfield starts at define
                     # roadmap only in program flow (CHARTER.md exists)
 status: done
-branch: gsd-path/M003
+branch: gsd-path/M004
                     # the router rebinds before any next-milestone file change
                     # the bound branch is never main; ship integrates it there
-archive: .project/archive/003-gated-merge-proposals-revert-batch
+archive: null
 integration_default: direct
 integration: direct
 integration_source: default
@@ -84,3 +84,13 @@ it on completion. If this file and the artifacts disagree, the artifacts win
 - 2026-11-19 — ship — build done; final review pending
 - 2026-11-20 — ship — final gate passed; shipping approval pending
 - 2026-11-20 — shipped — archive preflight passed; shipment recorded
+- 2026-11-20 — inspect — next milestone started: M004 remaining-review-writes bound at d5d2356d3f9e3fc09123da6fd20a51349d5627dc after the M003 landing
+- 2026-11-20 — inspect — inspection artifacts passed
+- 2026-11-20 — define — definition started
+- 2026-11-20 — define — milestone intent approved
+- 2026-11-20 — research — research started
+- 2026-11-20 — research — research evidence passed: manifest .project/research/RESEARCH.md; dispatched domain, stack, pitfalls; skipped similar; 6 questions
+- 2026-11-20 — decide — decision synthesis started
+- 2026-11-20 — decide — synthesis validated: .project/research/SYNTHESIS.md (14 decisions; one user item ruled, driver D132)
+- 2026-11-20 — plan — planning started
+- 2026-11-20 — plan — plan approved
