@@ -798,3 +798,7 @@ mod review_token_governor_tests;
 // 开着的提议挂在各档的条目上、左栏的数、Agent History 说出目标（0076）
 #[cfg(test)]
 mod review_item_proposals_tests;
+
+// 整张裁定表一行一行走过 REST 与 MCP：结果、拒绝、提议、批准、署名（0076）
+#[cfg(test)]
+mod review_token_table_tests;

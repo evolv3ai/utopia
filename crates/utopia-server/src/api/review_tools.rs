@@ -395,9 +395,10 @@ fn definitions() -> Value {
                     agent_rate_limited for each pair past the limit of 200 finalized writes \
                     per knowledge base in a rolling hour); decided counts the applied pairs. One refused pair does not stop the others. An id \
                     given twice gets, the second time, the answer its state then gives. An \
-                    empty list or more than 50 ids is refused as a whole with code batch_size, \
-                    and so is an action other than merge or keep; nothing is changed. To undo \
-                    the merges of a batch, call review_revert with its batch_id.",
+                    empty list or more than 50 ids is refused as a whole with code batch_size; \
+                    an action other than merge or keep is refused as a whole with no code, only \
+                    a message. Either way nothing is changed. To undo the merges of a batch, \
+                    call review_revert with its batch_id.",
                 "parameters": {
                     "type": "object",
                     "properties": {
