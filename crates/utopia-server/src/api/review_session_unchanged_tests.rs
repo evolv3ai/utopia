@@ -466,3 +466,238 @@ async fn a_session_editor_gets_todays_duplicates_overview_keep_merge_and_batch_r
     f.cleanup().await?;
     result
 }
+
+/// 某一次合并上某个动作的审计行（`target_kind` 是 `merge`）：actor 与 detail
+async fn merge_audits(
+    f: &Fx,
+    action: &str,
+    merge: Uuid,
+) -> anyhow::Result<Vec<(Option<Uuid>, Value)>> {
+    Ok(sqlx::query_as(
+        "SELECT actor_id, detail FROM audit_events
+          WHERE kb_id = $1 AND action = $2 AND target_kind = 'merge' AND target_id = $3",
+    )
+    .bind(f.kb)
+    .bind(action)
+    .bind(merge)
+    .fetch_all(&f.pool)
+    .await?)
+}
+
+/// 手动合并、撤回、批量三个处理函数后来也换了提取器（令牌的合并、撤回、成批，0076）。
+/// 这里钉住会话在这三条路上的回答与审计行：手动合并回 `{merge_id}`，撤回回 `{ok}`，
+/// 批量的上限仍是 500（501 条是 `batch_size`），哪一样都不进令牌 agent 的台账
+/// （SC11 / E24）
+#[tokio::test]
+async fn a_session_editors_manual_merge_revert_and_500_id_batch_answer_as_before(
+) -> anyhow::Result<()> {
+    let Some(f) = Fx::new(false).await? else {
+        return Ok(());
+    };
+    let result = async {
+        let kb = f.kb;
+        let source = f.entity(f.person_type, "Chen Jing (HR)").await?;
+        let target = f.entity(f.person_type, "Chen Jing").await?;
+        let merged_into = |id: Uuid| {
+            let pool = f.pool.clone();
+            async move {
+                let into: Option<Uuid> =
+                    sqlx::query_scalar("SELECT merged_into FROM entities WHERE id = $1")
+                        .bind(id)
+                        .fetch_one(&pool)
+                        .await?;
+                anyhow::Ok(into)
+            }
+        };
+
+        // 手动合并：不过闸门，直接落地，回做出的那次合并
+        let (status, body) = f
+            .call(
+                &f.editor_session,
+                "POST",
+                &format!("/kbs/{kb}/entities/merge"),
+                Some(json!({ "source": source, "target": target, "rationale": "same person" })),
+            )
+            .await?;
+        anyhow::ensure!(status == StatusCode::OK, "manual merge: {status} {body}");
+        anyhow::ensure!(keys(&body) == ["merge_id"], "manual merge body: {body}");
+        let merge_id: Uuid = body["merge_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("no merge_id in {body}"))?
+            .parse()?;
+        anyhow::ensure!(merged_into(source).await? == Some(target));
+        let (merged_by, reverted): (Option<Uuid>, bool) = sqlx::query_as(
+            "SELECT merged_by, reverted_at IS NOT NULL FROM entity_merges
+              WHERE id = $1 AND kb_id = $2",
+        )
+        .bind(merge_id)
+        .bind(kb)
+        .fetch_one(&f.pool)
+        .await?;
+        anyhow::ensure!(merged_by == Some(f.editor) && !reverted);
+        let audits = merge_audits(&f, "merge.manual", merge_id).await?;
+        anyhow::ensure!(audits.len() == 1, "one audit row: {audits:?}");
+        anyhow::ensure!(audits[0].0 == Some(f.editor), "{audits:?}");
+        anyhow::ensure!(
+            audits[0].1
+                == json!({ "source": "Chen Jing (HR)", "target": "Chen Jing",
+                           "why": "same person" }),
+            "a session manual merge's audit detail has no token_id: {}",
+            audits[0].1
+        );
+        // 自己并自己：今天的那一句 422
+        let (status, body) = f
+            .call(
+                &f.editor_session,
+                "POST",
+                &format!("/kbs/{kb}/entities/merge"),
+                Some(json!({ "source": target, "target": target })),
+            )
+            .await?;
+        anyhow::ensure!(
+            status == StatusCode::UNPROCESSABLE_ENTITY && body["code"] == "self_merge",
+            "self merge: {status} {body}"
+        );
+
+        // 撤回：会话不带请求体，回 `{ok}`；源实体回来了
+        let (status, body) = f
+            .call(
+                &f.editor_session,
+                "POST",
+                &format!("/kbs/{kb}/merges/{merge_id}/revert"),
+                None,
+            )
+            .await?;
+        anyhow::ensure!(status == StatusCode::OK, "revert: {status} {body}");
+        anyhow::ensure!(body == json!({ "ok": true }), "revert body: {body}");
+        anyhow::ensure!(merged_into(source).await?.is_none());
+        let audits = merge_audits(&f, "merge.revert", merge_id).await?;
+        anyhow::ensure!(audits.len() == 1, "one audit row: {audits:?}");
+        anyhow::ensure!(audits[0].0 == Some(f.editor), "{audits:?}");
+        anyhow::ensure!(
+            audits[0].1 == json!({ "source": "Chen Jing (HR)", "target": "Chen Jing" }),
+            "a session revert's audit detail has no token_id: {}",
+            audits[0].1
+        );
+        // 再撤一次：那句不带 code 的 409（不是令牌听到的 `already_decided`）
+        let (status, body) = f
+            .call(
+                &f.editor_session,
+                "POST",
+                &format!("/kbs/{kb}/merges/{merge_id}/revert"),
+                None,
+            )
+            .await?;
+        anyhow::ensure!(status == StatusCode::CONFLICT, "repeat revert: {status}");
+        anyhow::ensure!(
+            body == json!({ "error": "Merge already reverted" }),
+            "repeat revert body: {body}"
+        );
+        // Viewer 撤不了、也合不了：不带 code 的 403
+        for (path, body) in [
+            (format!("/kbs/{kb}/merges/{merge_id}/revert"), None),
+            (
+                format!("/kbs/{kb}/entities/merge"),
+                Some(json!({ "source": source, "target": target })),
+            ),
+        ] {
+            let (status, body) = f.call(&f.viewer_session, "POST", &path, body).await?;
+            anyhow::ensure!(status == StatusCode::FORBIDDEN, "viewer {path}: {status}");
+            anyhow::ensure!(keys(&body) == ["error"], "viewer {path}: {body}");
+        }
+
+        // 批量 500 条：收下，逐条回结果。两条是真的一对，其余的 id 这个库里没有——
+        // 各自是那一条的错误，不拖累别的
+        let pair_a = f.pair("Li Na", "Li Na").await?;
+        let pair_b = f.pair("Wang Fang", "Wang Fang").await?;
+        let mut ids = vec![pair_a, pair_b];
+        ids.extend((0..498).map(|_| Uuid::now_v7()));
+        anyhow::ensure!(ids.len() == 500);
+        let (status, body) = f
+            .call(
+                &f.editor_session,
+                "POST",
+                &format!("/kbs/{kb}/review/batch"),
+                Some(json!({ "ids": ids, "action": "merge" })),
+            )
+            .await?;
+        anyhow::ensure!(status == StatusCode::OK, "batch of 500: {status} {body}");
+        anyhow::ensure!(
+            keys(&body) == ["decided", "outcomes"],
+            "a session batch answer has no batch_id: {body}"
+        );
+        anyhow::ensure!(body["decided"] == 2, "{body}");
+        let outcomes = body["outcomes"].as_array().cloned().unwrap_or_default();
+        anyhow::ensure!(outcomes.len() == 500, "one outcome per id");
+        for (outcome, id) in outcomes.iter().zip(&ids) {
+            anyhow::ensure!(keys(outcome) == ["error", "id"], "{outcome}");
+            anyhow::ensure!(outcome["id"] == json!(id), "request order: {outcome}");
+        }
+        anyhow::ensure!(
+            outcomes[0]["error"].is_null() && outcomes[1]["error"].is_null(),
+            "{} {}",
+            outcomes[0],
+            outcomes[1]
+        );
+        anyhow::ensure!(
+            outcomes[2..].iter().all(|o| o["error"] == "Not found"),
+            "an unknown id is its own error"
+        );
+        for id in [pair_a, pair_b] {
+            anyhow::ensure!(
+                f.review_row(id).await? == ("merged".to_string(), Some(f.editor), None)
+            );
+            let audits = f.audits("review.merge", id).await?;
+            anyhow::ensure!(
+                audits.len() == 1
+                    && audits[0].1["batch"] == 500
+                    && audits[0].1.get("token_id").is_none()
+                    && audits[0].1.get("batch_id").is_none(),
+                "{audits:?}"
+            );
+        }
+        // 501 条：整批拒绝，`batch_size`，说的还是 500；空的一批同样
+        let before: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE kb_id = $1")
+            .bind(kb)
+            .fetch_one(&f.pool)
+            .await?;
+        let pending = f.pair("Zhao Lei", "Zhao Lei").await?;
+        let mut too_many = vec![pending];
+        too_many.extend((0..500).map(|_| Uuid::now_v7()));
+        for ids in [too_many, Vec::new()] {
+            let (status, body) = f
+                .call(
+                    &f.editor_session,
+                    "POST",
+                    &format!("/kbs/{kb}/review/batch"),
+                    Some(json!({ "ids": ids, "action": "keep" })),
+                )
+                .await?;
+            anyhow::ensure!(
+                status == StatusCode::UNPROCESSABLE_ENTITY,
+                "batch of {}: {status} {body}",
+                ids.len()
+            );
+            anyhow::ensure!(
+                body == json!({ "error": "between 1 and 500 ids per batch",
+                                "code": "batch_size" }),
+                "batch of {}: {body}",
+                ids.len()
+            );
+        }
+        anyhow::ensure!(f.review_row(pending).await?.0 == "pending");
+        let after: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE kb_id = $1")
+            .bind(kb)
+            .fetch_one(&f.pool)
+            .await?;
+        anyhow::ensure!(after == before, "a refused batch writes nothing");
+
+        // 人的合并、撤回、批量都不进令牌 agent 的台账
+        let ledger = utopia_store::token_agent_actions::count(&f.pool, kb).await?;
+        anyhow::ensure!(ledger == 0, "no ledger row for a session, got {ledger}");
+        Ok(())
+    }
+    .await;
+    f.cleanup().await?;
+    result
+}

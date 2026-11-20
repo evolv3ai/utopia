@@ -32,6 +32,8 @@
 //!   一条开着的提议（0129 的部分唯一索引）：重复调用拿回已有的那一条，`existing` 为 true
 //! - 撤回（[`revert_merge`]）：台账上是令牌 agent 做的合并，直接撤；人或治理 agent 做的
 //!   合并，只留提议——令牌因此碰不到治理的保险丝
+//! - 限速与熔断器从台账算：[`finalized_since`]（这枚令牌在这个库里最近落地了多少笔）
+//!   与 [`breaker_tripped`]（它做的合并被人撤回够不够次数）
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -1155,6 +1157,71 @@ pub async fn batch_merges(
     .fetch_all(pool)
     .await?;
     Ok(Some(merges))
+}
+
+// ───────────────────────── 限速与熔断器（0076） ─────────────────────────
+//
+// 两样都从台账算，不另存计数：台账就是「这枚令牌在这个库里落地过什么」的那一份记录，
+// 另存一个数迟早和它对不上。调用方（`review_ops`）在每一次要落地的令牌写入之前问。
+
+/// 这枚令牌在这个库里、从 `since` 之后落地（`applied`）了多少笔：分开、队列合并、手动
+/// 合并、撤回都算。留成提议的（`held` / `proposed`）与被拒绝的调用不在里面——前者不是
+/// `applied`，后者一行都没写。别的令牌、别的库的行不算
+pub async fn finalized_since(
+    pool: &PgPool,
+    kb_id: Uuid,
+    token_id: Uuid,
+    since: DateTime<Utc>,
+) -> AppResult<i64> {
+    Ok(sqlx::query_scalar(
+        "SELECT count(*) FROM token_agent_actions
+          WHERE kb_id = $1 AND token_id = $2 AND outcome = 'applied' AND created_at > $3",
+    )
+    .bind(kb_id)
+    .bind(token_id)
+    .bind(since)
+    .fetch_one(pool)
+    .await?)
+}
+
+/// 这枚令牌的熔断器此刻是不是跳着：`governance::FUSE_WINDOW_DAYS` 天之内，它在这个库里
+/// 做出的合并有至少 `governance::FUSE_REVERTS` 次被**人**撤回了。用的是治理 agent 保险丝
+/// 的那两个常量，不另立一对。
+///
+/// - 「它做出的合并」照台账认：一行 `review.merge` / `merge.manual`、`applied`、
+///   `token_id` 是这一枚、`merge_id` 指着那次合并。别的令牌的合并被撤回不算在它头上
+/// - 「被人撤回」：合并带着 `reverted_at`，并且台账上没有哪一行落地的 `merge.revert`
+///   指着它（那是令牌撤的，不算）。**另加一条**：审计里有一行人的 `merge.revert`
+///   （有 actor、detail 里没有 `token_id`）指着这次合并，也算人撤的——人的撤回与令牌的
+///   撤回同时跑到同一次合并上时，两边都会跑完 `resolution::revert_merge`，令牌那边随后
+///   写下的台账行不该把人说的那一句「合错了」抹掉。人的三条撤回路径（合并历史、批准
+///   撤回的提议、整批撤回）写的都是这样一行
+/// - 窗口按 `reverted_at` 算：七天过了，那一次就不再数，令牌重新直接落地
+pub async fn breaker_tripped(pool: &PgPool, kb_id: Uuid, token_id: Uuid) -> AppResult<bool> {
+    let reverted_by_people: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM entity_merges m
+          WHERE m.kb_id = $1
+            AND m.reverted_at IS NOT NULL
+            AND m.reverted_at > now() - ($3::bigint * interval '1 day')
+            AND EXISTS (SELECT 1 FROM token_agent_actions made
+                         WHERE made.kb_id = m.kb_id AND made.merge_id = m.id
+                           AND made.token_id = $2 AND made.outcome = 'applied'
+                           AND made.operation IN ('review.merge', 'merge.manual'))
+            AND (NOT EXISTS (SELECT 1 FROM token_agent_actions undone
+                              WHERE undone.kb_id = m.kb_id AND undone.merge_id = m.id
+                                AND undone.outcome = 'applied'
+                                AND undone.operation = 'merge.revert')
+                 OR EXISTS (SELECT 1 FROM audit_events a
+                             WHERE a.kb_id = m.kb_id AND a.action = 'merge.revert'
+                               AND a.target_id = m.id AND a.actor_id IS NOT NULL
+                               AND (a.detail -> 'token_id') IS NULL))",
+    )
+    .bind(kb_id)
+    .bind(token_id)
+    .bind(crate::governance::FUSE_WINDOW_DAYS)
+    .fetch_one(pool)
+    .await?;
+    Ok(reverted_by_people >= crate::governance::FUSE_REVERTS)
 }
 
 /// 这两个实体之间最新的一次还没撤回的合并，方向不论。批准队列合并的提议之后用它找出

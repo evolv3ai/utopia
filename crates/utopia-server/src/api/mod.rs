@@ -734,3 +734,6 @@ mod review_proposal_answer_tests;
 
 #[cfg(test)]
 mod review_token_batch_tests;
+
+#[cfg(test)]
+mod review_token_guard_tests;

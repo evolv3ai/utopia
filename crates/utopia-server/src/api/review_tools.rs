@@ -169,7 +169,10 @@ fn definitions() -> Value {
                     entities are NOT the same thing. Applied at once and recorded under the \
                     token's owner and the token's name. Changes no entity and no fact; the \
                     pair leaves the Duplicates section. Read the pair with review_item first. \
-                    A pair that was already decided is refused with code already_decided.",
+                    A pair that was already decided is refused with code already_decided. A \
+                    token finalizes at most 200 writes (keeps, merges, reverts) per knowledge \
+                    base in a rolling hour; past that the call is refused with code \
+                    agent_rate_limited and nothing is changed.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -208,7 +211,12 @@ fn definitions() -> Value {
                     already_proposed. No tool answers a proposal. A pair that was already \
                     decided, or an entity already merged into another, is refused with code \
                     already_decided; merging an entity into itself with code self_merge; an \
-                    unknown id with code not_found.",
+                    unknown id with code not_found. After people have reverted two of this \
+                    token's merges on this knowledge base within seven days, its merges are \
+                    not applied for the rest of that window: each waits as a proposal with \
+                    reason breaker. A token finalizes at most 200 writes per knowledge base in \
+                    a rolling hour; past that the call is refused with code agent_rate_limited \
+                    and nothing is changed.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -267,7 +275,12 @@ fn definitions() -> Value {
                     merge keeps the type it took, and a surviving fact keeps the statement \
                     links the merge copied onto it. A merge that was already reverted is \
                     refused with code already_decided; a merge id that is unknown, or of \
-                    another knowledge base, with code not_found.",
+                    another knowledge base, with code not_found. Reason breaker means people \
+                    reverted two of this token's merges on this knowledge base within seven \
+                    days, so for the rest of that window its reverts only propose. A token \
+                    finalizes at most 200 writes per knowledge base in a rolling hour; past \
+                    that a revert is refused with code agent_rate_limited (with batch_id, as \
+                    that item's code) and nothing is changed.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -308,8 +321,9 @@ fn definitions() -> Value {
                     outcome, action_id, merge_id, reason, code, error}]}, one outcome per id in \
                     the order given; outcome is \"applied\", \"held\" or \"proposed\", or null \
                     with code and error set when that pair was refused (not_found for an \
-                    unknown id, already_decided for a pair that was already decided); decided \
-                    counts the applied pairs. One refused pair does not stop the others. An id \
+                    unknown id, already_decided for a pair that was already decided, \
+                    agent_rate_limited for each pair past the limit of 200 finalized writes \
+                    per knowledge base in a rolling hour); decided counts the applied pairs. One refused pair does not stop the others. An id \
                     given twice gets, the second time, the answer its state then gives. An \
                     empty list or more than 50 ids is refused as a whole with code batch_size, \
                     and so is an action other than merge or keep; nothing is changed. To undo \
@@ -445,7 +459,10 @@ fn success(name: &str, content: Value) -> ToolResult {
 /// **code 与 message 取自 REST 的错误响应本身**（`ApiErr` 渲染出来的那个 body），
 /// 而不是在这里再写一张对照表：两张表迟早有一张先变，而「两个入口同一个 code」
 /// 正是这一层要保证的。404 在 REST 那边没有 code，这里给它 `not_found`；别的没有
-/// code 的错误不带 `code` 键。内部错误的细节同样只留在日志里
+/// code 的错误不带 `code` 键。内部错误的细节同样只留在日志里。
+/// 限速的 429（`AppError::RateLimited`）走的也是这一条：REST 的 body 里是
+/// `agent_rate_limited`，工具错误里就是 `agent_rate_limited`——四个写工具都一样，
+/// 成批的两个工具里它是那一条结果的 code
 async fn refusal(name: &str, error: AppError) -> ToolResult {
     // 渲染在 `review_ops::refused`：成批调用里每一条的 code 读的也是它
     let (code, message) = review_ops::refused(error).await;

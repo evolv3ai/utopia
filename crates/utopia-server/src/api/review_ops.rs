@@ -15,6 +15,10 @@
 //! 做的合并直接撤，人或治理 agent 做的只留提议。还有成批的两样：一次裁最多 50 对
 //! 重复项（[`batch`]），每一对走的就是上面的单笔函数；以及把一批做出的合并整批撤回
 //! （[`revert_batch`]）。别的裁决都还关着——读得到「等你点头」不等于能替人点头。
+//!
+//! 每一笔要落地的写入之前还有两道，都只在 [`guard`] 一处：限速（一枚令牌在一个库里
+//! 一小时最多落地 [`TOKEN_WRITES_PER_HOUR`] 笔，过了答 `agent_rate_limited`）与熔断器
+//! （它做的合并七天里被人撤回两次，它的合并与撤回就只留提议）。
 
 use serde_json::json;
 use utopia_core::models::{ReviewSummary, Role, User};
@@ -281,6 +285,64 @@ pub(crate) async fn item(
     Ok(found)
 }
 
+/// 一枚令牌在一个库里、滚动的一小时之内最多落地多少笔写入（0076）。分开、合并、撤回
+/// 都算；留成提议的与被拒绝的不算。不是按库可配的——裁定表之外不再多一张表
+pub(crate) const TOKEN_WRITES_PER_HOUR: i64 = 200;
+
+/// 限速的那一句拒绝：429，code 是 `agent_rate_limited`
+fn rate_limited() -> AppError {
+    AppError::RateLimited {
+        code: "agent_rate_limited",
+        message: format!(
+            "This token has finalized {TOKEN_WRITES_PER_HOUR} writes on this knowledge base \
+             in the last hour; nothing was changed. Try again later."
+        ),
+    }
+}
+
+/// 每一次要落地的令牌写入之前的两道（0076）：限速，然后熔断器。**只有这一处**——
+/// [`keep`]、[`merge_pair`]、[`merge_entities`]、[`revert_merge`] 都在写的检查之后、
+/// store 函数之前调它；成批的每一笔、整批撤回的每一次、MCP 的每个写工具走的都是这四个
+/// 函数，所以没有哪个入口绕得过去（一枚被限速或跳了熔断器的令牌换一个入口也一样）。
+///
+/// - 限速：台账上这枚令牌在这个库里最近一小时落地的行数到了
+///   [`TOKEN_WRITES_PER_HOUR`]，这一次答 `agent_rate_limited`（429），什么都不改、
+///   一行不写。第 200 笔落地，第 201 笔被拒
+/// - 熔断器：回这枚令牌此刻是不是只能提议。只有合并与撤回问它；分开照常落地，
+///   所以对分开恒回 false，也不去读库
+///
+/// 限速是落地之前的一次读，不与落地在同一个事务里：同一枚令牌同时在途的几个调用可能
+/// 都读到 199，于是一起落地。多出来的至多是那一刻在途的调用数（成批调用是一笔一笔来的，
+/// 只算一个），之后的调用照样被拒
+async fn guard(
+    state: &AppState,
+    caller: &ReviewCaller,
+    operation: AgentOperation,
+) -> Result<bool, AppError> {
+    let since = chrono::Utc::now() - chrono::Duration::hours(1);
+    let finalized = utopia_store::token_agent_actions::finalized_since(
+        &state.pool,
+        caller.kb_id,
+        caller.token.token_id,
+        since,
+    )
+    .await?;
+    if finalized >= TOKEN_WRITES_PER_HOUR {
+        return Err(rate_limited());
+    }
+    match operation {
+        AgentOperation::Merge | AgentOperation::RevertMerge => {
+            utopia_store::token_agent_actions::breaker_tripped(
+                &state.pool,
+                caller.kb_id,
+                caller.token.token_id,
+            )
+            .await
+        }
+        _ => Ok(false),
+    }
+}
+
 /// 审核台的总览，与会话读到的同一个聚合
 pub(crate) async fn summary(
     state: &AppState,
@@ -309,6 +371,8 @@ pub(crate) async fn keep(
     if outcome != AgentOutcome::Applied {
         return Err(not_open());
     }
+    // 分开也是落地的写入，同样限速；熔断器不管它（跳着的令牌照样分得开）
+    guard(state, caller, AgentOperation::Keep).await?;
     let action = utopia_store::token_agent_actions::keep_duplicate_pair_in_batch(
         &state.pool,
         caller.kb_id,
@@ -323,11 +387,13 @@ pub(crate) async fn keep(
     Ok(json!({ "ok": true, "outcome": action.outcome, "action_id": action.id }))
 }
 
-/// 这枚令牌的一次写入，交给 store 的样子。`breaker` 这一刀恒为 false：熔断器还没接上
+/// 这枚令牌的一次写入，交给 store 的样子。`breaker` 是 [`guard`] 刚问出来的：
+/// 跳着的话 store 把这一次合并或撤回留成提议（`breaker`）
 fn token_write(
     caller: &ReviewCaller,
     rationale: Option<&str>,
     batch_id: Option<Uuid>,
+    breaker: bool,
 ) -> TokenWrite {
     TokenWrite {
         kb_id: caller.kb_id,
@@ -335,7 +401,7 @@ fn token_write(
         token_id: caller.token.token_id,
         rationale: rationale.map(str::to_string),
         batch_id,
-        breaker: false,
+        breaker,
     }
 }
 
@@ -428,9 +494,10 @@ pub(crate) async fn merge_pair(
     batch_id: Option<Uuid>,
 ) -> Result<serde_json::Value, AppError> {
     authorize_write(state, caller).await?;
+    let breaker = guard(state, caller, AgentOperation::Merge).await?;
     let done = utopia_store::token_agent_actions::merge_duplicate_pair(
         &state.pool,
-        &token_write(caller, rationale, batch_id),
+        &token_write(caller, rationale, batch_id, breaker),
         review_id,
     )
     .await?;
@@ -625,9 +692,10 @@ pub(crate) async fn merge_entities(
     rationale: Option<&str>,
 ) -> Result<serde_json::Value, AppError> {
     authorize_write(state, caller).await?;
+    let breaker = guard(state, caller, AgentOperation::Merge).await?;
     let done = utopia_store::token_agent_actions::merge_entity_pair(
         &state.pool,
-        &token_write(caller, rationale, None),
+        &token_write(caller, rationale, None, breaker),
         source,
         target,
     )
@@ -657,9 +725,10 @@ pub(crate) async fn revert_merge(
     batch_id: Option<Uuid>,
 ) -> Result<serde_json::Value, AppError> {
     authorize_write(state, caller).await?;
+    let breaker = guard(state, caller, AgentOperation::RevertMerge).await?;
     let done = utopia_store::token_agent_actions::revert_merge(
         &state.pool,
-        &token_write(caller, rationale, batch_id),
+        &token_write(caller, rationale, batch_id, breaker),
         merge_id,
     )
     .await?;
