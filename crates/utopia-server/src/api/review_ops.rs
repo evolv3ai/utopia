@@ -16,7 +16,9 @@
 //! 重复项（[`batch`]），每一对走的就是上面的单笔函数；以及把一批做出的合并整批撤回
 //! （[`revert_batch`]）。裁定表里「只能提议」的操作走 [`target_open`] 与 [`land_proposal`]：
 //! 什么都不改，只留一条等人答的提议——本体缺陷（[`propose_defect`]）是第一种，事实的确认、
-//! 拒绝、闭合（[`propose_fact`]）与时态矛盾的裁决（[`propose_conflict`]）照的是它。
+//! 拒绝、闭合（[`propose_fact`]）与时态矛盾的裁决（[`propose_conflict`]）照的是它，公理
+//! 违规的裁决（[`propose_violation`]）、勘误的回答（[`propose_errata`]）、对齐一档的短语
+//! 与规则（[`propose_alignment_phrase`]、[`propose_alignment_rule`]）也是。
 //! 别的裁决都还关着——读得到「等你点头」不等于能替人点头。
 //!
 //! 每一笔要落地的写入之前还有两道，都只在 [`guard`] 一处：限速（一枚令牌在一个库里
@@ -895,6 +897,211 @@ pub(crate) async fn propose_conflict(
         &conflict_id.to_string(),
         stored,
         Some(action),
+        None,
+    )
+    .await
+}
+
+/// 经令牌裁一处公理违规：**只留提议**（裁定表的 Violation 一行）。违规行与事实都不动，等
+/// 登录的人在 Review 里答；批准时跑的是人自己的那段代码（`review_routes`）。
+///
+/// 次序是契约：写的检查；请求体（`resolution` 只能是那四种，否则 `bad_resolution`，与人的
+/// 路由同一个 code）；目标（没有是 404，已经裁过、或请求指着的那条事实已经撤了、闭合了是
+/// `already_decided`）；要读违规才知道的检查，照人的路由的次序——撤事实而说不出撤哪一条
+/// （`fact_required`），闭合而没给日期（`close_at_required`）、精度认不出（`bad_precision`）、
+/// 闭合点早于那条断言的起点（`interval_inverted`），闭合用在不是派生矛盾的违规上
+/// （`bad_resolution`）；留提议。哪一步没过都一行不写
+pub(crate) async fn propose_violation(
+    state: &AppState,
+    caller: &ReviewCaller,
+    violation_id: Uuid,
+    request: &super::review_routes::DecideViolationReq,
+) -> Result<serde_json::Value, AppError> {
+    authorize_write(state, caller).await?;
+    let resolution: &'static str = match request.resolution.as_str() {
+        "fact_retracted" => "fact_retracted",
+        "fact_closed" => "fact_closed",
+        "axiom_relaxed" => "axiom_relaxed",
+        "accepted" => "accepted",
+        _ => {
+            return Err(AppError::invalid(
+                "bad_resolution",
+                "resolution must be fact_retracted, fact_closed, axiom_relaxed or accepted",
+            ))
+        }
+    };
+    // 存下的就是请求体原样：没给的键不出现
+    let mut stored = json!({ "resolution": resolution });
+    if let Some(at) = request.close_at {
+        stored["close_at"] = json!(at);
+    }
+    if let Some(precision) = &request.close_at_precision {
+        stored["close_at_precision"] = json!(precision);
+    }
+    if let Some(fact_id) = request.fact_id {
+        stored["fact_id"] = json!(fact_id);
+    }
+    target_open(state, caller, "violation.decide", violation_id, &stored).await?;
+
+    // 目标开着：违规在这个库里、还没人裁。下面的检查读它，不改
+    let (kind, left, right, path): (String, Uuid, Uuid, Vec<Uuid>) = sqlx::query_as(
+        "SELECT kind, left_fact, right_fact, path FROM axiom_violations
+          WHERE id = $1 AND kb_id = $2",
+    )
+    .bind(violation_id)
+    .bind(caller.kb_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    match (kind == "derived_contradiction", resolution) {
+        (_, "fact_retracted") => {
+            if utopia_store::reasoning::pick_retraction(left, right, &path, request.fact_id)
+                .is_none()
+            {
+                return Err(AppError::invalid(
+                    "fact_required",
+                    "This violation involves more than one fact: fact_id must name the one to \
+                     retract, and it must be one of the facts the violation lists.",
+                ));
+            }
+        }
+        (true, "fact_closed") => {
+            let Some(at) = request.close_at else {
+                return Err(AppError::invalid(
+                    "close_at_required",
+                    "fact_closed needs close_at, the date the assertion ended.",
+                ));
+            };
+            let precision =
+                super::review_routes::world_precision(request.close_at_precision.as_deref())?;
+            // 闭的是违规的左事实，与人的路由同一个选法
+            if closes_before_start(state, caller.kb_id, left, at, precision).await? {
+                return Err(interval_inverted());
+            }
+        }
+        (false, "fact_closed") => {
+            return Err(AppError::invalid(
+                "bad_resolution",
+                "fact_closed applies only to a derived_contradiction.",
+            ));
+        }
+        _ => {}
+    }
+    land_proposal(
+        state,
+        caller,
+        AgentOperation::Violation,
+        "violation.decide",
+        "axiom_violation",
+        violation_id,
+        &violation_id.to_string(),
+        stored,
+        Some(resolution),
+        None,
+    )
+    .await
+}
+
+/// 经令牌答勘误 agent 留给人的一笔：**只留提议**（裁定表的 Errata 一行）。那一笔仍然留着、
+/// 事实不动，等登录的人在 Review 里答；批准时跑的是人自己的那段代码（`review_routes`）。
+///
+/// 次序是契约：写的检查；目标（没有是 404，已经答过是 `already_decided`）；留提议。请求体
+/// 只有一个布尔值，解不出来的在提取器那里就答了
+pub(crate) async fn propose_errata(
+    state: &AppState,
+    caller: &ReviewCaller,
+    action_id: Uuid,
+    approve: bool,
+) -> Result<serde_json::Value, AppError> {
+    authorize_write(state, caller).await?;
+    let request = json!({ "approve": approve });
+    target_open(state, caller, "errata.decide", action_id, &request).await?;
+    land_proposal(
+        state,
+        caller,
+        AgentOperation::Errata,
+        "errata.decide",
+        "errata_action",
+        action_id,
+        &action_id.to_string(),
+        request,
+        Some(if approve { "approve" } else { "reject" }),
+        None,
+    )
+    .await
+}
+
+/// 经令牌定一条短语签名绑到哪个属性：**只留提议**（裁定表的 AlignmentPhrase 一行）。绑定行
+/// 不动、**不排任务**，等登录的人在 Review 里答；批准时跑的是人自己的那段代码
+/// （`review_routes`），那时判定连同它的投递任务一次提交——改动是排着，不是已经落地。
+///
+/// 次序是契约：写的检查；目标（这个库里没有这条签名是 404；短语没有「定了」这一态，行在
+/// 就能提）；请求体——它的每一项都要读本体才校验得了，所以排在目标之后，跑的就是人的路由
+/// 的那几句（`review_routes::phrase_choice`）：`unknown_property`、`unknown_marks`、
+/// `marks_needs_state`、`direction_required`，同一个 code、同一句话；留提议
+pub(crate) async fn propose_alignment_phrase(
+    state: &AppState,
+    caller: &ReviewCaller,
+    binding_id: Uuid,
+    request: &super::review_routes::DecideAlignmentPhraseReq,
+) -> Result<serde_json::Value, AppError> {
+    authorize_write(state, caller).await?;
+    // 存下的就是请求体原样：没给的键不出现
+    let mut stored = json!({});
+    if let Some(property) = &request.property {
+        stored["property"] = json!(property);
+    }
+    if let Some(direction) = &request.direction {
+        stored["direction"] = json!(direction);
+    }
+    if let Some(marks) = &request.marks {
+        stored["marks"] = json!(marks);
+    }
+    target_open(state, caller, "alignment.phrase", binding_id, &stored).await?;
+    let (property, _, _) =
+        super::review_routes::phrase_choice(state, caller.kb_id, request).await?;
+    // 动作只有两种：绑到一个属性，或者说没有属性对得上
+    let action = if property.is_some() { "bind" } else { "none" };
+    land_proposal(
+        state,
+        caller,
+        AgentOperation::AlignmentPhrase,
+        "alignment.phrase",
+        "phrase_binding",
+        binding_id,
+        &binding_id.to_string(),
+        stored,
+        Some(action),
+        None,
+    )
+    .await
+}
+
+/// 经令牌批或驳一条蕴含规则：**只留提议**（裁定表的 AlignmentRule 一行）。规则行不动、
+/// **不排任务**，等登录的人在 Review 里答；批准时判定连同它的投递任务一次提交——改动是
+/// 排着，不是已经落地。
+///
+/// 次序是契约：写的检查；目标（这个库里没有这条规则是 404；规则没有「定了」这一态，行在
+/// 就能提）；留提议
+pub(crate) async fn propose_alignment_rule(
+    state: &AppState,
+    caller: &ReviewCaller,
+    rule_id: Uuid,
+    approve: bool,
+) -> Result<serde_json::Value, AppError> {
+    authorize_write(state, caller).await?;
+    let request = json!({ "approve": approve });
+    target_open(state, caller, "alignment.rule", rule_id, &request).await?;
+    land_proposal(
+        state,
+        caller,
+        AgentOperation::AlignmentRule,
+        "alignment.rule",
+        "implication_rule",
+        rule_id,
+        &rule_id.to_string(),
+        request,
+        Some(if approve { "approve" } else { "reject" }),
         None,
     )
     .await

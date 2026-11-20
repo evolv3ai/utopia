@@ -964,6 +964,10 @@ enum Decision {
     RejectFact,
     CloseFact(CloseFactBody),
     Conflict(ConflictBody),
+    Violation(DecideViolationReq),
+    Errata(DecideErrataReq),
+    AlignmentPhrase(DecideAlignmentPhraseReq),
+    AlignmentRule(DecideAlignmentRuleReq),
 }
 
 /// 这条提议的操作认不认得。`None` = 认不得：答的人拿到的还是从前那个 500
@@ -977,6 +981,10 @@ fn decision_of(
         "fact.reject" => Some(Decision::RejectFact),
         "fact.close" => Some(Decision::CloseFact(stored_request(p)?)),
         "conflict.resolve" => Some(Decision::Conflict(stored_request(p)?)),
+        "violation.decide" => Some(Decision::Violation(stored_request(p)?)),
+        "errata.decide" => Some(Decision::Errata(stored_request(p)?)),
+        "alignment.phrase" => Some(Decision::AlignmentPhrase(stored_request(p)?)),
+        "alignment.rule" => Some(Decision::AlignmentRule(stored_request(p)?)),
         _ => None,
     })
 }
@@ -1053,6 +1061,36 @@ async fn approve_decision(
                 Err(utopia_core::AppError::NotFound) => Ok(Approved::Gone),
                 Err(e) => Err(e),
             }
+        }
+        // 违规的裁决与勘误的回答都不是一个事务：撤了事实、执行了动作之后，后面的一步还
+        // 可能出错。它们报的错（`NotFound` 也算）原样报出去，提议留着——已经落下的那几步
+        // 是这个人的，不能说成「过时、什么都没做」
+        Decision::Violation(req) => {
+            violation_decision(state, kb_id, user, p.target_id, &req, Some(p.id)).await?;
+            Ok(Approved::Done(Applied::default()))
+        }
+        Decision::Errata(req) => {
+            errata_decision(state, kb_id, user, p.target_id, &req, Some(p.id)).await?;
+            Ok(Approved::Done(Applied::default()))
+        }
+        // 短语与规则：判定连同它的投递任务一次提交。批准之后改动只是**排着**——回答带上
+        // 任务的 id（`job_id` 与 `queued`），不说成已经落到图上（N6）。它们报的错原样报出去
+        Decision::AlignmentPhrase(req) => {
+            let job_id =
+                alignment_phrase_decision(state, kb_id, user, p.target_id, &req, Some(p.id))
+                    .await?;
+            Ok(Approved::Done(Applied {
+                job_id: Some(job_id),
+                ..Applied::default()
+            }))
+        }
+        Decision::AlignmentRule(req) => {
+            let job_id =
+                alignment_rule_decision(state, kb_id, user, p.target_id, &req, Some(p.id)).await?;
+            Ok(Approved::Done(Applied {
+                job_id: Some(job_id),
+                ..Applied::default()
+            }))
         }
     }
 }
@@ -1810,13 +1848,43 @@ pub struct DecideViolationReq {
 /// **「数据错了」真的撤事实**（#202）：此前只记决定，事实照样活在图里，而队列又
 /// 不再提它。撤哪条由请求指名（`fact_id`），单事实的种类可省；撤完重算一遍检查，
 /// 那条事实牵连的其它违规一并清掉。改公理仍然走本体页——那是另一个页面的事。
+///
+/// 写令牌也能调（0076）：它**只留一条提议**（`review_ops::propose_violation`），违规行与
+/// 事实都不动，等登录的人在 Review 里答。令牌在进下面这一段之前就离开了处理函数；会话
+/// 照旧跑 [`violation_decision`]，回答与审计行同从前一个字不差
 pub async fn decide_violation(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    caller: SessionOrToken,
     Path((kb_id, violation_id)): Path<(Uuid, Uuid)>,
     Json(req): Json<DecideViolationReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    let user = caller.user;
+    if let Some(token) = caller.pat {
+        let caller = ReviewCaller { user, token, kb_id };
+        let answer = review_ops::propose_violation(&state, &caller, violation_id, &req).await?;
+        return Ok(Json(answer));
+    }
     require_kb(&state, &user, kb_id, Role::Editor).await?;
+    violation_decision(&state, kb_id, &user, violation_id, &req, None).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// 人裁一处公理违规的那几句，从会话处理函数里原样挪出来：校验、撤或闭合事实、记决定、
+/// 让派生落地、重算检查、审计行、刷新。会话调它时 `proposal` 是 None，一切同从前；批准
+/// 令牌的提议时带上提议的 id，这一次裁决写下的每一行审计（`violation.decided`，以及撤、
+/// 闭合事实时的 `fact.reject` / `fact.close`）的 detail 里多一个 `agent_proposal`。actor
+/// 两种情形都是这个人，detail 里不放 `token_id`。
+///
+/// 这几步不是一个事务：事实撤了、决定记了之后，后面的重算还可能出错。批准提议时它报的错
+/// 原样报出去，提议留着——不折成「过时」（已经落下的那几步是这个人的，不是没发生）
+async fn violation_decision(
+    state: &AppState,
+    kb_id: Uuid,
+    user: &utopia_core::models::User,
+    violation_id: Uuid,
+    req: &DecideViolationReq,
+    proposal: Option<Uuid>,
+) -> Result<(), utopia_core::AppError> {
     if !matches!(
         req.resolution.as_str(),
         "fact_retracted" | "fact_closed" | "axiom_relaxed" | "accepted"
@@ -1824,8 +1892,7 @@ pub async fn decide_violation(
         return Err(utopia_core::AppError::invalid(
             "bad_resolution",
             "resolution 只能是 fact_retracted、fact_closed、axiom_relaxed 或 accepted",
-        )
-        .into());
+        ));
     }
     let row: Option<(String, Uuid, Uuid, Vec<Uuid>)> = sqlx::query_as(
         "SELECT kind, left_fact, right_fact, path FROM axiom_violations
@@ -1837,7 +1904,7 @@ pub async fn decide_violation(
     .await
     .map_err(utopia_core::AppError::Db)?;
     let Some((kind, left, right, path)) = row else {
-        return Err(utopia_core::AppError::NotFound.into());
+        return Err(utopia_core::AppError::NotFound);
     };
     let repaired = kind == "derived_contradiction";
     // 撤事实的那条路自己会把违规标成 resolved；其余出路在下面统一记
@@ -1850,10 +1917,9 @@ pub async fn decide_violation(
                 return Err(utopia_core::AppError::invalid(
                     "fact_required",
                     "这处违规涉及多条事实，要说撤哪一条，且只能是它列出的那几条",
-                )
-                .into());
+                ));
             };
-            let snap = fact_snapshot(&state, kb_id, target).await;
+            let snap = fact_snapshot(state, kb_id, target).await;
             utopia_store::reasoning::retract_from_violation(
                 &state.pool,
                 kb_id,
@@ -1863,7 +1929,10 @@ pub async fn decide_violation(
             )
             .await?;
             decided = true;
-            if let Some(d) = snap {
+            if let Some(mut d) = snap {
+                if let Some(proposal) = proposal {
+                    d["agent_proposal"] = json!(proposal);
+                }
                 let _ = utopia_store::audit::record(
                     &state.pool,
                     Some(kb_id),
@@ -1881,8 +1950,7 @@ pub async fn decide_violation(
                 return Err(utopia_core::AppError::invalid(
                     "close_at_required",
                     "fact_closed 要给出结束日期",
-                )
-                .into());
+                ));
             };
             let open: Option<(Uuid,)> = sqlx::query_as(
                 "SELECT id FROM facts
@@ -1896,15 +1964,17 @@ pub async fn decide_violation(
                 return Err(utopia_core::AppError::invalid(
                     "not_open",
                     "这条断言已有结束日期，或已被撤",
-                )
-                .into());
+                ));
             }
             let precision = world_precision(req.close_at_precision.as_deref())?;
-            let snap = fact_snapshot(&state, kb_id, left).await;
+            let snap = fact_snapshot(state, kb_id, left).await;
             utopia_store::temporal::close_superseded(&state.pool, left, at, precision).await?;
             if let Some(mut d) = snap {
                 d["valid_to"] = json!(at.to_rfc3339());
                 d["valid_to_precision"] = json!(precision);
+                if let Some(proposal) = proposal {
+                    d["agent_proposal"] = json!(proposal);
+                }
                 let _ = utopia_store::audit::record(
                     &state.pool,
                     Some(kb_id),
@@ -1921,8 +1991,7 @@ pub async fn decide_violation(
             return Err(utopia_core::AppError::invalid(
                 "bad_resolution",
                 "fact_closed 只用于 derived_contradiction",
-            )
-            .into());
+            ));
         }
         _ => {}
     }
@@ -1939,6 +2008,10 @@ pub async fn decide_violation(
     if req.resolution == "fact_retracted" {
         utopia_store::reasoning::run(&state.pool, kb_id).await?;
     }
+    let mut detail = json!({ "resolution": req.resolution });
+    if let Some(proposal) = proposal {
+        detail["agent_proposal"] = json!(proposal);
+    }
     let _ = utopia_store::audit::record(
         &state.pool,
         Some(kb_id),
@@ -1946,11 +2019,11 @@ pub async fn decide_violation(
         "violation.decided",
         "axiom_violation",
         Some(violation_id),
-        json!({ "resolution": req.resolution }),
+        detail,
     )
     .await;
     state.emit_review(kb_id);
-    Ok(Json(json!({ "ok": true })))
+    Ok(())
 }
 
 /// 手动跑一遍一致性检查。
@@ -2247,13 +2320,44 @@ pub struct DecideAlignmentRuleReq {
 /// 人批或驳一条蕴含规则（0044 决定 3 第五片）。与短语判定同一套：决定和它的后续工作
 /// 一次提交，答 202 和 job id。批准且要读数的先排 `read_phrases`（填缓存后自己排物化），
 /// 否则直接排物化——驳回也要重算，隐含行得退掉
+///
+/// 写令牌也能调（0076）：它**只留一条提议**（`review_ops::propose_alignment_rule`），规则行
+/// 不动、不排任务，答的是 200 与提议——不是 202，什么都还没收下。令牌在进下面这一段之前
+/// 就离开了处理函数；会话照旧跑 [`alignment_rule_decision`]，仍答 202 和 job id
 pub async fn decide_alignment_rule(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    caller: SessionOrToken,
     Path((kb_id, rule_id)): Path<(Uuid, Uuid)>,
     Json(req): Json<DecideAlignmentRuleReq>,
 ) -> ApiResult<(axum::http::StatusCode, Json<serde_json::Value>)> {
+    let user = caller.user;
+    if let Some(token) = caller.pat {
+        let caller = ReviewCaller { user, token, kb_id };
+        let answer =
+            review_ops::propose_alignment_rule(&state, &caller, rule_id, req.approve).await?;
+        return Ok((axum::http::StatusCode::OK, Json(answer)));
+    }
     require_kb(&state, &user, kb_id, Role::Editor).await?;
+    let job_id = alignment_rule_decision(&state, kb_id, &user, rule_id, &req, None).await?;
+    Ok((
+        axum::http::StatusCode::ACCEPTED,
+        Json(json!({ "ok": true, "job_id": job_id, "status": "accepted" })),
+    ))
+}
+
+/// 人批或驳一条蕴含规则的那几句，从会话处理函数里原样挪出来：读规则、判定连同它的任务
+/// 一次提交、审计行、刷新。回排下的任务的 id：**这时候改动只是排着，还没落到图上**。
+/// 会话调它时 `proposal` 是 None，审计 detail 与从前一个键不差；批准令牌的提议时带上提议
+/// 的 id，detail 里多一个 `agent_proposal`。actor 两种情形都是这个人，detail 里不放
+/// `token_id`
+async fn alignment_rule_decision(
+    state: &AppState,
+    kb_id: Uuid,
+    user: &utopia_core::models::User,
+    rule_id: Uuid,
+    req: &DecideAlignmentRuleReq,
+    proposal: Option<Uuid>,
+) -> Result<i64, utopia_core::AppError> {
     let rule = utopia_store::implication_rules::get(&state.pool, kb_id, rule_id)
         .await?
         .ok_or(utopia_core::AppError::NotFound)?;
@@ -2267,6 +2371,11 @@ pub async fn decide_alignment_rule(
     )
     .await?
     .ok_or(utopia_core::AppError::NotFound)?;
+    let mut detail = json!({ "trigger": rule.trigger, "phrase": rule.phrase, "reading": rule.reading,
+                             "approve": req.approve, "job_id": job_id });
+    if let Some(proposal) = proposal {
+        detail["agent_proposal"] = json!(proposal);
+    }
     let _ = utopia_store::audit::record(
         &state.pool,
         Some(kb_id),
@@ -2274,27 +2383,48 @@ pub async fn decide_alignment_rule(
         "alignment.rule_decided",
         "implication_rule",
         Some(rule_id),
-        json!({ "trigger": rule.trigger, "phrase": rule.phrase, "reading": rule.reading,
-                "approve": req.approve, "job_id": job_id }),
+        detail,
     )
     .await;
     state.emit_review(kb_id);
+    Ok(job_id)
+}
+
+/// 人定一条短语签名绑到哪个属性。写令牌也能调（0076）：它**只留一条提议**
+/// （`review_ops::propose_alignment_phrase`），绑定行不动、不排任务，答的是 200 与提议。
+/// 令牌在进下面这一段之前就离开了处理函数；会话照旧跑 [`alignment_phrase_decision`]，
+/// 仍答 202 和 job id
+pub async fn decide_alignment_phrase(
+    State(state): State<AppState>,
+    caller: SessionOrToken,
+    Path((kb_id, binding_id)): Path<(Uuid, Uuid)>,
+    Json(req): Json<DecideAlignmentPhraseReq>,
+) -> ApiResult<(axum::http::StatusCode, Json<serde_json::Value>)> {
+    let user = caller.user;
+    if let Some(token) = caller.pat {
+        let caller = ReviewCaller { user, token, kb_id };
+        let answer =
+            review_ops::propose_alignment_phrase(&state, &caller, binding_id, &req).await?;
+        return Ok((axum::http::StatusCode::OK, Json(answer)));
+    }
+    require_kb(&state, &user, kb_id, Role::Editor).await?;
+    let job_id = alignment_phrase_decision(&state, kb_id, &user, binding_id, &req, None).await?;
+    // 202：收下了，投影在路上。不编一个 typed: {added: 0} 出来——那不是这次请求知道的事
     Ok((
         axum::http::StatusCode::ACCEPTED,
         Json(json!({ "ok": true, "job_id": job_id, "status": "accepted" })),
     ))
 }
 
-pub async fn decide_alignment_phrase(
-    State(state): State<AppState>,
-    AuthUser(user): AuthUser,
-    Path((kb_id, binding_id)): Path<(Uuid, Uuid)>,
-    Json(req): Json<DecideAlignmentPhraseReq>,
-) -> ApiResult<(axum::http::StatusCode, Json<serde_json::Value>)> {
-    require_kb(&state, &user, kb_id, Role::Editor).await?;
-    let sig = utopia_store::phrase_bindings::signature_of(&state.pool, kb_id, binding_id)
-        .await?
-        .ok_or(utopia_core::AppError::NotFound)?;
+/// 短语判定的请求体说的是什么：绑到哪个属性、方向、那一刻标的是哪一端。会话处理函数里
+/// 校验请求体的那几句原样挪到这里——人判定时跑它，令牌留提议之前跑的也是它，所以两边
+/// 拿到的是同一个 code、同一句话（`unknown_property`、`unknown_marks`、
+/// `marks_needs_state`、`direction_required`）。只读本体，什么都不写
+pub(super) async fn phrase_choice<'a>(
+    state: &AppState,
+    kb_id: Uuid,
+    req: &'a DecideAlignmentPhraseReq,
+) -> Result<(Option<Uuid>, Option<&'a str>, Option<&'a str>), utopia_core::AppError> {
     let property = match req
         .property
         .as_deref()
@@ -2327,15 +2457,13 @@ pub async fn decide_alignment_phrase(
             return Err(utopia_core::AppError::invalid(
                 "unknown_marks",
                 "marks is one of start, end or none",
-            )
-            .into())
+            ))
         }
         (_, Some(_)) => {
             return Err(utopia_core::AppError::invalid(
                 "marks_needs_state",
                 "only a state property says which end a moment marks",
-            )
-            .into())
+            ))
         }
     };
     let property = property.map(|(id, _)| id);
@@ -2346,10 +2474,29 @@ pub async fn decide_alignment_phrase(
             return Err(utopia_core::AppError::invalid(
                 "direction_required",
                 "a bound signature needs a direction: forward or reverse",
-            )
-            .into())
+            ))
         }
     };
+    Ok((property, direction, marks))
+}
+
+/// 人定一条短语签名的那几句，从会话处理函数里原样挪出来：读签名、校验请求体
+/// （[`phrase_choice`]）、判定连同它的重算任务一次提交、审计行、刷新。回排下的任务的 id：
+/// **这时候改动只是排着，还没落到图上**。会话调它时 `proposal` 是 None，审计 detail 与
+/// 从前一个键不差；批准令牌的提议时带上提议的 id，detail 里多一个 `agent_proposal`。
+/// actor 两种情形都是这个人，detail 里不放 `token_id`
+async fn alignment_phrase_decision(
+    state: &AppState,
+    kb_id: Uuid,
+    user: &utopia_core::models::User,
+    binding_id: Uuid,
+    req: &DecideAlignmentPhraseReq,
+    proposal: Option<Uuid>,
+) -> Result<i64, utopia_core::AppError> {
+    let sig = utopia_store::phrase_bindings::signature_of(&state.pool, kb_id, binding_id)
+        .await?
+        .ok_or(utopia_core::AppError::NotFound)?;
+    let (property, direction, marks) = phrase_choice(state, kb_id, req).await?;
     let votes = json!({ "person": { "property": req.property, "direction": direction,
                                     "marks": marks } });
     // 判定和它的重算任务一次提交（0051）。这里**不再**同步重算：等物化锁占的是池里的
@@ -2372,6 +2519,11 @@ pub async fn decide_alignment_phrase(
     )
     .await?
     .ok_or_else(|| utopia_core::AppError::Conflict("the decision was not written".into()))?;
+    let mut detail = json!({ "phrase": sig.phrase, "property": req.property, "direction": direction,
+                             "marks": marks, "job_id": job_id });
+    if let Some(proposal) = proposal {
+        detail["agent_proposal"] = json!(proposal);
+    }
     let _ = utopia_store::audit::record(
         &state.pool,
         Some(kb_id),
@@ -2379,16 +2531,11 @@ pub async fn decide_alignment_phrase(
         "alignment.phrase_decided",
         "phrase_binding",
         Some(binding_id),
-        json!({ "phrase": sig.phrase, "property": req.property, "direction": direction,
-                "marks": marks, "job_id": job_id }),
+        detail,
     )
     .await;
     state.emit_review(kb_id);
-    // 202：收下了，投影在路上。不编一个 typed: {added: 0} 出来——那不是这次请求知道的事
-    Ok((
-        axum::http::StatusCode::ACCEPTED,
-        Json(json!({ "ok": true, "job_id": job_id, "status": "accepted" })),
-    ))
+    Ok(job_id)
 }
 
 #[derive(Deserialize)]
@@ -2466,19 +2613,52 @@ pub struct DecideErrataReq {
     pub approve: bool,
 }
 
-/// 人答勘误 agent 留下的一笔（0044 决定 7）：批了就执行那个动作，否了只记一笔
+/// 人答勘误 agent 留下的一笔（0044 决定 7）：批了就执行那个动作，否了只记一笔。
+///
+/// 写令牌也能调（0076）：它**只留一条提议**（`review_ops::propose_errata`），那一笔仍然
+/// 留着、事实不动，等登录的人在 Review 里答。令牌在进下面这一段之前就离开了处理函数；
+/// 会话照旧跑 [`errata_decision`]，回答与审计行同从前一个字不差
 pub async fn decide_errata(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    caller: SessionOrToken,
     Path((kb_id, action_id)): Path<(Uuid, Uuid)>,
     Json(req): Json<DecideErrataReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    let user = caller.user;
+    if let Some(token) = caller.pat {
+        let caller = ReviewCaller { user, token, kb_id };
+        let answer = review_ops::propose_errata(&state, &caller, action_id, req.approve).await?;
+        return Ok(Json(answer));
+    }
     require_kb(&state, &user, kb_id, Role::Editor).await?;
+    errata_decision(&state, kb_id, &user, action_id, &req, None).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// 人答勘误 agent 留下的一笔的那几句，从会话处理函数里原样挪出来：store 的执行与记账、
+/// 审计行、刷新。会话调它时 `proposal` 是 None，审计 detail 与从前一个键不差；批准令牌的
+/// 提议时带上提议的 id，detail 里多一个 `agent_proposal`。actor 两种情形都是这个人，
+/// detail 里不放 `token_id`。
+///
+/// store 的那一步不是一个事务（先执行动作，再把那一笔标成答过）：批准提议时它报的错原样
+/// 报出去，提议留着——不折成「过时」
+async fn errata_decision(
+    state: &AppState,
+    kb_id: Uuid,
+    user: &utopia_core::models::User,
+    action_id: Uuid,
+    req: &DecideErrataReq,
+    proposal: Option<Uuid>,
+) -> Result<(), utopia_core::AppError> {
     let found =
         utopia_store::errata::decide_held(&state.pool, kb_id, action_id, req.approve, user.id)
             .await?;
     if !found {
-        return Err(utopia_core::AppError::NotFound.into());
+        return Err(utopia_core::AppError::NotFound);
+    }
+    let mut detail = json!({ "approve": req.approve });
+    if let Some(proposal) = proposal {
+        detail["agent_proposal"] = json!(proposal);
     }
     let _ = utopia_store::audit::record(
         &state.pool,
@@ -2487,10 +2667,10 @@ pub async fn decide_errata(
         "errata.decided",
         "errata_action",
         Some(action_id),
-        json!({ "approve": req.approve }),
+        detail,
     )
     .await;
     state.emit_review(kb_id);
     state.emit_graph(kb_id);
-    Ok(Json(json!({ "ok": true })))
+    Ok(())
 }

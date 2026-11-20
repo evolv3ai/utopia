@@ -1,6 +1,6 @@
 //! Review 的 MCP 工具（0076 决定 2）：`review_list`、`review_item`、`review_keep`、
 //! `review_merge`、`review_revert`、`review_batch`，以及只能提议的 `review_defect`、
-//! `review_fact`、`review_conflict`。
+//! `review_fact`、`review_conflict`、`review_violation`、`review_errata`、`review_alignment`。
 //!
 //! 两个读工具管 Review 的十三档：`review_list` 读一档的一页（十一个列表档、总览、决策台账），
 //! `review_item` 读某一档里列着的一条，违规一档的条目带上它的证明。写的有两样：
@@ -10,7 +10,9 @@
 //! 做出的合并整批撤回；`review_batch` 一次裁最多 50 对重复项，每一对走的就是单笔的那条路，
 //! 服务端发一个 `batch_id`。裁定表里只能提议的操作各有一个工具，`review_defect`（对一处
 //! 本体缺陷表态）是第一个，`review_fact`（确认、拒绝、闭合一条事实）与 `review_conflict`
-//! （裁一处时态矛盾）照的是它：调用什么都不改，只留一条等人答的提议。
+//! （裁一处时态矛盾）照的是它，`review_violation`（裁一处公理违规）、`review_errata`（答勘误
+//! agent 留给人的一笔）、`review_alignment`（定一条短语签名或一条蕴含规则）也是：调用什么
+//! 都不改，只留一条等人答的提议。
 //! **没有哪个工具能答提议。**
 //!
 //! **这里只做两件事：把参数递给 `review_ops`，把它的回答变成工具结果。** 授权、裁定表、
@@ -29,7 +31,9 @@ use utopia_core::AppError;
 use uuid::Uuid;
 
 use super::review_ops::{self, ReviewCaller};
-use super::review_routes::{CloseFactBody, ConflictBody};
+use super::review_routes::{
+    CloseFactBody, ConflictBody, DecideAlignmentPhraseReq, DecideViolationReq,
+};
 use super::tools::{Step, ToolResult};
 use crate::state::AppState;
 
@@ -42,12 +46,25 @@ const BATCH: &str = "review_batch";
 const DEFECT: &str = "review_defect";
 const FACT: &str = "review_fact";
 const CONFLICT: &str = "review_conflict";
+const VIOLATION: &str = "review_violation";
+const ERRATA: &str = "review_errata";
+const ALIGNMENT: &str = "review_alignment";
 
 /// 这个名字归不归这里管。归这里的，`mcp.rs` 不再拿它去问 `is_exposed`
 pub(super) fn serves(name: &str) -> bool {
     matches!(
         name,
-        LIST | ITEM | KEEP | MERGE | REVERT | BATCH | DEFECT | FACT | CONFLICT
+        LIST | ITEM
+            | KEEP
+            | MERGE
+            | REVERT
+            | BATCH
+            | DEFECT
+            | FACT
+            | CONFLICT
+            | VIOLATION
+            | ERRATA
+            | ALIGNMENT
     )
 }
 
@@ -55,7 +72,7 @@ pub(super) fn serves(name: &str) -> bool {
 fn writes(name: &str) -> bool {
     matches!(
         name,
-        KEEP | MERGE | REVERT | BATCH | DEFECT | FACT | CONFLICT
+        KEEP | MERGE | REVERT | BATCH | DEFECT | FACT | CONFLICT | VIOLATION | ERRATA | ALIGNMENT
     )
 }
 
@@ -521,6 +538,182 @@ fn definitions() -> Value {
                     "required": ["id", "action"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": VIOLATION,
+                "description": "Propose that a person decide one open axiom violation, an item \
+                    of the \"violations\" (Axioms) section of review_list, in one of four ways: \
+                    \"fact_retracted\" (a fact is wrong and is retracted; fact_id names it), \
+                    \"fact_closed\" (for a derived_contradiction only: the assertion was true \
+                    and ended at close_at), \"axiom_relaxed\" (the ontology's axiom is wrong, \
+                    not the facts) or \"accepted\" (the facts may stand together). The call \
+                    changes nothing: the violation stays open, every fact stays as it is, and \
+                    the call waits as a proposal, recorded under the token's owner and the \
+                    token's name, that a signed-in editor answers in the Review tab; only when \
+                    that person approves it is the violation decided, as that person's \
+                    decision. The result is {ok, outcome: \"proposed\", action_id, reason: \
+                    \"propose_only\", explanation}. Repeating the call while its proposal is \
+                    open returns the same proposal with code already_proposed. A resolution \
+                    other than the four is refused with code bad_resolution, as is fact_closed \
+                    on a violation that is not a derived_contradiction; fact_retracted on a \
+                    violation of more than one fact without a fact_id it lists with code \
+                    fact_required; fact_closed without close_at with code close_at_required, \
+                    with a close_at_precision that is not year, month, day, hour, minute or \
+                    second with code bad_precision, and with a close_at before the \
+                    assertion's start with code interval_inverted. A violation that is already \
+                    decided, or whose named fact was retracted or closed meanwhile, is refused \
+                    with code already_decided; an id that is unknown, or of another knowledge \
+                    base, with code not_found. If the violation is decided, or that fact is \
+                    retracted, before the proposal is answered, approving the proposal changes \
+                    nothing and closes it as superseded. Proposals do not count toward the \
+                    limit on finalized writes. No tool answers a proposal.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "description": "Violation id (uuid) of an item of the \
+                                \"violations\" section from review_list."
+                        },
+                        "resolution": {
+                            "type": "string",
+                            "description": "\"fact_retracted\", \"fact_closed\", \
+                                \"axiom_relaxed\" or \"accepted\"."
+                        },
+                        "fact_id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "description": "\"fact_retracted\" only: the fact to retract, one \
+                                of the facts the violation lists. May be left out when the \
+                                violation involves a single fact."
+                        },
+                        "close_at": {
+                            "type": "string",
+                            "description": "\"fact_closed\" only, and required for it: when \
+                                the assertion ended, as an RFC 3339 date-time such as \
+                                2024-06-01T00:00:00Z."
+                        },
+                        "close_at_precision": {
+                            "type": "string",
+                            "description": "\"fact_closed\" only: how precise close_at is, one \
+                                of year, month, day, hour, minute, second (default day)."
+                        }
+                    },
+                    "required": ["id", "resolution"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": ERRATA,
+                "description": "Propose that a person answer one held errata action, an item \
+                    of the \"errata\" section of review_list: a retraction, revision or \
+                    addition the errata agent wanted and the server's gate held for a person. \
+                    approve true proposes that the action be carried out; approve false \
+                    proposes that it be rejected and only recorded. The call changes nothing: \
+                    the action stays held, every fact stays as it is, and the call waits as a \
+                    proposal, recorded under the token's owner and the token's name, that a \
+                    signed-in editor answers in the Review tab; only when that person approves \
+                    the proposal is the action carried out or rejected, as that person's \
+                    answer. The result is {ok, outcome: \"proposed\", action_id, reason: \
+                    \"propose_only\", explanation}. Repeating the call while its proposal is \
+                    open returns the same proposal with code already_proposed. An action that \
+                    was already answered is refused with code already_decided; an id that is \
+                    unknown, or of another knowledge base, with code not_found. If the action \
+                    is answered before the proposal is, approving the proposal changes nothing \
+                    and closes it as superseded. Proposals do not count toward the limit on \
+                    finalized writes. No tool answers a proposal.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "description": "Action id (uuid) of an item of the \"errata\" \
+                                section from review_list."
+                        },
+                        "approve": {
+                            "type": "boolean",
+                            "description": "true to propose carrying the held action out, \
+                                false to propose rejecting it."
+                        }
+                    },
+                    "required": ["id", "approve"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": ALIGNMENT,
+                "description": "Propose that a person decide one item of the \"alignment\" \
+                    section of review_list: a phrase signature (kind \"phrase\") or an \
+                    implication rule (kind \"rule\"). For a phrase, property is the key of the \
+                    ontology property the phrase is bound to, with direction \"forward\" or \
+                    \"reverse\" and, under a state property, marks (\"start\", \"end\" or \
+                    \"none\": what a statement's single date marks); leave property out to \
+                    propose that no property fits. For a rule, approve true proposes approving \
+                    it and approve false rejecting it. The call changes nothing: the phrase or \
+                    rule stays as it is, no job is queued, and the call waits as a proposal, \
+                    recorded under the token's owner and the token's name, that a signed-in \
+                    editor answers in the Review tab. When that person approves the proposal, \
+                    the decision is recorded as that person's and the change to the typed \
+                    graph is queued as a job, not applied at once: an approval queues the \
+                    change, and its row in Agent History reads queued. The result is {ok, \
+                    outcome: \"proposed\", action_id, reason: \"propose_only\", explanation}. \
+                    Repeating the call while its proposal is open returns the same proposal \
+                    with code already_proposed. A phrase or rule has no decided state, so a \
+                    proposal is taken, and applied on approval, while the item exists; an id \
+                    that is unknown, or of another knowledge base, is refused with code \
+                    not_found. For a phrase, a property key the ontology does not have is \
+                    refused with code unknown_property; a property without a direction of \
+                    forward or reverse with code direction_required; marks other than start, \
+                    end or none with code unknown_marks; marks without a state property with \
+                    code marks_needs_state. Kind words are not decided with this tool. \
+                    Proposals do not count toward the limit on finalized writes. No tool \
+                    answers a proposal.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "kind": {
+                            "type": "string",
+                            "description": "\"phrase\" or \"rule\": the kind of the item, as \
+                                review_list gives it."
+                        },
+                        "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "description": "Id (uuid) of a phrase or rule item of the \
+                                \"alignment\" section from review_list."
+                        },
+                        "property": {
+                            "type": "string",
+                            "description": "\"phrase\" only: key of the property to bind the \
+                                phrase to. Leave out to propose that no property fits."
+                        },
+                        "direction": {
+                            "type": "string",
+                            "description": "\"phrase\" only, required with property: \
+                                \"forward\" or \"reverse\"."
+                        },
+                        "marks": {
+                            "type": "string",
+                            "description": "\"phrase\" only, under a state property: \
+                                \"start\", \"end\" or \"none\"."
+                        },
+                        "approve": {
+                            "type": "boolean",
+                            "description": "\"rule\" only, and required for it: true to \
+                                propose approving the rule, false to propose rejecting it."
+                        }
+                    },
+                    "required": ["kind", "id"]
+                }
+            }
         }
     ])
 }
@@ -541,7 +734,7 @@ fn annotations(name: &str) -> Value {
         }
         // 只能提议的工具：这一次调用什么都不改，只留一条提议——不是只读（台账多一行），
         // 也不破坏什么
-        DEFECT | FACT | CONFLICT => {
+        DEFECT | FACT | CONFLICT | VIOLATION | ERRATA | ALIGNMENT => {
             json!({ "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false })
         }
         _ => json!({ "readOnlyHint": true }),
@@ -935,6 +1128,101 @@ pub(super) async fn call(
                 new_from_precision,
             };
             review_ops::propose_conflict(state, caller, id, &body).await
+        }
+        VIOLATION => {
+            // 参数是路由的 id 与 `DecideViolationReq` 的字段；出路认不认得、日期够不够、
+            // 撤哪一条说没说清都由操作说（`bad_resolution`、`close_at_required`、
+            // `fact_required`，与 REST 同一个 code）
+            let Some(id) = args["id"]
+                .as_str()
+                .and_then(|s| s.trim().parse::<Uuid>().ok())
+            else {
+                return bad_argument(name, "id", "a uuid returned by review_list");
+            };
+            let Some(resolution) = args["resolution"].as_str() else {
+                return bad_argument(
+                    name,
+                    "resolution",
+                    "\"fact_retracted\", \"fact_closed\", \"axiom_relaxed\" or \"accepted\"",
+                );
+            };
+            let close_at = match optional_instant(name, &args, "close_at") {
+                Ok(v) => v,
+                Err(refused) => return refused,
+            };
+            let close_at_precision = match optional_string(name, &args, "close_at_precision") {
+                Ok(v) => v.map(str::to_string),
+                Err(refused) => return refused,
+            };
+            let fact_id = match optional_uuid(name, &args, "fact_id") {
+                Ok(v) => v,
+                Err(refused) => return refused,
+            };
+            let body = DecideViolationReq {
+                resolution: resolution.trim().to_string(),
+                close_at,
+                close_at_precision,
+                fact_id,
+            };
+            review_ops::propose_violation(state, caller, id, &body).await
+        }
+        ERRATA => {
+            // 参数是路由的 id 与请求体的那一个布尔值。REST 上不是布尔值的请求体到不了操作
+            // 那里，这里同样不执行
+            let Some(id) = args["id"]
+                .as_str()
+                .and_then(|s| s.trim().parse::<Uuid>().ok())
+            else {
+                return bad_argument(name, "id", "a uuid returned by review_list");
+            };
+            let Some(approve) = args["approve"].as_bool() else {
+                return bad_argument(name, "approve", "true or false");
+            };
+            review_ops::propose_errata(state, caller, id, approve).await
+        }
+        ALIGNMENT => {
+            // `kind` 说走哪一条路由（短语或规则），其余参数是那条路由的 id 与请求体的字段。
+            // 属性认不认得、方向与 marks 对不对由操作说（`unknown_property` 等，与 REST
+            // 同一个 code）。类别词不走这里：它的决定直接落地，是另一个工具的事
+            let Some(id) = args["id"]
+                .as_str()
+                .and_then(|s| s.trim().parse::<Uuid>().ok())
+            else {
+                return bad_argument(name, "id", "a uuid returned by review_list");
+            };
+            match args["kind"].as_str().map(str::trim) {
+                Some("phrase") => {
+                    let (property, direction, marks) = match (
+                        optional_string(name, &args, "property"),
+                        optional_string(name, &args, "direction"),
+                        optional_string(name, &args, "marks"),
+                    ) {
+                        (Ok(property), Ok(direction), Ok(marks)) => (property, direction, marks),
+                        (Err(refused), _, _) | (_, Err(refused), _) | (_, _, Err(refused)) => {
+                            return refused
+                        }
+                    };
+                    // 规则那条路由的 `approve` 给了也不读
+                    let body = DecideAlignmentPhraseReq {
+                        property: property.map(str::to_string),
+                        direction: direction.map(str::to_string),
+                        marks: marks.map(str::to_string),
+                    };
+                    review_ops::propose_alignment_phrase(state, caller, id, &body).await
+                }
+                Some("rule") => {
+                    // REST 上没有 `approve` 的请求体同样到不了操作那里
+                    let Some(approve) = args["approve"].as_bool() else {
+                        return bad_argument(
+                            name,
+                            "approve",
+                            "true or false when kind is \"rule\"",
+                        );
+                    };
+                    review_ops::propose_alignment_rule(state, caller, id, approve).await
+                }
+                _ => return bad_argument(name, "kind", "\"phrase\" or \"rule\""),
+            }
         }
         // `serves` 之外的名字到不了这里；到了也只说没有这个工具，不去碰库
         _ => {
