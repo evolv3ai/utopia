@@ -3,9 +3,9 @@ id: T004
 title: Open fact confirm, reject and close and conflict resolution to a token as proposals
 wave: 2
 deps: [T003]
-status: pending
-agent: null
-base: null
+status: done
+agent: build_T004
+base: 1fad0b69c4e5ba27e764d93c57ba2af0c9fe430a
 worktree: null
 task_branch: null
 files:
@@ -94,3 +94,81 @@ Heavy: yes
   - The Verify command itself was not run (it names the orchestrator's database). Its module-filter half was not run separately; the whole-crate run covers those modules.
   - Not tested: a close whose store call reports no change (it needs a retraction between the check and the rewrite); `not_a_state` and the retime `interval_inverted` at propose time.
 - 2026-11-20 — orchestrator: brief repair (Delegated, driver D138): crates/utopia-store/src/temporal/conflicts.rs added to files. The coder may add one additive store entry there that takes an optional proposal id and writes it as agent_proposal in the conflict audit detail inside the existing transaction; resolve_review_conflict keeps its signature and, for a signed-in person, its audit row byte for byte. Task returned to pending; the coder's uncommitted work is held and restored after re-activation.
+- 2026-11-20 — coder build_T004 (after the orchestrator's ruling, reading 1, base `1fad0b6`): implemented.
+  - `crates/utopia-store/src/temporal/conflicts.rs`: one additive entry, the method `ConflictDecision::resolve_as_reviewer(self, pool, kb_id, conflict_id, actor_id, proposal: Option<Uuid>)`. It runs the same private `resolve` in the same transaction; `resolve` gains a `proposal` parameter and writes `agent_proposal` into the `conflict.*` audit detail only when it is given. `resolve_review_conflict` and `resolve_conflict` keep their signatures and pass no proposal. Deviation from "one function": the entry is a method on `ConflictDecision`, not a free function, because `temporal.rs` (not in `files`) re-exports this private module by name (`pub use conflicts::{resolve_conflict, resolve_review_conflict, ConflictDecision}`), so a new free function would not be reachable from the server.
+  - `review_routes.rs`: `conflict_resolution` gains `proposal: Option<Uuid>` and calls `resolve_as_reviewer`; the session handler passes `None`, the `Decision::Conflict` arm passes `Some(p.id)`.
+  - Session audit row unchanged, proof: `a_token_conflict_resolution_waits_as_a_proposal_and_a_person_applies_it` now asserts, for each of the four actions, that the session's audit detail has exactly the keys it always had (no `agent_proposal`, no `token_id`) and that the approved row's keys are those plus `agent_proposal`; the existing session test `api::review_routes::conflict_tests::human_conflict_dates_and_settlement_commit_with_the_actor` passes unchanged.
+  - New test `api::review_token_fact_tests::approving_a_close_that_changes_nothing_supersedes_the_proposal` for the path flagged as untested: a test transaction holds the fact's row lock, the approval blocks at the store's `FOR UPDATE`, the transaction retracts the fact and commits; the answer is `superseded`, no corrected row and no `fact.close` audit row are written. It waits on `pg_blocking_pids`, not on a fixed sleep; three runs in a row passed.
+- 2026-11-20 — coder build_T004: commands after the ruling, primary worktree, same `CARGO_TARGET_DIR`, databases `m004_t004_dev` (server) and `m004_t004_dev_store` (store, created and migrated, "数据库迁移完成"), `UTOPIA_TEST_REQUIRE_DB=1`:
+  - The ten tests the Verify names, with the Verify's filters → 10 `... ok`; `test result: ok. 10 passed; 0 failed; 930 filtered out`.
+  - `cargo test -p utopia-server` (whole crate) → `test result: ok. 938 passed; 0 failed; 2 ignored`.
+  - Store tests that touch conflicts: `cargo test -p utopia-store --test a_token_proposal_waits_for_a_person --test the_engine_redraws_only_what_it_drew` → `ok. 6 passed` and `ok. 15 passed`; `cargo test -p utopia-store --test store -- a_late_value_takes_its_place_in_history:: a_moment_marks_its_state:: a_review_has_a_summary:: a_timeline_holds_whatever_the_order::` → `ok. 31 passed; 0 failed; 330 filtered out`. `src/temporal` holds no test of its own that names a conflict.
+  - `cargo fmt --all --check` → exit 0. `cargo clippy --workspace --all-targets -- -D warnings` → exit 0.
+  - The Verify command itself was not run (it names the orchestrator's database), and its module-filter half was not run separately; the whole-crate run covers those modules. Still not tested: `not_a_state` and the retime `interval_inverted` at propose time.
+- 2026-11-20 — orchestrator Verify (sidecar gsd-path-verify/task-t004-verify): pass, exit 0; output tail:
+  ```
+  test api::review_totals_tests::a_token_reading_duplicates_receives_the_same_total_as_a_session ... ok
+  test api::review_totals_tests::alignment_items_with_one_timestamp_are_each_listed_once_across_pages ... ok
+  test api::review_token_merge_tests::each_of_the_six_hold_reasons_lands_a_proposal_that_names_it_for_the_queue_merge_and_the_manual_merge ... ok
+  test api::review_token_reads_tests::a_token_receives_each_sections_items_in_the_session_order ... ok
+  test api::review_token_guard_tests::the_second_revert_by_a_person_within_seven_days_makes_the_tokens_merge_and_revert_proposals_and_its_keep_still_finalizes ... ok
+  test api::review_token_guard_tests::the_limit_and_the_breaker_hold_for_the_queue_merge_the_manual_merge_batch_members_and_the_mcp_tools ... ok
+  test api::review_token_revert_tests::a_token_reverts_its_own_merge_over_the_api_and_over_mcp_and_a_second_revert_answers_already_decided ... ok
+  test api::review_token_revert_tests::review_revert_is_listed_only_to_a_write_token_of_an_editor_and_says_what_a_revert_does_not_recall ... ok
+  test api::review_totals_tests::an_empty_queue_has_total_0_and_an_offset_past_the_end_returns_no_items_with_the_true_total ... ok
+  test api::review_token_reads_tests::a_tokens_total_counts_the_listed_rows_and_counts_keep_their_values ... ok
+  test api::review_totals_tests::the_seed_puts_items_in_every_one_of_the_thirteen_sections ... ok
+  test api::review_token_revert_tests::a_token_reverts_any_token_agents_merge_of_the_base_and_an_unknown_or_foreign_merge_id_is_not_found ... ok
+  test api::review_totals_tests::the_total_of_every_list_queue_is_the_number_of_rows_its_pages_return ... ok
+  test api::review_token_revert_tests::after_a_token_merge_and_its_revert_every_fact_entity_and_evidence_row_is_as_before ... ok
+  test api::review_token_reads_tests::a_token_whose_kb_ids_exclude_the_base_gets_404_on_every_review_read ... ok
+  test api::review_token_merge_tests::of_a_person_the_governor_and_a_token_deciding_one_pair_exactly_one_is_applied_and_the_losing_token_gets_already_decided ... ok
+  test api::review_token_reads_tests::a_token_page_size_is_clamped_and_an_offset_at_or_past_the_total_returns_no_items ... ok
+  
+  test result: ok. 121 passed; 0 failed; 0 ignored; 0 measured; 819 filtered out; finished in 25.73s
+  ```
+- 2026-11-20 — orchestrator regression Verify of T002 (sidecar gsd-path-verify/task-t004-verify): pass, exit 0; output tail:
+  ```
+  test api::review_totals_tests::a_session_list_response_differs_from_before_only_by_the_added_total_key ... ok
+  test api::review_token_revert_tests::a_token_revert_of_a_persons_or_the_governors_merge_lands_a_proposal_and_reverts_nothing ... ok
+  test api::review_token_guard_tests::the_second_revert_by_a_person_within_seven_days_makes_the_tokens_merge_and_revert_proposals_and_its_keep_still_finalizes ... ok
+  test api::review_token_revert_tests::a_token_reverts_its_own_merge_over_the_api_and_over_mcp_and_a_second_revert_answers_already_decided ... ok
+  test api::review_totals_tests::an_empty_queue_has_total_0_and_an_offset_past_the_end_returns_no_items_with_the_true_total ... ok
+  test api::review_token_reads_tests::a_token_receives_each_sections_items_in_the_session_order ... ok
+  test api::review_token_guard_tests::the_limit_and_the_breaker_hold_for_the_queue_merge_the_manual_merge_batch_members_and_the_mcp_tools ... ok
+  test api::review_token_revert_tests::review_revert_is_listed_only_to_a_write_token_of_an_editor_and_says_what_a_revert_does_not_recall ... ok
+  test api::review_totals_tests::the_seed_puts_items_in_every_one_of_the_thirteen_sections ... ok
+  test api::review_token_merge_tests::each_of_the_six_hold_reasons_lands_a_proposal_that_names_it_for_the_queue_merge_and_the_manual_merge ... ok
+  test api::review_token_reads_tests::a_tokens_total_counts_the_listed_rows_and_counts_keep_their_values ... ok
+  test api::review_totals_tests::the_total_of_every_list_queue_is_the_number_of_rows_its_pages_return ... ok
+  test api::review_token_revert_tests::after_a_token_merge_and_its_revert_every_fact_entity_and_evidence_row_is_as_before ... ok
+  test api::review_token_revert_tests::a_token_reverts_any_token_agents_merge_of_the_base_and_an_unknown_or_foreign_merge_id_is_not_found ... ok
+  test api::review_token_reads_tests::a_token_whose_kb_ids_exclude_the_base_gets_404_on_every_review_read ... ok
+  test api::review_token_merge_tests::of_a_person_the_governor_and_a_token_deciding_one_pair_exactly_one_is_applied_and_the_losing_token_gets_already_decided ... ok
+  test api::review_token_reads_tests::a_token_page_size_is_clamped_and_an_offset_at_or_past_the_total_returns_no_items ... ok
+  
+  test result: ok. 118 passed; 0 failed; 0 ignored; 0 measured; 822 filtered out; finished in 25.47s
+  ```
+- 2026-11-20 — orchestrator regression Verify of T003 (sidecar gsd-path-verify/task-t004-verify): pass, exit 0; output tail:
+  ```
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:1336) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:32856) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:35812) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:40176) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:14796) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:30032) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:25744) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  [33m
+  (!) Some chunks are larger than 500 kB after minification. Consider:
+  - Using dynamic import() to code-split the application
+  - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+  - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+  ```

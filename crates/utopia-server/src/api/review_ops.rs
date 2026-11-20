@@ -15,7 +15,8 @@
 //! 做的合并直接撤，人或治理 agent 做的只留提议。还有成批的两样：一次裁最多 50 对
 //! 重复项（[`batch`]），每一对走的就是上面的单笔函数；以及把一批做出的合并整批撤回
 //! （[`revert_batch`]）。裁定表里「只能提议」的操作走 [`target_open`] 与 [`land_proposal`]：
-//! 什么都不改，只留一条等人答的提议——本体缺陷（[`propose_defect`]）是第一种。
+//! 什么都不改，只留一条等人答的提议——本体缺陷（[`propose_defect`]）是第一种，事实的确认、
+//! 拒绝、闭合（[`propose_fact`]）与时态矛盾的裁决（[`propose_conflict`]）照的是它。
 //! 别的裁决都还关着——读得到「等你点头」不等于能替人点头。
 //!
 //! 每一笔要落地的写入之前还有两道，都只在 [`guard`] 一处：限速（一枚令牌在一个库里
@@ -657,6 +658,243 @@ pub(crate) async fn propose_defect(
         &defect_id.to_string(),
         request,
         Some(resolution),
+        None,
+    )
+    .await
+}
+
+/// 「终点早于起点」的那一句拒绝，与人闭合一条事实时 store 给的同一个 code、同一句话
+fn interval_inverted() -> AppError {
+    AppError::invalid(
+        "interval_inverted",
+        "The start of the interval is after its end.",
+    )
+}
+
+/// 把一条事实关在 `at`（精度 `precision`）会不会关在它的起点之前。两端各按各的精度截断，
+/// 与 `temporal::close_superseded` 同一个比法——这里只读，不改
+async fn closes_before_start(
+    state: &AppState,
+    kb_id: Uuid,
+    fact_id: Uuid,
+    at: chrono::DateTime<chrono::Utc>,
+    precision: &str,
+) -> Result<bool, AppError> {
+    let start: Option<(Option<chrono::DateTime<chrono::Utc>>, Option<String>)> = sqlx::query_as(
+        "SELECT valid_from, valid_from_precision FROM facts WHERE id = $1 AND kb_id = $2",
+    )
+    .bind(fact_id)
+    .bind(kb_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let at = utopia_store::graph::truncate_to(at, Some(precision));
+    Ok(match start {
+        Some((Some(from), from_precision)) => {
+            at < utopia_store::graph::truncate_to(from, from_precision.as_deref())
+        }
+        _ => false,
+    })
+}
+
+/// 经令牌确认、拒绝或闭合一条事实：**只留提议**（裁定表的 ConfirmFact / RejectFact /
+/// CloseFact 三行）。事实不动，等登录的人在 Review 里答；批准时跑的是人自己的那段代码
+/// （`review_routes`）。`action` 是 confirm / reject / close；`request` 是闭合的请求体，
+/// 确认与拒绝没有请求体。
+///
+/// 次序是契约：写的检查；请求体（闭合日期的精度，`bad_precision`，与人的路由同一个
+/// code）；目标（没有是 404，作废了的事实对拒绝与闭合是 `already_decided`）；要读目标才
+/// 知道的检查（闭合点早于起点，`interval_inverted`）；留提议。哪一步没过都一行不写。
+/// 三种操作各是各的提议：同一条事实上确认与拒绝可以同时开着
+pub(crate) async fn propose_fact(
+    state: &AppState,
+    caller: &ReviewCaller,
+    fact_id: Uuid,
+    action: &str,
+    request: Option<&super::review_routes::CloseFactBody>,
+) -> Result<serde_json::Value, AppError> {
+    authorize_write(state, caller).await?;
+    let (row, operation, action): (AgentOperation, &'static str, &'static str) = match action {
+        "confirm" => (AgentOperation::ConfirmFact, "fact.confirm", "confirm"),
+        "reject" => (AgentOperation::RejectFact, "fact.reject", "reject"),
+        "close" => (AgentOperation::CloseFact, "fact.close", "close"),
+        // REST 的三条路由各给各的动作，到不了这里；MCP 工具的 `action` 是调用方写的
+        other => {
+            return Err(AppError::invalid(
+                "unknown_action",
+                format!("action must be confirm, reject or close, got {other}"),
+            ))
+        }
+    };
+    // 闭合才有请求体。存下的就是那条路由的请求体原样：没给精度就没有那个键
+    let closing = match (operation, request) {
+        ("fact.close", Some(body)) => {
+            let precision =
+                super::review_routes::world_precision(body.valid_to_precision.as_deref())?;
+            Some((body, precision))
+        }
+        ("fact.close", None) => {
+            return Err(AppError::Validation(
+                "valid_to is required to close a fact".into(),
+            ))
+        }
+        _ => None,
+    };
+    let mut stored = json!({});
+    if let Some((body, _)) = closing {
+        stored["valid_to"] = json!(body.valid_to);
+        if let Some(precision) = &body.valid_to_precision {
+            stored["valid_to_precision"] = json!(precision);
+        }
+    }
+    target_open(state, caller, operation, fact_id, &stored).await?;
+    if let Some((body, precision)) = closing {
+        if closes_before_start(state, caller.kb_id, fact_id, body.valid_to, precision).await? {
+            return Err(interval_inverted());
+        }
+    }
+    land_proposal(
+        state,
+        caller,
+        row,
+        operation,
+        "fact",
+        fact_id,
+        &fact_id.to_string(),
+        stored,
+        Some(action),
+        None,
+    )
+    .await
+}
+
+/// 经令牌裁一处时态矛盾：**只留提议**（裁定表的 ResolveConflict 一行）。矛盾行与两条事实
+/// 都不动，等登录的人在 Review 里答；批准时跑的是人自己的那段代码（`review_routes`）。
+///
+/// 次序是契约：写的检查；请求体——两个精度（`bad_precision`）、动作（认不出的动作是
+/// store 给人的那一句 422）、重定时没给新起点（`new_from_required`），都与人的路由同一个
+/// code；目标（没有是 404，已经裁过、或有一条事实已作废是 `already_decided`）；要读目标
+/// 才知道的检查——闭合旧事实而新事实没有起点、也没给日期（`close_at_required`），闭合点
+/// 早于旧事实的起点或新起点晚于新事实写明的终点（`interval_inverted`），重定时的不是一段
+/// 状态（`not_a_state`）；留提议。哪一步没过都一行不写。
+///
+/// 提议存下矛盾此刻指着的两条事实（指纹，`land_proposal` 从 store 取）：批准时它们换了，
+/// 提议就过时了
+pub(crate) async fn propose_conflict(
+    state: &AppState,
+    caller: &ReviewCaller,
+    conflict_id: Uuid,
+    request: &super::review_routes::ConflictBody,
+) -> Result<serde_json::Value, AppError> {
+    authorize_write(state, caller).await?;
+    let close_precision =
+        super::review_routes::world_precision(request.close_at_precision.as_deref())?;
+    let new_precision =
+        super::review_routes::world_precision(request.new_from_precision.as_deref())?;
+    let action: &'static str = match request.action.as_str() {
+        "close" => "close",
+        "retime_new" => "retime_new",
+        "keep" => "keep",
+        "reject_new" => "reject_new",
+        // 与 `temporal::resolve_review_conflict` 对认不出的动作说的同一句
+        other => return Err(AppError::Validation(format!("Unknown resolution: {other}"))),
+    };
+    if action == "retime_new" && request.new_from.is_none() {
+        return Err(AppError::invalid(
+            "new_from_required",
+            "A new start is required when retiming a fact.",
+        ));
+    }
+    // 存下的就是请求体原样：没给的键不出现
+    let mut stored = json!({ "action": request.action });
+    if let Some(at) = request.close_at {
+        stored["close_at"] = json!(at);
+    }
+    if let Some(precision) = &request.close_at_precision {
+        stored["close_at_precision"] = json!(precision);
+    }
+    if let Some(at) = request.new_from {
+        stored["new_from"] = json!(at);
+    }
+    if let Some(precision) = &request.new_from_precision {
+        stored["new_from_precision"] = json!(precision);
+    }
+    target_open(state, caller, "conflict.resolve", conflict_id, &stored).await?;
+
+    // 目标开着：矛盾在这个库里，两条事实都活着。下面的检查读它们，不改
+    let (old, new): (Uuid, Uuid) = sqlx::query_as(
+        "SELECT old_fact_id, new_fact_id FROM fact_conflicts WHERE id = $1 AND kb_id = $2",
+    )
+    .bind(conflict_id)
+    .bind(caller.kb_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    #[allow(clippy::type_complexity)]
+    let (new_from, new_from_precision, new_to, new_to_precision, end_derived, predicate): (
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<String>,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<String>,
+        bool,
+        Option<Uuid>,
+    ) = sqlx::query_as(
+        "SELECT valid_from, valid_from_precision, valid_to, valid_to_precision, end_derived,
+                predicate_id
+           FROM facts WHERE id = $1 AND kb_id = $2",
+    )
+    .bind(new)
+    .bind(caller.kb_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    match action {
+        "close" => {
+            // 人给了日期就用人给的；没给就闭合在新事实的起点，带着那个起点的精度
+            let (at, precision) = match request.close_at {
+                Some(at) => (at, close_precision),
+                None => (
+                    new_from.ok_or_else(|| {
+                        AppError::invalid(
+                            "close_at_required",
+                            "close_at is required when the new fact has no start time",
+                        )
+                    })?,
+                    new_from_precision.as_deref().unwrap_or("day"),
+                ),
+            };
+            if closes_before_start(state, caller.kb_id, old, at, precision).await? {
+                return Err(interval_inverted());
+            }
+        }
+        "retime_new" => {
+            if utopia_store::graph::predicate_temporal(&state.pool, predicate).await?
+                != utopia_store::graph::Temporal::State
+            {
+                return Err(AppError::invalid(
+                    "not_a_state",
+                    "Only a state has a start to retime.",
+                ));
+            }
+            // 引擎画的终点会跟着重画，只有写明的终点拦得住新起点
+            if let (false, Some(at), Some(end)) = (end_derived, request.new_from, new_to) {
+                let from = utopia_store::graph::truncate_to(at, Some(new_precision));
+                if from > utopia_store::graph::truncate_to(end, new_to_precision.as_deref()) {
+                    return Err(interval_inverted());
+                }
+            }
+        }
+        _ => {}
+    }
+    land_proposal(
+        state,
+        caller,
+        AgentOperation::ResolveConflict,
+        "conflict.resolve",
+        "conflict",
+        conflict_id,
+        &conflict_id.to_string(),
+        stored,
+        Some(action),
         None,
     )
     .await

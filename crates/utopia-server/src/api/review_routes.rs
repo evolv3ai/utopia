@@ -236,7 +236,7 @@ pub struct CloseFactBody {
 /// 人给的世界轴精度。从前这里一律写 "day"（「人在界面上选的是一个日期」），于是
 /// 「2023 年 6 月结束」只能编成 6 月 1 日——在无知的地方填一个确定的值，正是
 /// `facts.valid_to_precision` 那条注释说的病
-fn world_precision(p: Option<&str>) -> Result<&'static str, utopia_core::AppError> {
+pub(super) fn world_precision(p: Option<&str>) -> Result<&'static str, utopia_core::AppError> {
     let Some(p) = p else { return Ok("day") };
     utopia_store::graph::WORLD_PRECISIONS
         .iter()
@@ -252,13 +252,42 @@ fn world_precision(p: Option<&str>) -> Result<&'static str, utopia_core::AppErro
 
 /// 人工闭合一条事实的有效区间（"这事在某时结束了"）——走作废+改写，
 /// 与自动闭合同一机制，账本可回放。
+///
+/// 写令牌也能调（0076）：它**只留一条提议**（`review_ops::propose_fact`），事实不动，等
+/// 登录的人在 Review 里答。令牌在进下面这一段之前就离开了处理函数；会话照旧跑
+/// [`fact_closing`]，回答与审计行同从前一个字不差
 pub async fn close_fact(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    caller: SessionOrToken,
     Path((kb_id, fact_id)): Path<(Uuid, Uuid)>,
     Json(body): Json<CloseFactBody>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    let user = caller.user;
+    if let Some(token) = caller.pat {
+        let caller = ReviewCaller { user, token, kb_id };
+        let answer =
+            review_ops::propose_fact(&state, &caller, fact_id, "close", Some(&body)).await?;
+        return Ok(Json(answer));
+    }
     require_kb(&state, &user, kb_id, Role::Editor).await?;
+    fact_closing(&state, kb_id, &user, fact_id, &body, None).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// 人闭合一条事实的那几句，从会话处理函数里原样挪出来：校验、快照、store 的改写、审计行、
+/// 刷新。会话调它时 `proposal` 是 None，一切同从前；批准令牌的提议时带上提议的 id，审计
+/// detail 里多一个 `agent_proposal`。actor 两种情形都是这个人，detail 里不放 `token_id`。
+///
+/// 回 store 改没改：`close_superseded` 说「没动」（检查之后、改写之前这条事实被别人作废了）
+/// 时是 false。会话不看它——从前就不看；批准提议时没动就什么都不记，那条提议算过时
+async fn fact_closing(
+    state: &AppState,
+    kb_id: Uuid,
+    user: &utopia_core::models::User,
+    fact_id: Uuid,
+    body: &CloseFactBody,
+    proposal: Option<Uuid>,
+) -> Result<bool, utopia_core::AppError> {
     // 归属与状态校验：本 KB 的、未作废、开放区间的事实才可闭合
     let ok: Option<(Uuid,)> = sqlx::query_as(
         "SELECT id FROM facts
@@ -270,15 +299,23 @@ pub async fn close_fact(
     .await
     .map_err(utopia_core::AppError::Db)?;
     if ok.is_none() {
-        return Err(utopia_core::AppError::NotFound.into());
+        return Err(utopia_core::AppError::NotFound);
     }
     let precision = world_precision(body.valid_to_precision.as_deref())?;
-    let snap = fact_snapshot(&state, kb_id, fact_id).await;
-    utopia_store::temporal::close_superseded(&state.pool, fact_id, body.valid_to, precision)
-        .await?;
+    let snap = fact_snapshot(state, kb_id, fact_id).await;
+    let changed =
+        utopia_store::temporal::close_superseded(&state.pool, fact_id, body.valid_to, precision)
+            .await?
+            .is_some();
+    if proposal.is_some() && !changed {
+        return Ok(false);
+    }
     if let Some(mut d) = snap {
         d["valid_to"] = json!(body.valid_to.to_rfc3339());
         d["valid_to_precision"] = json!(precision);
+        if let Some(proposal) = proposal {
+            d["agent_proposal"] = json!(proposal);
+        }
         let _ = utopia_store::audit::record(
             &state.pool,
             Some(kb_id),
@@ -291,7 +328,7 @@ pub async fn close_fact(
         .await;
     }
     state.emit_review(kb_id);
-    Ok(Json(json!({ "ok": true })))
+    Ok(changed)
 }
 
 #[derive(Deserialize)]
@@ -313,31 +350,52 @@ pub struct ConflictBody {
 }
 
 /// 时态冲突裁决（S3：自动闭合拿不准的那些）。
+///
+/// 写令牌也能调（0076）：它**只留一条提议**（`review_ops::propose_conflict`），矛盾行与
+/// 两条事实都不动，等登录的人在 Review 里答。令牌在进下面这一段之前就离开了处理函数；
+/// 会话照旧跑 [`conflict_resolution`]，回答与审计行同从前一个字不差
 pub async fn resolve_conflict(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    caller: SessionOrToken,
     Path((kb_id, conflict_id)): Path<(Uuid, Uuid)>,
     Json(body): Json<ConflictBody>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    let user = caller.user;
+    if let Some(token) = caller.pat {
+        let caller = ReviewCaller { user, token, kb_id };
+        let answer = review_ops::propose_conflict(&state, &caller, conflict_id, &body).await?;
+        return Ok(Json(answer));
+    }
     require_kb(&state, &user, kb_id, Role::Editor).await?;
+    conflict_resolution(&state, kb_id, &user, conflict_id, &body, None).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// 人裁一处时态矛盾的那几句，从会话处理函数里原样挪出来：两个精度、store 的那一个事务
+/// （改写、结案、审计行一起提交）、刷新。会话调它时 `proposal` 是 None，store 写下的审计
+/// detail 与从前一个键不差；批准令牌的提议时带上提议的 id，detail 里多一个
+/// `agent_proposal`（审计行在 store 的事务里写，所以 id 递给 store）。actor 都是这个人
+async fn conflict_resolution(
+    state: &AppState,
+    kb_id: Uuid,
+    user: &utopia_core::models::User,
+    conflict_id: Uuid,
+    body: &ConflictBody,
+    proposal: Option<Uuid>,
+) -> Result<(), utopia_core::AppError> {
     let precision = world_precision(body.close_at_precision.as_deref())?;
     let new_precision = world_precision(body.new_from_precision.as_deref())?;
-    utopia_store::temporal::resolve_review_conflict(
-        &state.pool,
-        kb_id,
-        conflict_id,
-        utopia_store::temporal::ConflictDecision {
-            action: &body.action,
-            close_at: body.close_at,
-            close_precision: precision,
-            new_from: body.new_from,
-            new_precision,
-        },
-        user.id,
-    )
+    utopia_store::temporal::ConflictDecision {
+        action: &body.action,
+        close_at: body.close_at,
+        close_precision: precision,
+        new_from: body.new_from,
+        new_precision,
+    }
+    .resolve_as_reviewer(&state.pool, kb_id, conflict_id, user.id, proposal)
     .await?;
     state.emit_review(kb_id);
-    Ok(Json(json!({ "ok": true })))
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -902,6 +960,10 @@ fn stored_request<T: serde::de::DeserializeOwned>(
 /// [`decision_of`] 里加一个操作名，[`approve_decision`] 里加一支
 enum Decision {
     Defect(DecideDefectReq),
+    ConfirmFact,
+    RejectFact,
+    CloseFact(CloseFactBody),
+    Conflict(ConflictBody),
 }
 
 /// 这条提议的操作认不认得。`None` = 认不得：答的人拿到的还是从前那个 500
@@ -910,6 +972,11 @@ fn decision_of(
 ) -> Result<Option<Decision>, utopia_core::AppError> {
     Ok(match p.operation.as_str() {
         "defect.decide" => Some(Decision::Defect(stored_request(p)?)),
+        // 确认与拒绝没有请求体
+        "fact.confirm" => Some(Decision::ConfirmFact),
+        "fact.reject" => Some(Decision::RejectFact),
+        "fact.close" => Some(Decision::CloseFact(stored_request(p)?)),
+        "conflict.resolve" => Some(Decision::Conflict(stored_request(p)?)),
         _ => None,
     })
 }
@@ -950,6 +1017,38 @@ async fn approve_decision(
         // 缺陷的裁决是一条带守卫的 UPDATE：`NotFound` 就是输了竞争，什么都没写
         Decision::Defect(req) => {
             match defect_decision(state, kb_id, user, p.target_id, &req, Some(p.id)).await {
+                Ok(()) => Ok(Approved::Done(Applied::default())),
+                Err(utopia_core::AppError::NotFound) => Ok(Approved::Gone),
+                Err(e) => Err(e),
+            }
+        }
+        // 确认是一条带守卫的 UPDATE，拒绝是一个事务：`NotFound` 就是输了竞争，什么都没写
+        Decision::ConfirmFact => {
+            match fact_confirmation(state, kb_id, user, p.target_id, Some(p.id)).await {
+                Ok(()) => Ok(Approved::Done(Applied::default())),
+                Err(utopia_core::AppError::NotFound) => Ok(Approved::Gone),
+                Err(e) => Err(e),
+            }
+        }
+        Decision::RejectFact => {
+            match fact_rejection(state, kb_id, user, p.target_id, Some(p.id)).await {
+                Ok(()) => Ok(Approved::Done(Applied::default())),
+                Err(utopia_core::AppError::NotFound) => Ok(Approved::Gone),
+                Err(e) => Err(e),
+            }
+        }
+        // 闭合：store 说「没动」就是过时——这条事实在检查之后被别人作废了，没有哪一行
+        // 是这次批准改的，不能关成 approved。它报的错（`NotFound` 也算）原样报出去
+        Decision::CloseFact(body) => {
+            if fact_closing(state, kb_id, user, p.target_id, &body, Some(p.id)).await? {
+                Ok(Approved::Done(Applied::default()))
+            } else {
+                Ok(Approved::Gone)
+            }
+        }
+        // 矛盾的裁决是一个事务：`NotFound` 就是它在检查之后被别人裁了，什么都没写
+        Decision::Conflict(body) => {
+            match conflict_resolution(state, kb_id, user, p.target_id, &body, Some(p.id)).await {
                 Ok(()) => Ok(Approved::Done(Applied::default())),
                 Err(utopia_core::AppError::NotFound) => Ok(Approved::Gone),
                 Err(e) => Err(e),
@@ -1341,15 +1440,42 @@ pub async fn agent_batch_revert(
     Ok(Json(review_ops::unit_revert_answer(batch_id, outcomes)))
 }
 
+/// 人确认一条事实。写令牌也能调（0076）：它**只留一条提议**（`review_ops::propose_fact`），
+/// 事实不动，等登录的人在 Review 里答。令牌在进下面这一段之前就离开了处理函数；会话照旧
+/// 跑 [`fact_confirmation`]，回答与审计行同从前一个字不差
 pub async fn confirm_fact(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    caller: SessionOrToken,
     Path((kb_id, fact_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    let user = caller.user;
+    if let Some(token) = caller.pat {
+        let caller = ReviewCaller { user, token, kb_id };
+        let answer = review_ops::propose_fact(&state, &caller, fact_id, "confirm", None).await?;
+        return Ok(Json(answer));
+    }
     require_kb(&state, &user, kb_id, Role::Editor).await?;
-    let snap = fact_snapshot(&state, kb_id, fact_id).await;
+    fact_confirmation(&state, kb_id, &user, fact_id, None).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// 人确认一条事实的那几句，从会话处理函数里原样挪出来：快照、带守卫的 UPDATE、审计行、
+/// 刷新。会话调它时 `proposal` 是 None，审计 detail 与从前一个键不差；批准令牌的提议时
+/// 带上提议的 id，detail 里多一个 `agent_proposal`。actor 两种情形都是这个人，detail 里
+/// 不放 `token_id`
+async fn fact_confirmation(
+    state: &AppState,
+    kb_id: Uuid,
+    user: &utopia_core::models::User,
+    fact_id: Uuid,
+    proposal: Option<Uuid>,
+) -> Result<(), utopia_core::AppError> {
+    let snap = fact_snapshot(state, kb_id, fact_id).await;
     utopia_store::graph::confirm_fact(&state.pool, kb_id, fact_id).await?;
-    if let Some(d) = snap {
+    if let Some(mut d) = snap {
+        if let Some(proposal) = proposal {
+            d["agent_proposal"] = json!(proposal);
+        }
         let _ = utopia_store::audit::record(
             &state.pool,
             Some(kb_id),
@@ -1362,18 +1488,42 @@ pub async fn confirm_fact(
         .await;
     }
     state.emit_review(kb_id);
+    Ok(())
+}
+
+/// 人拒绝一条事实。写令牌也能调（0076）：与确认一样只留一条提议；会话照旧跑
+/// [`fact_rejection`]
+pub async fn reject_fact(
+    State(state): State<AppState>,
+    caller: SessionOrToken,
+    Path((kb_id, fact_id)): Path<(Uuid, Uuid)>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let user = caller.user;
+    if let Some(token) = caller.pat {
+        let caller = ReviewCaller { user, token, kb_id };
+        let answer = review_ops::propose_fact(&state, &caller, fact_id, "reject", None).await?;
+        return Ok(Json(answer));
+    }
+    require_kb(&state, &user, kb_id, Role::Editor).await?;
+    fact_rejection(&state, kb_id, &user, fact_id, None).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
-pub async fn reject_fact(
-    State(state): State<AppState>,
-    AuthUser(user): AuthUser,
-    Path((kb_id, fact_id)): Path<(Uuid, Uuid)>,
-) -> ApiResult<Json<serde_json::Value>> {
-    require_kb(&state, &user, kb_id, Role::Editor).await?;
-    let snap = fact_snapshot(&state, kb_id, fact_id).await;
+/// 人拒绝一条事实的那几句，从会话处理函数里原样挪出来；与 [`fact_confirmation`] 同一个
+/// 约定：`proposal` 只往审计 detail 里多写一个 `agent_proposal`
+async fn fact_rejection(
+    state: &AppState,
+    kb_id: Uuid,
+    user: &utopia_core::models::User,
+    fact_id: Uuid,
+    proposal: Option<Uuid>,
+) -> Result<(), utopia_core::AppError> {
+    let snap = fact_snapshot(state, kb_id, fact_id).await;
     utopia_store::graph::reject_fact(&state.pool, kb_id, fact_id).await?;
-    if let Some(d) = snap {
+    if let Some(mut d) = snap {
+        if let Some(proposal) = proposal {
+            d["agent_proposal"] = json!(proposal);
+        }
         let _ = utopia_store::audit::record(
             &state.pool,
             Some(kb_id),
@@ -1386,7 +1536,7 @@ pub async fn reject_fact(
         .await;
     }
     state.emit_review(kb_id);
-    Ok(Json(json!({ "ok": true })))
+    Ok(())
 }
 
 /// 令牌撤回时可以带的那一句理由。会话不读请求体

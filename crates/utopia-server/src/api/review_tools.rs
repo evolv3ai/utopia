@@ -1,5 +1,6 @@
 //! Review 的 MCP 工具（0076 决定 2）：`review_list`、`review_item`、`review_keep`、
-//! `review_merge`、`review_revert`、`review_batch`。
+//! `review_merge`、`review_revert`、`review_batch`，以及只能提议的 `review_defect`、
+//! `review_fact`、`review_conflict`。
 //!
 //! 两个读工具管 Review 的十三档：`review_list` 读一档的一页（十一个列表档、总览、决策台账），
 //! `review_item` 读某一档里列着的一条，违规一档的条目带上它的证明。写的有两样：
@@ -8,7 +9,8 @@
 //! 合并——令牌 agent 做的直接撤，人或治理 agent 做的只留提议，给 `batch_id` 就是把一批
 //! 做出的合并整批撤回；`review_batch` 一次裁最多 50 对重复项，每一对走的就是单笔的那条路，
 //! 服务端发一个 `batch_id`。裁定表里只能提议的操作各有一个工具，`review_defect`（对一处
-//! 本体缺陷表态）是第一个：调用什么都不改，只留一条等人答的提议。
+//! 本体缺陷表态）是第一个，`review_fact`（确认、拒绝、闭合一条事实）与 `review_conflict`
+//! （裁一处时态矛盾）照的是它：调用什么都不改，只留一条等人答的提议。
 //! **没有哪个工具能答提议。**
 //!
 //! **这里只做两件事：把参数递给 `review_ops`，把它的回答变成工具结果。** 授权、裁定表、
@@ -27,6 +29,7 @@ use utopia_core::AppError;
 use uuid::Uuid;
 
 use super::review_ops::{self, ReviewCaller};
+use super::review_routes::{CloseFactBody, ConflictBody};
 use super::tools::{Step, ToolResult};
 use crate::state::AppState;
 
@@ -37,15 +40,23 @@ const MERGE: &str = "review_merge";
 const REVERT: &str = "review_revert";
 const BATCH: &str = "review_batch";
 const DEFECT: &str = "review_defect";
+const FACT: &str = "review_fact";
+const CONFLICT: &str = "review_conflict";
 
 /// 这个名字归不归这里管。归这里的，`mcp.rs` 不再拿它去问 `is_exposed`
 pub(super) fn serves(name: &str) -> bool {
-    matches!(name, LIST | ITEM | KEEP | MERGE | REVERT | BATCH | DEFECT)
+    matches!(
+        name,
+        LIST | ITEM | KEEP | MERGE | REVERT | BATCH | DEFECT | FACT | CONFLICT
+    )
 }
 
 /// 写工具：只列给写得了的调用方，标注里 `readOnlyHint` 是 false
 fn writes(name: &str) -> bool {
-    matches!(name, KEEP | MERGE | REVERT | BATCH | DEFECT)
+    matches!(
+        name,
+        KEEP | MERGE | REVERT | BATCH | DEFECT | FACT | CONFLICT
+    )
 }
 
 /// 工具定义，OpenAI 的形状——`chat::check_call` 认的就是这个形状，参数守卫与别的工具
@@ -389,6 +400,127 @@ fn definitions() -> Value {
                     "required": ["id", "resolution"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": FACT,
+                "description": "Propose that a person confirm, reject or close one fact, an \
+                    item of the \"unconfirmed\" or \"lowconf\" (Low confidence) section of \
+                    review_list: \"confirm\" (the fact is right; its confidence becomes 1), \
+                    \"reject\" (the fact is wrong and is retracted) or \"close\" (the fact was \
+                    true and ended at valid_to). The call changes nothing: the fact stays as \
+                    it is and the call waits as a proposal, recorded under the token's owner \
+                    and the token's name, that a signed-in editor answers in the Review tab; \
+                    only when that person approves it is the fact confirmed, rejected or \
+                    closed, as that person's decision. The result is {ok, outcome: \
+                    \"proposed\", action_id, reason: \"propose_only\", explanation}. \
+                    Repeating the call while its proposal is open returns the same proposal \
+                    with code already_proposed; confirm, reject and close are separate \
+                    proposals, so more than one may be open on one fact. A fact id that is \
+                    unknown, of another knowledge base, or (for confirm) retracted is refused \
+                    with code not_found, as is closing a fact that already has an end; \
+                    rejecting or closing a retracted fact with code already_decided; a \
+                    valid_to_precision that is not year, month, day, hour, minute or second \
+                    with code bad_precision; a valid_to before the fact's start with code \
+                    interval_inverted; an action other than the three with code \
+                    unknown_action. Proposals do not count toward the limit on finalized \
+                    writes. No tool answers a proposal.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "description": "Fact id (uuid) of an item of the \"unconfirmed\" \
+                                or \"lowconf\" section from review_list."
+                        },
+                        "action": {
+                            "type": "string",
+                            "description": "\"confirm\", \"reject\" or \"close\"."
+                        },
+                        "valid_to": {
+                            "type": "string",
+                            "description": "\"close\" only, and required for it: when the \
+                                fact ended, as an RFC 3339 date-time such as \
+                                2024-06-01T00:00:00Z."
+                        },
+                        "valid_to_precision": {
+                            "type": "string",
+                            "description": "\"close\" only: how precise valid_to is, one of \
+                                year, month, day, hour, minute, second (default day)."
+                        }
+                    },
+                    "required": ["id", "action"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": CONFLICT,
+                "description": "Propose that a person resolve one open temporal conflict, an \
+                    item of the \"conflicts\" section of review_list, in which an old and a \
+                    new fact cannot both hold: \"close\" (end the old fact at close_at, or at \
+                    the new fact's start when close_at is left out), \"retime_new\" (move the \
+                    new fact's start to new_from), \"keep\" (keep both facts as they are) or \
+                    \"reject_new\" (retract the new fact). The call changes nothing: the \
+                    conflict stays open, both facts stay as they are, and the call waits as a \
+                    proposal, recorded under the token's owner and the token's name, that a \
+                    signed-in editor answers in the Review tab; only when that person approves \
+                    it is the conflict resolved, as that person's decision. The result is {ok, \
+                    outcome: \"proposed\", action_id, reason: \"propose_only\", explanation}. \
+                    Repeating the call while its proposal is open returns the same proposal \
+                    with code already_proposed. A conflict that is already resolved, or one of \
+                    whose facts was retracted, is refused with code already_decided; an id \
+                    that is unknown, or of another knowledge base, with code not_found; a \
+                    precision that is not year, month, day, hour, minute or second with code \
+                    bad_precision; \"close\" without close_at when the new fact has no start \
+                    with code close_at_required; \"retime_new\" without new_from with code \
+                    new_from_required, and on a fact that is not a state with code \
+                    not_a_state; a date that would put an interval's end before its start with \
+                    code interval_inverted; an unknown action without a code. If the conflict \
+                    comes to name other facts before the proposal is answered, approving the \
+                    proposal changes nothing and closes it as superseded. Proposals do not \
+                    count toward the limit on finalized writes. No tool answers a proposal.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "description": "Conflict id (uuid) of an item of the \
+                                \"conflicts\" section from review_list."
+                        },
+                        "action": {
+                            "type": "string",
+                            "description": "\"close\", \"retime_new\", \"keep\" or \
+                                \"reject_new\"."
+                        },
+                        "close_at": {
+                            "type": "string",
+                            "description": "\"close\" only: when the old fact ended, as an \
+                                RFC 3339 date-time. Required when the new fact has no start."
+                        },
+                        "close_at_precision": {
+                            "type": "string",
+                            "description": "How precise close_at is, one of year, month, day, \
+                                hour, minute, second (default day)."
+                        },
+                        "new_from": {
+                            "type": "string",
+                            "description": "\"retime_new\" only, and required for it: the \
+                                new fact's start, as an RFC 3339 date-time."
+                        },
+                        "new_from_precision": {
+                            "type": "string",
+                            "description": "How precise new_from is, one of year, month, day, \
+                                hour, minute, second (default day)."
+                        }
+                    },
+                    "required": ["id", "action"]
+                }
+            }
         }
     ])
 }
@@ -409,7 +541,7 @@ fn annotations(name: &str) -> Value {
         }
         // 只能提议的工具：这一次调用什么都不改，只留一条提议——不是只读（台账多一行），
         // 也不破坏什么
-        DEFECT => {
+        DEFECT | FACT | CONFLICT => {
             json!({ "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false })
         }
         _ => json!({ "readOnlyHint": true }),
@@ -477,6 +609,21 @@ fn optional_uuid(name: &str, args: &Value, key: &str) -> Result<Option<Uuid>, To
             .and_then(|s| s.trim().parse::<Uuid>().ok())
             .map(Some)
             .ok_or_else(|| bad_argument(name, key, "a uuid returned by another review tool")),
+    }
+}
+
+/// 可选的时刻（RFC 3339）：没给或 null 是「没给」，给了解不出来的东西是参数错误。
+/// 解法与 REST 的请求体同一个（`chrono` 的反序列化），两个入口认的是同一种写法
+fn optional_instant(
+    name: &str,
+    args: &Value,
+    key: &str,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>, ToolResult> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => serde_json::from_value(v.clone())
+            .map(Some)
+            .map_err(|_| bad_argument(name, key, "an RFC 3339 date-time")),
     }
 }
 
@@ -711,6 +858,83 @@ pub(super) async fn call(
                 return bad_argument(name, "resolution", "\"fixed\" or \"accepted\"");
             };
             review_ops::propose_defect(state, caller, id, resolution).await
+        }
+        FACT => {
+            // 参数是路由的 id、走哪一条路由（`action`）、闭合那条路由的请求体字段。
+            // `action` 认不认得、精度认不认得由操作说（`unknown_action`、`bad_precision`）
+            let Some(id) = args["id"]
+                .as_str()
+                .and_then(|s| s.trim().parse::<Uuid>().ok())
+            else {
+                return bad_argument(name, "id", "a uuid returned by review_list");
+            };
+            let Some(action) = args["action"].as_str().map(str::trim) else {
+                return bad_argument(name, "action", "\"confirm\", \"reject\" or \"close\"");
+            };
+            if action != "close" {
+                // 确认与拒绝的路由没有请求体：闭合的两个参数给了也不读
+                review_ops::propose_fact(state, caller, id, action, None).await
+            } else {
+                let valid_to = match optional_instant(name, &args, "valid_to") {
+                    Ok(Some(at)) => at,
+                    // REST 上没有 `valid_to` 的请求体同样到不了操作那里
+                    Ok(None) => {
+                        return bad_argument(
+                            name,
+                            "valid_to",
+                            "an RFC 3339 date-time when action is \"close\"",
+                        )
+                    }
+                    Err(refused) => return refused,
+                };
+                let valid_to_precision = match optional_string(name, &args, "valid_to_precision") {
+                    Ok(v) => v.map(str::to_string),
+                    Err(refused) => return refused,
+                };
+                let body = CloseFactBody {
+                    valid_to,
+                    valid_to_precision,
+                };
+                review_ops::propose_fact(state, caller, id, action, Some(&body)).await
+            }
+        }
+        CONFLICT => {
+            // 参数是路由的 id 与 `ConflictBody` 的字段；动作、精度、日期够不够都由操作说
+            let Some(id) = args["id"]
+                .as_str()
+                .and_then(|s| s.trim().parse::<Uuid>().ok())
+            else {
+                return bad_argument(name, "id", "a uuid returned by review_list");
+            };
+            let Some(action) = args["action"].as_str() else {
+                return bad_argument(
+                    name,
+                    "action",
+                    "\"close\", \"retime_new\", \"keep\" or \"reject_new\"",
+                );
+            };
+            let (close_at, new_from) = match (
+                optional_instant(name, &args, "close_at"),
+                optional_instant(name, &args, "new_from"),
+            ) {
+                (Ok(close_at), Ok(new_from)) => (close_at, new_from),
+                (Err(refused), _) | (_, Err(refused)) => return refused,
+            };
+            let (close_at_precision, new_from_precision) = match (
+                optional_string(name, &args, "close_at_precision"),
+                optional_string(name, &args, "new_from_precision"),
+            ) {
+                (Ok(close), Ok(new)) => (close.map(str::to_string), new.map(str::to_string)),
+                (Err(refused), _) | (_, Err(refused)) => return refused,
+            };
+            let body = ConflictBody {
+                action: action.trim().to_string(),
+                close_at,
+                close_at_precision,
+                new_from,
+                new_from_precision,
+            };
+            review_ops::propose_conflict(state, caller, id, &body).await
         }
         // `serves` 之外的名字到不了这里；到了也只说没有这个工具，不去碰库
         _ => {
