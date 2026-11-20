@@ -1,0 +1,176 @@
+{
+  "canonical_project_dir": ".project",
+  "command": "verify-landed",
+  "head": "a25ceba42987699d4b43ff5ba34fe6b5e3e2176d",
+  "project_dir": ".project",
+  "tasks": [
+    {
+      "classification": "proven-landed",
+      "command": "reconcile",
+      "history": {
+        "branch": "gsd-path/M003",
+        "candidates": [
+          {
+            "base": "a09261beb61a29ea8fb9f1d59f6416af523dda36",
+            "commit": "814b8233bc3db6aaf4655a6a808147ef3bef2747",
+            "valid": true
+          }
+        ],
+        "head": "a25ceba42987699d4b43ff5ba34fe6b5e3e2176d",
+        "subject": "T001: Burn down the store risks: ledger columns by migration 0129, the token merge gate with six holds, a token merge and revert atomic with their ledger and audit rows, and the precedent rule"
+      },
+      "landed_commit": "814b8233bc3db6aaf4655a6a808147ef3bef2747",
+      "reasons": [],
+      "task": {
+        "base": "a09261beb61a29ea8fb9f1d59f6416af523dda36",
+        "id": "T001",
+        "status": "done",
+        "task_file": ".project/tasks/T001-ledger-gate-and-atomic-token-merge-in-the-store.md"
+      }
+    },
+    {
+      "classification": "proven-landed",
+      "command": "reconcile",
+      "history": {
+        "branch": "gsd-path/M003",
+        "candidates": [
+          {
+            "base": "8ebbdb36659c22acbdcef146ecca6695e7cffcee",
+            "commit": "1edcae8ab3a1da1e55ce7017f12741de80e1c882",
+            "valid": true
+          }
+        ],
+        "head": "a25ceba42987699d4b43ff5ba34fe6b5e3e2176d",
+        "subject": "T002: A write token of an editor merges a duplicate pair or two entities over the token API and MCP behind the gate, and a held call lands one proposal"
+      },
+      "landed_commit": "1edcae8ab3a1da1e55ce7017f12741de80e1c882",
+      "reasons": [],
+      "task": {
+        "base": "8ebbdb36659c22acbdcef146ecca6695e7cffcee",
+        "id": "T002",
+        "status": "done",
+        "task_file": ".project/tasks/T002-token-merge-over-rest-and-mcp-with-held-calls-as-proposals.md"
+      }
+    },
+    {
+      "classification": "proven-landed",
+      "command": "reconcile",
+      "history": {
+        "branch": "gsd-path/M003",
+        "candidates": [
+          {
+            "base": "8c5293e6323e159317e07dc7cc85501ddcea3b77",
+            "commit": "5b29051ec312fb9d53fe719bccc6197f47c8a8f0",
+            "valid": true
+          }
+        ],
+        "head": "a25ceba42987699d4b43ff5ba34fe6b5e3e2176d",
+        "subject": "T003: A write token of an editor reverts a token agent's merge over the token API and MCP, and its revert of a person's or the governor's merge waits as a proposal"
+      },
+      "landed_commit": "5b29051ec312fb9d53fe719bccc6197f47c8a8f0",
+      "reasons": [],
+      "task": {
+        "base": "8c5293e6323e159317e07dc7cc85501ddcea3b77",
+        "id": "T003",
+        "status": "done",
+        "task_file": ".project/tasks/T003-token-revert-of-a-merge-over-rest-and-mcp.md"
+      }
+    },
+    {
+      "classification": "proven-landed",
+      "command": "reconcile",
+      "history": {
+        "branch": "gsd-path/M003",
+        "candidates": [
+          {
+            "base": "0b50fb1e61339ddf5e2bcca595688a85715192d2",
+            "commit": "b5998a84548682704e46ee0040820878676b209e",
+            "valid": true
+          }
+        ],
+        "head": "a25ceba42987699d4b43ff5ba34fe6b5e3e2176d",
+        "subject": "T004: A signed-in editor answers agent proposals in Agent History, sees them on the Duplicates and Merges cards, and reverts an agent merge that the Merges section shows as owner via token name"
+      },
+      "landed_commit": "b5998a84548682704e46ee0040820878676b209e",
+      "reasons": [],
+      "task": {
+        "base": "0b50fb1e61339ddf5e2bcca595688a85715192d2",
+        "id": "T004",
+        "status": "done",
+        "task_file": ".project/tasks/T004-proposal-answer-and-review-tab-controls.md"
+      }
+    },
+    {
+      "classification": "proven-landed",
+      "command": "reconcile",
+      "history": {
+        "branch": "gsd-path/M003",
+        "candidates": [
+          {
+            "base": "810c9db658f8266441d91c3ecf3cd7a13ae31e38",
+            "commit": "995d2af504912208fe9ea65f0d7b23877f82065d",
+            "valid": true
+          }
+        ],
+        "head": "a25ceba42987699d4b43ff5ba34fe6b5e3e2176d",
+        "subject": "T005: A write token of an editor batches up to 50 duplicate pairs under one batch id, the batch is reverted as a unit, and every agent action reads as owner via token name with its batch id in Agent History and Activity"
+      },
+      "landed_commit": "995d2af504912208fe9ea65f0d7b23877f82065d",
+      "reasons": [],
+      "task": {
+        "base": "810c9db658f8266441d91c3ecf3cd7a13ae31e38",
+        "id": "T005",
+        "status": "done",
+        "task_file": ".project/tasks/T005-token-batch-unit-revert-and-attribution.md"
+      }
+    },
+    {
+      "classification": "proven-landed",
+      "command": "reconcile",
+      "history": {
+        "branch": "gsd-path/M003",
+        "candidates": [
+          {
+            "base": "b012c8cd83957cedb126e6751648739d925a2d7a",
+            "commit": "c8014730426a343ad41c6e8867216bc0db03c5c3",
+            "valid": true
+          }
+        ],
+        "head": "a25ceba42987699d4b43ff5ba34fe6b5e3e2176d",
+        "subject": "T006: Finalized token writes are limited to 200 per rolling hour, two reverts by a person make a token propose only, and a signed-in person's merge, batch and revert and the governor's precedent are proven unchanged"
+      },
+      "landed_commit": "c8014730426a343ad41c6e8867216bc0db03c5c3",
+      "reasons": [],
+      "task": {
+        "base": "b012c8cd83957cedb126e6751648739d925a2d7a",
+        "id": "T006",
+        "status": "done",
+        "task_file": ".project/tasks/T006-rate-limit-breaker-and-the-unchanged-session-path.md"
+      }
+    },
+    {
+      "classification": "proven-landed",
+      "command": "reconcile",
+      "history": {
+        "branch": "gsd-path/M003",
+        "candidates": [
+          {
+            "base": "b0a3929a5611ef77528fb5249350a7858802d493",
+            "commit": "7597ef7cd6ed51d38fa5ec3605813e21fa87679e",
+            "valid": true
+          }
+        ],
+        "head": "a25ceba42987699d4b43ff5ba34fe6b5e3e2176d",
+        "subject": "T007: Document token merge, revert, batch, proposals, the limit and the breaker for the API and MCP, and amend ADR 0076 with what this milestone built"
+      },
+      "landed_commit": "7597ef7cd6ed51d38fa5ec3605813e21fa87679e",
+      "reasons": [],
+      "task": {
+        "base": "b0a3929a5611ef77528fb5249350a7858802d493",
+        "id": "T007",
+        "status": "done",
+        "task_file": ".project/tasks/T007-document-the-token-write-surface-and-amend-adr-0076.md"
+      }
+    }
+  ]
+}
