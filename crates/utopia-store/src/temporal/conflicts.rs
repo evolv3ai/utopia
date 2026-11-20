@@ -18,7 +18,27 @@ pub async fn resolve_review_conflict(
     decision: ConflictDecision<'_>,
     actor_id: Uuid,
 ) -> AppResult<()> {
-    resolve(pool, kb_id, conflict_id, decision, Some(actor_id)).await
+    resolve(pool, kb_id, conflict_id, decision, Some(actor_id), None).await
+}
+
+impl ConflictDecision<'_> {
+    /// 人批准令牌 agent 的一条提议时走的入口（0076）：与 [`resolve_review_conflict`] 是同一个
+    /// 事务、同一个 actor（这个人），只在 `conflict.*` 审计行的 detail 里多写一个
+    /// `agent_proposal`，指着那条提议——这次裁决是这个人的，也看得出是从哪条提议来的。
+    /// `proposal` 为 `None` 时与 `resolve_review_conflict` 逐字相同。
+    ///
+    /// 挂在 `ConflictDecision` 上而不是另起一个自由函数：这个模块对外只导出
+    /// `ConflictDecision` 与两个旧入口，挂在类型上不用改导出的那一行
+    pub async fn resolve_as_reviewer(
+        self,
+        pool: &PgPool,
+        kb_id: Uuid,
+        conflict_id: Uuid,
+        actor_id: Uuid,
+        proposal: Option<Uuid>,
+    ) -> AppResult<()> {
+        resolve(pool, kb_id, conflict_id, self, Some(actor_id), proposal).await
+    }
 }
 
 /// 不记操作者的入口：只有 store 的测试在用，人工审核走 [`resolve_review_conflict`]。
@@ -42,16 +62,19 @@ pub async fn resolve_conflict(
             new_precision: "day",
         },
         None,
+        None,
     )
     .await
 }
 
+/// `proposal`：这次裁决是批准哪一条令牌提议而来的；只进审计 detail，别的什么都不影响
 async fn resolve(
     pool: &PgPool,
     kb_id: Uuid,
     conflict_id: Uuid,
     decision: ConflictDecision<'_>,
     actor_id: Option<Uuid>,
+    proposal: Option<Uuid>,
 ) -> AppResult<()> {
     let (action, event) = match decision.action {
         "close" => ("close_old", "conflict.close_old"),
@@ -180,6 +203,10 @@ async fn resolve(
     // Explicit ends stay fixed; only the engine's ends can be redrawn.
     if matches!(action, "close_old" | "retime_new") {
         tidy_timelines_tx(&mut tx, kb_id, &timelines).await?;
+    }
+    // 没有提议（人自己裁）时这个键不出现：detail 与从前逐字相同
+    if let Some(proposal) = proposal {
+        detail["agent_proposal"] = json!(proposal);
     }
     crate::audit::record_on(
         &mut tx,

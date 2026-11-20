@@ -100,7 +100,10 @@ pub async fn counts(pool: &PgPool, kb_id: Uuid) -> AppResult<ReviewCounts> {
                                   AND d.status = 'proposed')) AS agent_queue,
            (SELECT count(*) FROM (SELECT 1 FROM phrase_bindings b WHERE b.kb_id = $1 AND {waiting_phrase}
                                   UNION ALL SELECT 1 FROM type_bindings WHERE kb_id = $1 AND status = 'undecided') a) AS alignment,
-           (SELECT count(*) FROM errata_actions WHERE kb_id = $1 AND status = 'held') AS errata",
+           (SELECT count(*) FROM errata_actions WHERE kb_id = $1 AND status = 'held') AS errata,
+           -- 令牌 agent 开着的提议（0076）：留下的（held）与只能提议的（proposed）、还没人答的
+           (SELECT count(*) FROM token_agent_actions t WHERE t.kb_id = $1
+               AND t.outcome IN ('held', 'proposed') AND t.state IS NULL) AS agent_token_proposals",
         unconfirmed = unconfirmed_fact(),
         waiting_phrase = crate::alignment_queue::WAITING_PHRASE,
         same = crate::resolution::TypeFilter::Same.clause(),

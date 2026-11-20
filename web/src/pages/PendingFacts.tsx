@@ -9,6 +9,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type PendingFactItem } from "../api";
 import { S } from "../i18n";
 import { toast } from "../toast";
+import { AgentProposalChips } from "./AgentProposal";
 
 function ym(iso: string | null): string | null {
   return iso ? iso.slice(0, 7) : null;
@@ -104,6 +105,9 @@ export function PendingFactRow({
           ))}
         </div>
       )}
+      {/* 令牌 agent 提的、对这句话的回答（0076）：写明是哪个人的哪枚令牌提的。它只是提议——
+          点头仍是人的事；下面「谁说的」那一行照旧在，人看得出是不是 agent 在替 agent 作保 */}
+      <AgentProposalChips proposals={fact.agent_proposals} />
       {/* 与审阅页其余六种卡同一副页脚（CARD_ACTIONS）：动作在左，「谁说的」推到右边 */}
       <div className={CARD_ACTIONS}>
         {canDecide && (

@@ -11,6 +11,7 @@ import {
   type AgentPrecedent,
   type AgentQueueRow,
   type AxiomViolation,
+  type ReviewCounts,
   type ReviewQueue,
   type ReviewTypeFilter,
   type OntologyDefect,
@@ -32,7 +33,7 @@ import { fmtTime, parseDateInput } from "../time";
 import { PendingFactRow, useCanDecide } from "./PendingFacts";
 import { ReviewOverview } from "./ReviewOverview";
 import { TokenAgentRow, isOpenProposal } from "./TokenAgentRow";
-import { AgentProposalChip, MergeActor } from "./AgentProposal";
+import { AgentProposalChip, AgentProposalChips, MergeActor } from "./AgentProposal";
 import { S } from "../i18n";
 import { useKb, useKbId } from "../kb";
 import { toast } from "../toast";
@@ -253,7 +254,7 @@ function DuplicateCard({
   );
 }
 
-function FactRow({
+export function FactRow({
   fact,
   busy,
   onConfirm,
@@ -299,6 +300,8 @@ function FactRow({
           “{fact.quote}”
         </p>
       )}
+      {/* 令牌 agent 在这一条上开着的提议（0076）：答在 Agent 一档；没有就什么都不渲染 */}
+      <AgentProposalChips proposals={fact.agent_proposals} />
       <div className={CARD_ACTIONS}>
         <Button variant="secondary" size="sm"
           disabled={busy}
@@ -318,7 +321,7 @@ function FactRow({
 }
 
 /** 时态冲突行：旧事实 vs 新事实，三个动作（Close old / Keep both / Reject new）。 */
-function ConflictRow({
+export function ConflictRow({
   conflict,
   busy,
   onResolve,
@@ -371,6 +374,8 @@ function ConflictRow({
           {S.review.conflictReason[c.reason] ?? c.reason}
         </Status>
       </div>
+      {/* 令牌 agent 在这一条上开着的提议（0076）：答在 Agent 一档；没有就什么都不渲染 */}
+      <AgentProposalChips proposals={c.agent_proposals} />
       <div className={CARD_ACTIONS}>
         <Button variant="secondary" size="sm"
           disabled={busy}
@@ -412,7 +417,7 @@ function ConflictRow({
 }
 
 /** "文档新版没再提"的事实行：Reject（抽取错误）或 Close at date（这事结束了）。 */
-function UnconfirmedRow({
+export function UnconfirmedRow({
   fact,
   busy,
   onReject,
@@ -459,6 +464,8 @@ function UnconfirmedRow({
           “{fact.quote}”
         </p>
       )}
+      {/* 令牌 agent 在这一条上开着的提议（0076）：答在 Agent 一档；没有就什么都不渲染 */}
+      <AgentProposalChips proposals={fact.agent_proposals} />
       <div className={CARD_ACTIONS}>
         <Input size="sm" className="u-num w-28 text-center"
           placeholder={S.review.closeAtPlaceholder}
@@ -561,7 +568,7 @@ function precedentText(p: AgentPrecedent): string {
   return p.why ? `${line} · “${p.why}”` : line;
 }
 
-function AgentRow({
+export function AgentRow({
   d,
   busy,
   onAnswer,
@@ -626,6 +633,8 @@ function AgentRow({
           ))}
         </ul>
       )}
+      {/* 令牌 agent 提的、对这一笔的回答（0076）：答在这一档里令牌自己的那一行 */}
+      <AgentProposalChips proposals={d.agent_proposals} />
       <div className="mt-2 flex items-center gap-2">
         <span className="text-fine text-ink-2">
           {d.decided_by_name
@@ -760,7 +769,7 @@ function marksText(m: AlignmentMarks): string {
 
 /** 对齐器提的一条蕴含规则（0044 决定 3 第五片）：这种形状还蕴含哪条属性、宾语怎么来；人批或驳 */
 /** 勘误 agent 留给人的一笔（0044 决定 7）：哪份文档、想对哪条事实做什么、凭哪句原话、为什么留下 */
-function ErrataRow({
+export function ErrataRow({
   item,
   busy,
   onDecide,
@@ -791,6 +800,8 @@ function ErrataRow({
         </div>
       )}
       {item.detail && <div className="mt-1 text-small text-warn">{S.review.errataHeld(item.detail)}</div>}
+      {/* 令牌 agent 在这一条上开着的提议（0076）：答在 Agent 一档；没有就什么都不渲染 */}
+      <AgentProposalChips proposals={item.agent_proposals} />
       <div className={CARD_ACTIONS}>
         <Button size="sm" disabled={busy} onClick={() => onDecide(true)}>
           {S.review.errataApprove}
@@ -803,7 +814,7 @@ function ErrataRow({
   );
 }
 
-function AlignmentRuleRow({
+export function AlignmentRuleRow({
   item,
   busy,
   onDecide,
@@ -830,6 +841,8 @@ function AlignmentRuleRow({
           ))}
         </div>
       )}
+      {/* 令牌 agent 在这一条上开着的提议（0076）：答在 Agent 一档；没有就什么都不渲染 */}
+      <AgentProposalChips proposals={item.agent_proposals} />
       <div className={CARD_ACTIONS}>
         <Button size="sm" disabled={busy} onClick={() => onDecide(true)}>
           {S.review.alignmentApprove}
@@ -844,7 +857,7 @@ function AlignmentRuleRow({
 
 /** 一条短语签名：短语、两端的类、例句、两票；人选属性与方向，或「没有」。
  *  选的是状态属性时，还要说单个日期标的是开始、结束，还是都不是（#966） */
-function AlignmentPhraseRow({
+export function AlignmentPhraseRow({
   item,
   properties,
   busy,
@@ -905,6 +918,8 @@ function AlignmentPhraseRow({
           {S.review.alignmentTooMany(item.votes?.candidates ?? 0)}
         </div>
       )}
+      {/* 令牌 agent 在这一条上开着的提议（0076）：答在 Agent 一档；没有就什么都不渲染 */}
+      <AgentProposalChips proposals={item.agent_proposals} />
       <div className={CARD_ACTIONS}>
         <SearchSelect
           size="sm"
@@ -1019,7 +1034,7 @@ function AlignmentKindWordRow({
   );
 }
 
-function DefectRow({
+export function DefectRow({
   defect: d,
   busy,
   onDecide,
@@ -1081,6 +1096,8 @@ function DefectRow({
           ))}
         </div>
       )}
+      {/* 令牌 agent 在这一条上开着的提议（0076）：答在 Agent 一档；没有就什么都不渲染 */}
+      <AgentProposalChips proposals={d.agent_proposals} />
       <div className={CARD_ACTIONS}>
         <Button variant="secondary" size="sm"
           disabled={busy}
@@ -1105,7 +1122,7 @@ function DefectRow({
 /** 裁决的附加参数：闭合日期（fact_closed）、撤哪条（fact_retracted） */
 type DecideOpts = { closeAt?: string; closeAtPrecision?: string; factId?: string };
 
-function ViolationRow({
+export function ViolationRow({
   violation: v,
   busy,
   onDecide,
@@ -1173,6 +1190,8 @@ function ViolationRow({
           </div>
         ))}
       </div>
+      {/* 令牌 agent 在这一条上开着的提议（0076）：答在 Agent 一档；没有就什么都不渲染 */}
+      <AgentProposalChips proposals={v.agent_proposals} />
       <div className={CARD_ACTIONS}>
         <Button variant="secondary" size="sm"
           disabled={busy}
@@ -1252,6 +1271,8 @@ function ContradictionRow({
         </div>
       </div>
       <p className="mt-2 text-small text-ink-2">{hint}</p>
+      {/* 令牌 agent 在这一条上开着的提议（0076）：答在 Agent 一档；没有就什么都不渲染 */}
+      <AgentProposalChips proposals={v.agent_proposals} />
       <div className={CARD_ACTIONS}>
         {/* 不用日期选择器：它逼人给出一个日，而「那年结束的」正是这里常见的答案。
             写多少位就是多少精度（time.ts） */}
@@ -1375,6 +1396,14 @@ const PAGE_SIZE: Record<Paged, number> = {
   decisions: 20,
   agent: 20,
 };
+
+/** 左栏 Agent 的徽标：治理 agent 等人回答的建议，加上令牌 agent 开着的提议（0076）。
+ *  后一个数只在有开着的提议时才在回答里，没有就是零 */
+export function agentRailCount(
+  counts: Pick<ReviewCounts, "agent" | "agent_token_proposals"> | undefined,
+): number {
+  return (counts?.agent ?? 0) + (counts?.agent_token_proposals ?? 0);
+}
 
 function RailHeader({ label }: { label: string }) {
   return (
@@ -1691,7 +1720,7 @@ export function Review() {
     errata: c?.errata ?? 0,
     merges: c?.merges ?? 0,
     decisions: history.data?.total ?? 0,
-    agent: c?.agent ?? 0,
+    agent: agentRailCount(c),
   };
   const duplicateTotals: Record<ReviewTypeFilter, number> = {
     any: counts.duplicates,
@@ -1844,7 +1873,7 @@ export function Review() {
           >
             {S.review.railErrata}
           </RailItem>
-          {/* agent 的队列（0025）：徽标是等人回答的建议数 */}
+          {/* agent 的队列（0025）：徽标是等人回答的建议数，加上令牌 agent 开着的提议（0076） */}
           <RailItem
             active={active === "agent"}
             count={counts.agent}

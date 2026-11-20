@@ -677,6 +677,14 @@ export function KbActivity({ kbId }: { kbId: string }) {
                       “{auditDetailName(e)}”
                     </span>
                   )}
+                  {/* 人答令牌提议的那一行（批准、拒绝、过时关闭，0076 决定 8）：actor 照旧是这个人，
+                      动作之后另写提议它的是谁——「主人 via 令牌名」，名字是提议那一刻存下的 */}
+                  {!e.token_name && e.proposed_by_token && (
+                    <span className="text-ink-2">
+                      {" · "}
+                      {S.kbset.auditProposedBy(viaToken(e.proposed_by_owner, e.proposed_by_token))}
+                    </span>
+                  )}
                   {/* 令牌成批调用的一笔（0076）：带上那一批的短标签，与 Agent 一档同一个写法 */}
                   {e.token_name && e.batch_id && (
                     <span className="u-num text-fine text-ink-2" title={e.batch_id}>

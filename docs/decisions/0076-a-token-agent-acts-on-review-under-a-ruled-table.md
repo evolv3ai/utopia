@@ -1,6 +1,6 @@
 # 0076 · A token agent acts on Review under a ruled table
 
-- **Status**: In progress · accepted 2026-11-18 · the keep slice built 2026-11-19 (migration 0128): a personal token reads Duplicates and Overview and keeps one duplicate pair through the policy function, over the token API and the MCP tools `review_list`, `review_item` and `review_keep`, with the `token_agent_actions` ledger, the precedent exclusion, and "owner via token name" in Agent History and Activity · the read slice built 2026-11-19 (no migration): a personal token lists all thirteen Review sections with a `total`, reads one listed item of any section and both proof routes · the gated-write slice built 2026-11-19 (migration 0129): a write token of an editor merges a duplicate pair or two entities behind the merge gate, reverts a merge a token agent made and batches up to 50 duplicate pairs with a unit revert, over the token API and the MCP tools `review_merge`, `review_revert` and `review_batch`; a held or propose-only call changes nothing and waits in the ledger as a proposal that only a signed-in editor answers; finalized token writes are limited to 200 per rolling hour and a per-token breaker makes a token propose only · open: this record has opened the Keep, Merge, Revert merge and Batch rows of the table to tokens, and the alignment kind-word decision was already open to write tokens under ADR 0014 decision 6; every other row stays closed to tokens (mapping decision, the consistency check, and every propose-only operation, for which the proposal store holds nothing yet: it holds merge and revert proposals only); a token keep is counted under its owner in Decisions and Overview (ruled "unchanged for now")
+- **Status**: In progress · accepted 2026-11-18 · the keep slice built 2026-11-19 (migration 0128): a personal token reads Duplicates and Overview and keeps one duplicate pair through the policy function, over the token API and the MCP tools `review_list`, `review_item` and `review_keep`, with the `token_agent_actions` ledger, the precedent exclusion, and "owner via token name" in Agent History and Activity · the read slice built 2026-11-19 (no migration): a personal token lists all thirteen Review sections with a `total`, reads one listed item of any section and both proof routes · the gated-write slice built 2026-11-19 (migration 0129): a write token of an editor merges a duplicate pair or two entities behind the merge gate, reverts a merge a token agent made and batches up to 50 duplicate pairs with a unit revert, over the token API and the MCP tools `review_merge`, `review_revert` and `review_batch`; a held or propose-only call changes nothing and waits in the ledger as a proposal that only a signed-in editor answers; finalized token writes are limited to 200 per rolling hour and a per-token breaker makes a token propose only · the remaining Review writes built 2026-11-20 (no migration): every row of the table is now reachable by a write token of an editor under its ruling, over the token API and twenty MCP tools; the twelve propose-only rows change nothing and land as proposals that only a signed-in editor approves or declines, and an approval runs that person's own code as that person's decision; the mapping decision and the consistency check or inference run finalize under the limit; the kind-word decision keeps its route and gains a ledger row · open: a token keep is counted under its owner in Decisions and Overview (ruled "unchanged for now")
 - **Written**: 2026-11-18
 - **Related**: [0014](0014-identity-from-the-person-scope-from-the-token.md) (a token acts as its owner; decisions 6 and 7 opened the first token write and the token reads); [0027](0027-an-automatic-merge-is-gated-by-what-it-can-undo.md) (the execution gate; decision 3 names an agent's calls as its next caller); [0025](0025-governance-reads-the-ledger-before-it-decides.md) (the governor and its precedent); [0015](0015-recording-a-sentence-is-not-asserting-a-fact.md) (the nod); [0043](0043-every-review-queue-is-governed.md) (a gate before an agent applies changes); [0046](0046-the-app-surface-is-mcp.md) (the MCP surface)
 
@@ -195,6 +195,23 @@ is written before the first route or schema change.
    marked as declared and is never read for authorization. MCP `clientInfo` is not
    parsed. **A failed snapshot or audit write fails the action**: attribution is
    part of the write, not a best-effort trailer.
+
+   **Revision 2026-11-20 (who proposed what a person answered).** The paragraph
+   above names the token on the token's own rows only. A person's answer to a
+   token proposal (the person's decision row written by an approval, and the
+   `agent.proposal.declined` and `agent.proposal.superseded` rows) is the
+   person's act and carries no `token_id` or `token_name`, so Activity showed it
+   without the token that proposed it. Every such row already names its proposal
+   in `detail.agent_proposal`. `GET /kbs/{kb_id}/audit` now reads that proposal's
+   ledger row in the same base when it lists the event and returns two more
+   keys: `proposed_by_token`, the token name snapshot stored at propose time
+   (unchanged by a later rename or revoke), and `proposed_by_owner`, the display
+   name of the token's owner (absent when that account is gone). The person
+   stays the actor (`actor_id`, `actor_name`); the stored audit detail is not
+   changed and no migration is needed. An event that answers no token proposal,
+   and every row of `GET /kbs/{kb_id}/review/history`, has the keys it had
+   before. Activity shows such a row as the person and the action, followed by
+   "proposed by owner via token name".
 
 9. **A token decision is never human precedent.** The governor's precedent queries
    and `settled_by_people` exclude audit rows whose detail carries a token id and
@@ -519,7 +536,10 @@ cases remain. That is the situation the ruling's reason describes.
 
 This record is 0076 and the ledger's migration is 0128: each the lowest number
 above every merged number and every number claimed by an open upstream pull request
-(0127 is claimed by upstream #1496). The gaps are not reused (0055 to 0059 and 0068
+(0127 is claimed by upstream #1496). The ledger's second migration is 0129 (the
+gated-write slice, decision 7), taken by the same rule; it is named here by the
+revision of 2026-11-20 (the remaining Review writes), which itself adds no
+migration, so 0128 and 0129 are this record's only migrations. The gaps are not reused (0055 to 0059 and 0068
 here; 0081 to 0089, 0107, 0108, 0112 and 0124 among migrations): nothing says a
 skipped number may be taken, and the stated rule is the latest number plus one.
 
@@ -585,9 +605,20 @@ database that ran the old number.
 - **Whether bulk approval of agent proposals reproduces blind acceptance.** 0025
   measured it for the governor; an approved proposal counts as human precedent
   exactly as an accepted governor proposal does.
-- **The precedent exclusion has not been exercised end to end.** If a token row
-  still steers the governor, no agent finalize is safe and the gated rows change
-  shape.
+- **The precedent exclusion is covered by store and HTTP tests, not by a govern
+  round with a model.** (Reworded by the revision of 2026-11-20, the remaining
+  Review writes.) The store tests show that a token keep changes no precedent read
+  (`precedents_for`, the ledger search, `decided_before`, `settled_by_people` and
+  the gate's bar), settles no governor proposal and queues no govern job, and that
+  a live token merge, and a merge made and reverted by tokens, count in no
+  governor precedent read. The HTTP tests show that a token keep or merge over the
+  API starts no govern round, that a token merge and a token-reverted token merge
+  move no governor read while a person's revert of one counts as any revert does,
+  and that a token's proposed answer to a governor decision changes neither the
+  decision, the pair nor the fuse and starts no round. What is not shown: no full
+  govern round with a model was run after a token write. If a token row still
+  steered the governor in such a round, no agent finalize would be safe and the
+  gated rows would change shape.
 
 ## Status history
 
@@ -624,3 +655,97 @@ migration. What stays open is what the line now says: the mapping decision, the
 consistency check and every propose-only operation are closed to tokens, and the
 ruling on Decisions and Overview is unchanged. Decisions 2, 5, 7, 10, 11 and 12
 carry the dated revisions for this slice, and decision 14 is new.
+
+**Revision 2026-11-20 (the remaining Review writes, no migration).** Until that
+date the `open:` part of the status line read:
+
+> this record has opened the Keep, Merge, Revert merge and Batch rows of the
+> table to tokens, and the alignment kind-word decision was already open to
+> write tokens under ADR 0014 decision 6; every other row stays closed to tokens
+> (mapping decision, the consistency check, and every propose-only operation,
+> for which the proposal store holds nothing yet: it holds merge and revert
+> proposals only); a token keep is counted under its owner in Decisions and
+> Overview (ruled "unchanged for now")
+
+The slice opened every remaining row of the authority table under its ruling,
+so those rows left the open list; the status line gained a clause naming the
+slice, and the ruling on Decisions and Overview is still open. The table itself
+is unchanged. What shipped, checked against the code:
+
+- **The twelve propose-only rows** (confirm, reject and close a fact, resolve a
+  conflict, the pending nod, answer the governor, the Alignment phrase and rule,
+  errata, the ontology proposal, the violation, the defect) are reached by a
+  write token of an Editor on the routes a signed-in person uses, except the two
+  below. A token's call changes nothing: no fact, entity, evidence, review row,
+  ontology row or job. It runs the scope, base-list and owner-role checks, then
+  the person's own body checks with the person's codes, then the target (404 for
+  an unknown or foreign target, 409 `already_decided` for a decided one), then
+  the checks that need the target's state, and lands one ledger row with outcome
+  `proposed` and reason `propose_only` plus an `agent.proposal` audit row. The
+  answer is 200 with `outcome`, `action_id`, `reason` and `explanation`, and
+  `"code": "already_proposed"` when an open proposal of the same base, operation
+  and target already exists. A propose-only call never counts toward the limit
+  and is never refused by it or by the breaker.
+- **Answering stays a person's.** A signed-in Editor approves or declines a
+  proposal on the two answer routes of decision 7, singly or in bulk, in the
+  Agent History section of the Review tab; the item's own card (the Ontology
+  page for an ontology proposal) shows the open proposal as `agent_proposals`.
+  Approval runs that person's own code for the operation, as that person, with
+  `agent_proposal` in the audit detail and no `token_id`; the token's rationale
+  is never passed as the person's reason. An approved Alignment phrase or rule
+  is queued as a job (`job_id`, `queued`), not applied at once; an approved
+  pending confirm returns `fact_id`. A refusal from the person's code is returned
+  and the proposal stays open.
+- **The target key needs no migration.** Each proposal names its target by the
+  item's own id, except an ontology proposal, named by section and key joined by
+  `:` (one open proposal per ontology proposal, whichever action), and an
+  alignment kind word, named by the normalized word against the base. Confirm,
+  reject and close of one fact are three operations, so three proposals may be
+  open on one fact. The 0128 and 0129 columns hold all of it, so the slice added
+  no migration and the schema version is unchanged.
+- **A stale target is read, not guessed.** Before an approval runs the person's
+  code it reads the target's state through one typed reader
+  (`review_targets::target_state`, with the stored request and, for a conflict
+  or ontology proposal, the fingerprint taken at propose time). A missing or
+  decided target closes the proposal `superseded` and applies nothing. No error
+  text is matched to decide that.
+- **Two token entries of their own.** The nod and the governor's answer keep
+  their person routes, which still answer every token 401: opening the nod route
+  would let a token touch what the charter keeps for people, and opening the
+  governor's decision route would add a second person merge path. A token
+  proposes on `POST /kbs/{kb_id}/review/pending/{pending_id}/propose` and
+  `POST /kbs/{kb_id}/review/agent/{decision_id}/propose` instead. A signed-in
+  session gets 403 `token_required` there, and an unparseable body gets 422
+  `invalid_body` after the scope checks.
+- **Three rows finalize.** The mapping decision and the consistency check or
+  inference run are applied at once, behind the limit and the breaker of
+  decision 12, with one `applied` ledger row and one audit row naming the token;
+  inference on a base with materialized inference off is 422 `inference_off`.
+  The kind-word decision keeps its route, codes and plain 403 for a
+  below-Editor owner, and now writes an `applied` ledger row in the same
+  transaction as the decision; it counts toward the limit and is never refused
+  by it. The ontology proposals and the mappings gained token reads.
+- **The MCP tools.** Fourteen were added: `review_fact`, `review_conflict`,
+  `review_violation`, `review_defect`, `review_errata`, `review_alignment`,
+  `review_ontology`, `review_pending_fact`, `review_governor` (propose only),
+  `review_mapping`, `review_check`, `review_kind_word` (finalize), and the reads
+  `review_ontology_list` and `review_mapping_list`, so twenty Review tools are
+  served, each calling the same function as its route. Corrected reading: a
+  write tool called by a token without the right is not a JSON-RPC -32601; it
+  is a tool error carrying `token_read_only` or `token_owner_below_editor`, and
+  the tool is left out of `tools/list` for that token. The -32601 answer is only
+  for a `review_` name the server does not serve. Over REST, a write token whose
+  base list excludes the base gets 403 `token_kb_out_of_scope`; the MCP endpoint
+  refuses such a token with HTTP 403 before any tool runs.
+- **Known limits.** A consistency check or inference run commits its own changes
+  before its ledger and audit rows; if that write fails the call errors while
+  the run's changes stay. The kind-word audit row is written best effort after
+  the commit. A proposal the person's code refuses at approval stays open until
+  a person declines it; nothing sweeps stale proposals. Every Review MCP call,
+  a refused one included, writes the `mcp.tool_called` audit row.
+
+The `## Numbers` paragraph and the last open question were corrected in place by
+this revision: the first now names migration 0129 beside 0128, and the second
+says what the store and HTTP tests cover and that no full govern round with a
+model was run after a token write. The full route and tool reference, with each
+refusal code, is `web/src/docs/mcp.md`.

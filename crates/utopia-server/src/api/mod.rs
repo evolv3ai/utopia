@@ -246,6 +246,7 @@ pub fn router(state: AppState, cfg: &AppConfig) -> Router {
             "/me/tokens/{token_id}",
             axum::routing::delete(token_routes::revoke),
         )
+        // 列表也开给个人令牌读（0076）；写一条口径仍只给会话
         .route(
             "/kbs/{id}/mappings",
             get(mapping_routes::list).post(mapping_routes::create),
@@ -365,6 +366,7 @@ pub fn router(state: AppState, cfg: &AppConfig) -> Router {
             post(ontology_routes::reconcile_relation_type),
         )
         // 上次算出来、还没人表态的那些（见 `ontology_proposals`）。刷新页面靠它，不必重跑模型
+        // 令牌也读得到；写令牌的拒绝与采纳（下面的 adopt）只留一条等人答的提议（0076）
         .route(
             "/kbs/{id}/ontology/proposals",
             get(ontology_routes::stored_proposals).post(ontology_routes::decide_proposal),
@@ -539,6 +541,11 @@ pub fn router(state: AppState, cfg: &AppConfig) -> Router {
             "/kbs/{id}/review/agent/{decision_id}",
             post(review_routes::agent_answer),
         )
+        // 令牌提议怎么回答治理的一笔（0076）：只收令牌、只留提议；上面那条照旧只收会话
+        .route(
+            "/kbs/{id}/review/agent/{decision_id}/propose",
+            post(review_routes::propose_governor),
+        )
         // 人答令牌 agent 的提议（0076）：单条与批量，只收会话
         .route(
             "/kbs/{id}/review/agent-proposals",
@@ -562,6 +569,12 @@ pub fn router(state: AppState, cfg: &AppConfig) -> Router {
             "/kbs/{id}/review/pending/{pending_id}",
             post(review_routes::decide_pending),
         )
+        // 令牌提议对一条等点头的事实点头或摇头（0076）：只收令牌、只留提议；点头的那条
+        // 路由照旧只收会话
+        .route(
+            "/kbs/{id}/review/pending/{pending_id}/propose",
+            post(review_routes::propose_pending),
+        )
         .route("/kbs/{id}/review/{review_id}", post(review_routes::decide))
         // 对齐队列（#725）：人定签名的属性与方向、类别词的类
         .route(
@@ -582,7 +595,8 @@ pub fn router(state: AppState, cfg: &AppConfig) -> Router {
             "/kbs/{id}/review/alignment/rules/{rule_id}",
             post(review_routes::decide_alignment_rule),
         )
-        // 语义层映射的表态（0011）。跟消解审核并排——都是「引擎提议、人裁决」
+        // 语义层映射的表态（0011）。跟消解审核并排——都是「引擎提议、人裁决」。
+        // 写令牌也能定，直接落地、过限速（0076）；下面的一致性检查与物化推导同样
         .route(
             "/kbs/{id}/review/mappings/{mapping_id}",
             post(review_routes::decide_mapping),
@@ -597,6 +611,7 @@ pub fn router(state: AppState, cfg: &AppConfig) -> Router {
             "/kbs/{id}/review/violations/{violation_id}",
             post(review_routes::decide_violation),
         )
+        // 写令牌也能调，但只留一条等人答的提议（0076）
         .route(
             "/kbs/{id}/review/defects/{defect_id}",
             post(review_routes::decide_defect),
@@ -737,3 +752,53 @@ mod review_token_batch_tests;
 
 #[cfg(test)]
 mod review_token_guard_tests;
+
+// Review 其余各档的令牌写入（0076）：一档一个测试模块，共用的夹具在 support 里
+#[cfg(test)]
+mod review_token_write_support;
+
+#[cfg(test)]
+mod review_token_defect_tests;
+
+#[cfg(test)]
+mod review_token_fact_tests;
+
+#[cfg(test)]
+mod review_token_conflict_tests;
+
+#[cfg(test)]
+mod review_token_violation_tests;
+
+#[cfg(test)]
+mod review_token_errata_tests;
+
+#[cfg(test)]
+mod review_token_alignment_tests;
+
+#[cfg(test)]
+mod review_token_mapping_tests;
+
+// 直接落地的另外两行（0076）：一致性检查与物化推导、类别词的决定
+#[cfg(test)]
+mod review_token_run_tests;
+
+#[cfg(test)]
+mod review_token_kind_word_tests;
+
+#[cfg(test)]
+mod review_token_ontology_tests;
+
+// 令牌自己的两个入口（0076）：等点头的事实、治理的一笔
+#[cfg(test)]
+mod review_token_pending_tests;
+
+#[cfg(test)]
+mod review_token_governor_tests;
+
+// 开着的提议挂在各档的条目上、左栏的数、Agent History 说出目标（0076）
+#[cfg(test)]
+mod review_item_proposals_tests;
+
+// 整张裁定表一行一行走过 REST 与 MCP：结果、拒绝、提议、批准、署名（0076）
+#[cfg(test)]
+mod review_token_table_tests;

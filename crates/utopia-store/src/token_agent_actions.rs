@@ -494,6 +494,294 @@ async fn land_proposal(
     )))
 }
 
+// ───────────────────── Review 其余各档：提议与落地的行（0076） ─────────────────────
+//
+// 合并之外的操作没有闸门，裁定表给它们的不是「只能提议」就是「直接落地」。两种都只在
+// 台账里留一行，行里是哪种操作、对着什么、请求带了什么，由调用方（`review_ops`）说：
+// 这里不认识任何一种操作，也不碰台账与审计之外的表。目标还在不在、定没定过，是
+// `review_targets::target_state` 的事，调用方先问它
+
+/// 一条提议或一行落地记录里，随操作不同的那几样。`target_key` 是「同一个目标」的文本
+/// 钥匙（多数操作就是目标行的 id；本体提案是 `section:key`，类别词是规整后的词，
+/// 一致性检查与推理是库的 id）。`payload` 的键见 ADR 0076：`request`、`target_label`、
+/// `action`、`why`、`fingerprint`
+#[derive(Debug, Clone)]
+pub struct Proposal<'a> {
+    pub operation: &'a str,
+    pub target_kind: &'a str,
+    pub target_id: Uuid,
+    pub target_key: &'a str,
+    pub payload: serde_json::Value,
+}
+
+/// 只能提议的操作留一条提议：一个事务里台账行（`proposed`，理由 `propose_only`）加
+/// `agent.proposal` 审计行，**别的表一行不碰**。同一个库、同一种操作、同一个目标已经有
+/// 一条开着的，或者另一个调用同时到：什么都不写，拿回开着的那一条，`existing` 为 true。
+/// 与合并被留下时走的是同一段代码（`land_proposal`），所以竞争由同一个部分唯一索引裁决
+pub async fn propose(
+    pool: &PgPool,
+    w: &TokenWrite,
+    p: &Proposal<'_>,
+) -> AppResult<TokenWriteOutcome> {
+    land_proposal(
+        pool,
+        w,
+        &NewRow {
+            operation: p.operation,
+            target_kind: p.target_kind,
+            target_id: p.target_id,
+            target_key: p.target_key,
+            outcome: AgentOutcome::Proposed,
+            gate_reason: Some("propose_only"),
+            merge_id: None,
+            payload: &p.payload,
+        },
+    )
+    .await
+}
+
+/// 直接落地的操作在台账里留一行 `applied`。**用调用方的连接**：调用方把它和它记的那次
+/// 变更放在同一个事务里，一起提交、一起回滚。这里不写审计行——调用方自己写，detail 用
+/// [`token_audit_detail`] 补上令牌的那几项。读不到令牌的名字是错误，什么都不写
+pub async fn record_applied(
+    conn: &mut sqlx::PgConnection,
+    w: &TokenWrite,
+    p: &Proposal<'_>,
+) -> AppResult<TokenAgentAction> {
+    let token_name = token_name_on(conn, w.token_id).await?;
+    insert_row(
+        conn,
+        w,
+        &token_name,
+        &NewRow {
+            operation: p.operation,
+            target_kind: p.target_kind,
+            target_id: p.target_id,
+            target_key: p.target_key,
+            outcome: AgentOutcome::Applied,
+            gate_reason: None,
+            merge_id: None,
+            payload: &p.payload,
+        },
+    )
+    .await?
+    .ok_or_else(|| AppError::Other(anyhow::anyhow!("an applied ledger row was not written")))
+}
+
+/// 给一条审计 detail 补上认得出「不是人亲手做的」的那三项：`token_id`、台账行存下的
+/// `token_name` 快照、台账行的 id（`action_id`）。名字取自台账行而不是 `personal_tokens`，
+/// 所以审计与台账说的是同一个名字。detail 不是对象时原样返回
+pub fn token_audit_detail(
+    mut detail: serde_json::Value,
+    action: &TokenAgentAction,
+) -> serde_json::Value {
+    if let Some(fields) = detail.as_object_mut() {
+        fields.insert("token_id".into(), serde_json::json!(action.token_id));
+        fields.insert("token_name".into(), serde_json::json!(action.token_name));
+        fields.insert("action_id".into(), serde_json::json!(action.id));
+    }
+    detail
+}
+
+// ───────────────────── 直接落地的两种决定：映射与类别词（0076） ─────────────────────
+//
+// 裁定表里这两行是「直接落地」。变更、台账行（`applied`）在同一个事务里：读不到令牌的
+// 名字、写不进台账，变更也不留下。限速不在这里问——那是调用方（`review_ops::guard`）在
+// 进来之前的事；类别词按裁定从不限速，但它的行照样数进那一小时的总数
+
+/// 目标已经是请求要的那个样子：与 `review_ops::target_open` 同一个 code、同一句话
+fn target_already_decided() -> AppError {
+    AppError::CodedConflict {
+        code: "already_decided",
+        message: "This item was already decided.".into(),
+    }
+}
+
+/// 裁定表给这一行的必须是「直接落地」。表要是哪天改了，这里拒绝，而不是照旧写一行 applied
+fn finalizes(op: AgentOperation) -> AppResult<()> {
+    let outcome = agent_policy(op, None);
+    if outcome != AgentOutcome::Applied {
+        return Err(AppError::Other(anyhow::anyhow!(
+            "the agent policy does not finalize {op:?} (outcome {})",
+            outcome.as_str()
+        )));
+    }
+    Ok(())
+}
+
+/// 经令牌对一条语义层映射表态。一个事务：映射的新状态、台账行（`mapping.decide`，
+/// `applied`）、审计行（`mapping.decided`，actor 是令牌的主人，detail 里带 `token_id`、
+/// `token_name`、`action_id`），要么都在要么都不在。
+///
+/// - `status` 只能是 confirmed / rejected：别的是 `bad_status`，与人的路由同一个 code
+/// - 这个库里没有这条映射：`NotFound`
+/// - 映射没有「定了」这一态：状态已经是请求要的那个就是 `already_decided`，一行不写；
+///   不一样就落地。锁着行再比，所以同时到的两个相同决定正好落地一个
+/// - 读不到令牌的名字、写不进台账或审计：报错，什么都不提交
+pub async fn decide_mapping(
+    pool: &PgPool,
+    w: &TokenWrite,
+    mapping_id: Uuid,
+    status: &str,
+) -> AppResult<TokenAgentAction> {
+    finalizes(AgentOperation::Mapping)?;
+    if !matches!(status, "confirmed" | "rejected") {
+        return Err(AppError::invalid(
+            "bad_status",
+            "status must be confirmed or rejected",
+        ));
+    }
+    let request = serde_json::json!({ "status": status });
+    // 目标的那句话在事务之前读：它自己从池里取连接，在事务里调就是拿着一条连接等另一条。
+    // 这个库里没有这条映射时它就是 `NotFound`
+    let label =
+        crate::review_targets::target_label(pool, w.kb_id, "mapping.decide", mapping_id, &request)
+            .await?;
+
+    let mut tx = pool.begin().await?;
+    let current: Option<String> = sqlx::query_scalar(
+        "SELECT status FROM concept_mappings WHERE id = $1 AND kb_id = $2 FOR UPDATE",
+    )
+    .bind(mapping_id)
+    .bind(w.kb_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(current) = current else {
+        return Err(AppError::NotFound);
+    };
+    if current == status {
+        return Err(target_already_decided());
+    }
+    crate::mappings::decide_on(&mut tx, w.kb_id, mapping_id, status, w.owner_id).await?;
+
+    let mut payload = serde_json::json!({
+        "request": request, "target_label": label, "action": status,
+    });
+    if let Some(why) = trimmed(&w.rationale) {
+        payload["why"] = serde_json::json!(why);
+    }
+    let key = mapping_id.to_string();
+    let action = record_applied(
+        &mut tx,
+        w,
+        &Proposal {
+            operation: "mapping.decide",
+            target_kind: "concept_mapping",
+            target_id: mapping_id,
+            target_key: &key,
+            payload,
+        },
+    )
+    .await?;
+    crate::audit::record_on(
+        &mut tx,
+        Some(w.kb_id),
+        Some(w.owner_id),
+        "mapping.decided",
+        "concept_mapping",
+        Some(mapping_id),
+        token_audit_detail(serde_json::json!({ "status": status }), &action),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(action)
+}
+
+/// 经令牌定一个类别词绑到哪个类。写的就是人的那一次判定（`type_bindings::
+/// decide_and_apply_human` 的事务体：判定、投影到实体、排一次短语对齐，同一个 2 秒的
+/// 锁等待），外加**同一个事务里**的一行台账（`alignment.kind_word`，`applied`）。
+///
+/// - `None`：人的那段代码说没有写下判定（`decide_and_apply_human_tx` 回 false；人的判定
+///   是一次 upsert，平常总写得下）。台账一行不写，调用方答它从前的 404
+/// - 锁等不到：`alignment_busy`，与人的路由同一个 code；什么都不提交
+/// - 台账行的目标是库本身（类别词没有 uuid），`target_key` 是规整过的词；请求里存着
+///   `kind_word`，Agent 一档那一行的目标就是这个词（`review_targets::target_label` 读它）
+/// - 审计行不在这里写：路由照旧自己写 `alignment.kind_word_decided`，detail 用
+///   [`token_audit_detail`] 补上令牌的那几项
+///
+/// **不限速**：这个函数与它的调用方都不问 `finalized_since`。它写下的行是 `applied`，
+/// 所以数进这枚令牌那一小时的总数
+pub async fn decide_kind_word(
+    pool: &PgPool,
+    w: &TokenWrite,
+    kind_word: &str,
+    type_id: Option<Uuid>,
+    votes: &serde_json::Value,
+) -> AppResult<Option<TokenAgentAction>> {
+    finalizes(AgentOperation::AlignmentKindWord)?;
+    // 请求体只有 `class`（`votes` 里人的那一票就是它）；词在路径里，一并存下
+    let request = serde_json::json!({
+        "kind_word": kind_word,
+        "class": votes.get("person").cloned().unwrap_or(serde_json::Value::Null),
+    });
+    let label = crate::review_targets::target_label(
+        pool,
+        w.kb_id,
+        "alignment.kind_word",
+        w.kb_id,
+        &request,
+    )
+    .await?;
+    let key = crate::type_bindings::normalize(kind_word);
+    let mut payload = serde_json::json!({
+        "request": request,
+        "target_label": label,
+        "action": if type_id.is_some() { "bind" } else { "none" },
+    });
+    if let Some(why) = trimmed(&w.rationale) {
+        payload["why"] = serde_json::json!(why);
+    }
+
+    let mut tx = pool.begin().await?;
+    let result = async {
+        sqlx::query("SET LOCAL lock_timeout = '2s'")
+            .execute(&mut *tx)
+            .await?;
+        let written = crate::type_bindings::decide_and_apply_human_tx(
+            &mut tx, w.kb_id, kind_word, type_id, votes,
+        )
+        .await?;
+        if !written {
+            return Ok::<Option<TokenAgentAction>, AppError>(None);
+        }
+        crate::jobs::enqueue_unless_queued_tx(
+            &mut tx,
+            "align_phrases",
+            serde_json::json!({ "kb_id": w.kb_id }),
+        )
+        .await?;
+        let action = record_applied(
+            &mut tx,
+            w,
+            &Proposal {
+                operation: "alignment.kind_word",
+                target_kind: "type_binding",
+                target_id: w.kb_id,
+                target_key: &key,
+                payload,
+            },
+        )
+        .await?;
+        Ok(Some(action))
+    }
+    .await;
+    match result {
+        Ok(action) => {
+            tx.commit().await?;
+            Ok(action)
+        }
+        Err(error) => {
+            // 先把回滚做完再回答：连接要干净地还回去。回滚自己也失败时两个错误都留着
+            if let Err(rollback) = tx.rollback().await {
+                return Err(AppError::Other(anyhow::Error::new(error).context(format!(
+                    "rolling back a token kind-word decision: {rollback}"
+                ))));
+            }
+            Err(crate::type_bindings::busy_on_lock_timeout(error))
+        }
+    }
+}
+
 fn governor_is_deciding() -> AppError {
     AppError::Conflict(
         "The agent is deciding this pair right now; wait for its proposal or turn governance off."
@@ -1292,11 +1580,66 @@ async fn open_proposals(
                         owner_name,
                         token_name,
                         created_at,
+                        // 合并与撤回的提议没有 `action`：卡片上的这一项与从前一个键不差
+                        action: None,
                     },
                 )
             },
         )
         .collect())
+}
+
+/// 这些目标上开着的提议，按目标的 id 挂，每个目标上的按提出的先后（最早的在前）。
+/// 一个目标可以同时开着几条——同一条事实的确认、拒绝、闭合是三种操作——所以是一列。
+/// `action` 取自 payload；没有开着的提议的目标不在结果里
+pub async fn open_proposals_for(
+    pool: &PgPool,
+    kb_id: Uuid,
+    target_kind: &str,
+    target_ids: &[Uuid],
+) -> AppResult<std::collections::HashMap<Uuid, Vec<utopia_core::models::AgentProposalView>>> {
+    if target_ids.is_empty() {
+        return Ok(Default::default());
+    }
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(
+        Uuid,
+        Uuid,
+        String,
+        Option<String>,
+        Option<String>,
+        String,
+        DateTime<Utc>,
+        Option<String>,
+    )> = sqlx::query_as(
+        "SELECT t.target_id, t.id, t.operation, t.gate_reason, u.display_name, t.token_name,
+                t.created_at, t.payload ->> 'action'
+           FROM token_agent_actions t LEFT JOIN users u ON u.id = t.owner_id
+          WHERE t.kb_id = $1 AND t.target_kind = $2 AND t.target_id = ANY($3)
+            AND t.outcome IN ('held', 'proposed') AND t.state IS NULL
+          ORDER BY t.created_at, t.id",
+    )
+    .bind(kb_id)
+    .bind(target_kind)
+    .bind(target_ids)
+    .fetch_all(pool)
+    .await?;
+    let mut out: std::collections::HashMap<Uuid, Vec<utopia_core::models::AgentProposalView>> =
+        Default::default();
+    for (target_id, id, operation, reason, owner_name, token_name, created_at, action) in rows {
+        out.entry(target_id)
+            .or_default()
+            .push(utopia_core::models::AgentProposalView {
+                id,
+                operation,
+                reason,
+                owner_name,
+                token_name,
+                created_at,
+                action,
+            });
+    }
+    Ok(out)
 }
 
 /// 手动合并提议的钥匙：两个实体的 id 按升序用 `|` 连起来（与写入时同一个算法）
@@ -1415,8 +1758,8 @@ pub async fn count(pool: &PgPool, kb_id: Uuid) -> AppResult<i64> {
 /// 行分开——那些行没有这个键。`left` / `right` / `rationale` 取自动作那一刻存下的 payload，
 /// `token_name` 是存下的快照：这里不读 `personal_tokens`，令牌改名、撤销之后照旧
 ///
-/// 后来的几个键（`reason`、`batch_id`、`merge_id`、`state`、`state_at`）**有值才出现**：
-/// 分开一对的行因此与从前一个键不差
+/// 后来的几个键（`reason`、`batch_id`、`merge_id`、`state`、`state_at`、`target_label`、
+/// `action`、`queued`）**有值才出现**：分开一对的行因此与从前一个键不差
 fn history_row(a: &TokenAgentAction) -> serde_json::Value {
     let mut row = serde_json::json!({
         "source": "token",
@@ -1448,6 +1791,15 @@ fn history_row(a: &TokenAgentAction) -> serde_json::Value {
         put("merge_id", a.merge_id.map(|v| serde_json::json!(v)));
         put("state", a.state.as_ref().map(|v| serde_json::json!(v)));
         put("state_at", a.state_at.map(|v| serde_json::json!(v)));
+        // 目标不是一对的行（Review 其余各档）：用话说出目标，以及要做的那个动作。分开、
+        // 合并、撤回的 payload 里没有这两个键，那些行因此与从前一个键不差
+        let said = |key: &str| a.payload.get(key).filter(|v| !v.is_null()).cloned();
+        put("target_label", said("target_label"));
+        put("action", said("action"));
+        // 批准了的短语与规则判定只是排下了投递任务，还没有落到图上：行上说「排着」
+        let queued = a.state.as_deref() == Some("approved")
+            && matches!(a.operation.as_str(), "alignment.phrase" | "alignment.rule");
+        put("queued", queued.then_some(serde_json::Value::Bool(true)));
     }
     row
 }

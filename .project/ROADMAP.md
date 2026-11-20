@@ -118,7 +118,7 @@ Depends on: [M001, M002]
 Surfaces: token-authenticated HTTP API, MCP endpoint, Review tab in the web app (Agent History, Duplicates and Merges sections)
 Status: shipped
 Archive: .project/archive/003-gated-merge-proposals-revert-batch
-Integrated: null
+Integrated: d5d2356d3f9e3fc09123da6fd20a51349d5627dc
 
 Scope: in
 - Token merge, both the queue decision and the manual merge, through the policy function: every token merge calls the ADR 0027 merge gate first, and the gate also holds a pair a person kept or whose merge was reverted. A pass applies the same store function the person's path calls; a hold becomes a proposal carrying the gate's reason, never an error and never a merge.
@@ -171,8 +171,8 @@ Open questions
 Goal: An agent can call every remaining Review operation of the ruled authority table over the token API and MCP, each landing as a finalized change or as a proposal exactly as ruled, completing the program with its full documentation.
 Depends on: [M001, M002, M003]
 Surfaces: token-authenticated HTTP API, MCP endpoint, Review tab in the web app (Agent History and the item cards of each section)
-Status: pending
-Archive: null
+Status: shipped
+Archive: .project/archive/004-remaining-review-writes
 Integrated: null
 
 Scope: in

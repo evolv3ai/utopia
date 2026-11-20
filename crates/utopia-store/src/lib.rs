@@ -42,6 +42,7 @@ pub mod resolution;
 pub mod retention;
 pub mod review;
 pub mod review_summary;
+pub mod review_targets;
 pub mod rss_full_content;
 pub mod sealing;
 pub mod settings;

@@ -10,7 +10,8 @@ use utopia_core::AppError;
 use utopia_store::competency_questions as questions;
 use uuid::Uuid;
 
-use crate::auth::AuthUser;
+use crate::api::review_ops::{self, ReviewCaller};
+use crate::auth::{AuthUser, SessionOrToken};
 use crate::error::ApiResult;
 use crate::ontology_agent;
 use crate::state::AppState;
@@ -249,14 +250,52 @@ pub struct AdoptReq {
     pub edits: ontology_agent::AdoptEdits,
 }
 
+/// 采纳的请求体原样，存进令牌的提议里：没给的格子不出现。批准时照它解回 [`AdoptReq`]
+pub(crate) fn adopt_request(req: &AdoptReq) -> serde_json::Value {
+    let mut stored = json!({ "section": req.section, "key": req.key });
+    let edits = &req.edits;
+    for (name, text) in [
+        ("label", &edits.label),
+        ("description", &edits.description),
+        ("datatype", &edits.datatype),
+    ] {
+        if let Some(text) = text {
+            stored[name] = json!(text);
+        }
+    }
+    for (name, keys) in [
+        ("domains", &edits.domains),
+        ("ranges", &edits.ranges),
+        ("parents", &edits.parents),
+    ] {
+        if let Some(keys) = keys {
+            stored[name] = json!(keys);
+        }
+    }
+    stored
+}
+
 /// 采纳一条提案（人改过的几格随请求来）：元素、回归用例、采纳的状态和后续任务一次提交。
 /// 复用时，代理读过之后人另定了、和提案不一样的形状或类别词留着没写，列在 `skipped` 里
+///
+/// 写令牌也能调（0076）：它**只留一条提议**（`review_ops::propose_ontology`），提案与本体都
+/// 不动、不排任务，等登录的人在 Review 里答。令牌在进下面这一段之前就离开了处理函数；会话
+/// 照旧采纳，回答与审计行同从前一个字不差
 pub async fn adopt(
     State(state): State<AppState>,
-    AuthUser(user): AuthUser,
+    caller: SessionOrToken,
     Path(kb_id): Path<Uuid>,
     Json(req): Json<AdoptReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    let user = caller.user;
+    if let Some(token) = caller.pat {
+        let caller = ReviewCaller { user, token, kb_id };
+        let request = adopt_request(&req);
+        let answer =
+            review_ops::propose_ontology(&state, &caller, &req.section, &req.key, "adopt", request)
+                .await?;
+        return Ok(Json(answer));
+    }
     utopia_store::access::require_kb(&state.pool, &user, kb_id, Role::Editor).await?;
     let adopted =
         ontology_agent::adopt(&state, kb_id, &req.section, &req.key, req.edits, user.id).await?;

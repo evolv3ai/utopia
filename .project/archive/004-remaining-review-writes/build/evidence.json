@@ -1,0 +1,272 @@
+{
+  "canonical_project_dir": ".project",
+  "command": "verify-landed",
+  "head": "5ff4e2ed837c4054ceaaf3eff08dba27e2966ee4",
+  "project_dir": ".project",
+  "tasks": [
+    {
+      "classification": "proven-landed",
+      "command": "reconcile",
+      "history": {
+        "branch": "gsd-path/M004",
+        "candidates": [
+          {
+            "base": "ffc917e09abd27267fabfabebb6d8901838e60a0",
+            "commit": "2354fbe58e9cb837fb1caaf7fb965b82a863098b",
+            "valid": true
+          }
+        ],
+        "head": "5ff4e2ed837c4054ceaaf3eff08dba27e2966ee4",
+        "subject": "T001: Let the ledger hold a proposal or an applied row for every Review operation"
+      },
+      "landed_commit": "2354fbe58e9cb837fb1caaf7fb965b82a863098b",
+      "reasons": [],
+      "task": {
+        "base": "ffc917e09abd27267fabfabebb6d8901838e60a0",
+        "id": "T001",
+        "status": "done",
+        "task_file": ".project/tasks/T001-store-proposals-for-every-review-operation.md"
+      }
+    },
+    {
+      "classification": "proven-landed",
+      "command": "reconcile",
+      "history": {
+        "branch": "gsd-path/M004",
+        "candidates": [
+          {
+            "base": "a22445829be2c81f3cfaf461a1e81cd1bb115246",
+            "commit": "cc32db65e384d0ba82a58f43ae30a4bc2403765d",
+            "valid": true
+          }
+        ],
+        "head": "5ff4e2ed837c4054ceaaf3eff08dba27e2966ee4",
+        "subject": "T002: Open the defect decision to a token as a proposal over REST and MCP, answered by a person"
+      },
+      "landed_commit": "cc32db65e384d0ba82a58f43ae30a4bc2403765d",
+      "reasons": [],
+      "task": {
+        "base": "a22445829be2c81f3cfaf461a1e81cd1bb115246",
+        "id": "T002",
+        "status": "done",
+        "task_file": ".project/tasks/T002-defect-proposal-end-to-end.md"
+      }
+    },
+    {
+      "classification": "proven-landed",
+      "command": "reconcile",
+      "history": {
+        "branch": "gsd-path/M004",
+        "candidates": [
+          {
+            "base": "858df56f5c21285e58513389767b9e52e4735bcd",
+            "commit": "c7970625971af9037b3f910f53f4bddecdede3ee",
+            "valid": true
+          }
+        ],
+        "head": "5ff4e2ed837c4054ceaaf3eff08dba27e2966ee4",
+        "subject": "T003: Show every open token proposal on its item's card and name every operation in words"
+      },
+      "landed_commit": "c7970625971af9037b3f910f53f4bddecdede3ee",
+      "reasons": [],
+      "task": {
+        "base": "858df56f5c21285e58513389767b9e52e4735bcd",
+        "id": "T003",
+        "status": "done",
+        "task_file": ".project/tasks/T003-proposals-on-cards-and-labels.md"
+      }
+    },
+    {
+      "classification": "proven-landed",
+      "command": "reconcile",
+      "history": {
+        "branch": "gsd-path/M004",
+        "candidates": [
+          {
+            "base": "1fad0b69c4e5ba27e764d93c57ba2af0c9fe430a",
+            "commit": "de45207f221e9c49a667a0f2f800adf5ec386917",
+            "valid": true
+          }
+        ],
+        "head": "5ff4e2ed837c4054ceaaf3eff08dba27e2966ee4",
+        "subject": "T004: Open fact confirm, reject and close and conflict resolution to a token as proposals"
+      },
+      "landed_commit": "de45207f221e9c49a667a0f2f800adf5ec386917",
+      "reasons": [],
+      "task": {
+        "base": "1fad0b69c4e5ba27e764d93c57ba2af0c9fe430a",
+        "id": "T004",
+        "status": "done",
+        "task_file": ".project/tasks/T004-fact-and-conflict-proposals.md"
+      }
+    },
+    {
+      "classification": "proven-landed",
+      "command": "reconcile",
+      "history": {
+        "branch": "gsd-path/M004",
+        "candidates": [
+          {
+            "base": "dd579e3bef2b7f0bda0385562f5cf311fc7a15bd",
+            "commit": "42b2b42061b868974dab6188b668502212697286",
+            "valid": true
+          }
+        ],
+        "head": "5ff4e2ed837c4054ceaaf3eff08dba27e2966ee4",
+        "subject": "T005: Open violation, errata and alignment phrase and rule decisions to a token as proposals"
+      },
+      "landed_commit": "42b2b42061b868974dab6188b668502212697286",
+      "reasons": [],
+      "task": {
+        "base": "dd579e3bef2b7f0bda0385562f5cf311fc7a15bd",
+        "id": "T005",
+        "status": "done",
+        "task_file": ".project/tasks/T005-violation-errata-alignment-proposals.md"
+      }
+    },
+    {
+      "classification": "proven-landed",
+      "command": "reconcile",
+      "history": {
+        "branch": "gsd-path/M004",
+        "candidates": [
+          {
+            "base": "f9e8cba2f1237e7d9cb623c8960d449e46ac4bfd",
+            "commit": "20184523176ddb3a74cb6f67f4a110180fb1cfd6",
+            "valid": true
+          }
+        ],
+        "head": "5ff4e2ed837c4054ceaaf3eff08dba27e2966ee4",
+        "subject": "T006: Let a token read the stored ontology proposals and propose rejecting or adopting one"
+      },
+      "landed_commit": "20184523176ddb3a74cb6f67f4a110180fb1cfd6",
+      "reasons": [],
+      "task": {
+        "base": "f9e8cba2f1237e7d9cb623c8960d449e46ac4bfd",
+        "id": "T006",
+        "status": "done",
+        "task_file": ".project/tasks/T006-ontology-proposal-read-and-proposal.md"
+      }
+    },
+    {
+      "classification": "proven-landed",
+      "command": "reconcile",
+      "history": {
+        "branch": "gsd-path/M004",
+        "candidates": [
+          {
+            "base": "d7d0ddc3b7ca8e6d42a9f4e65422b56ffb039ae6",
+            "commit": "0f8e014decd7fd6b6113e83de2c847b35d83e1e1",
+            "valid": true
+          }
+        ],
+        "head": "5ff4e2ed837c4054ceaaf3eff08dba27e2966ee4",
+        "subject": "T007: Let a token decide a mapping, run the check and inference, and record its kind-word decision"
+      },
+      "landed_commit": "0f8e014decd7fd6b6113e83de2c847b35d83e1e1",
+      "reasons": [],
+      "task": {
+        "base": "d7d0ddc3b7ca8e6d42a9f4e65422b56ffb039ae6",
+        "id": "T007",
+        "status": "done",
+        "task_file": ".project/tasks/T007-finalized-operations-and-mapping-read.md"
+      }
+    },
+    {
+      "classification": "proven-landed",
+      "command": "reconcile",
+      "history": {
+        "branch": "gsd-path/M004",
+        "candidates": [
+          {
+            "base": "3af3b48003fcb83908a4ae0529583f3fee7fa5b4",
+            "commit": "9c88f639081f5216aff28208636d61e09cf4e3b4",
+            "valid": true
+          }
+        ],
+        "head": "5ff4e2ed837c4054ceaaf3eff08dba27e2966ee4",
+        "subject": "T008: Give a token its own entries to propose an answer to a pending fact and to a governor decision"
+      },
+      "landed_commit": "9c88f639081f5216aff28208636d61e09cf4e3b4",
+      "reasons": [],
+      "task": {
+        "base": "3af3b48003fcb83908a4ae0529583f3fee7fa5b4",
+        "id": "T008",
+        "status": "done",
+        "task_file": ".project/tasks/T008-pending-fact-and-governor-proposals.md"
+      }
+    },
+    {
+      "classification": "proven-landed",
+      "command": "reconcile",
+      "history": {
+        "branch": "gsd-path/M004",
+        "candidates": [
+          {
+            "base": "1d5e6b75e66b32b0ee353d3fab596404a8467fbd",
+            "commit": "3fd80f7641a26effb81d49ce3b7a701c57ed5d80",
+            "valid": true
+          }
+        ],
+        "head": "5ff4e2ed837c4054ceaaf3eff08dba27e2966ee4",
+        "subject": "T009: Prove the whole ruled table over REST and MCP and correct the batch tool description"
+      },
+      "landed_commit": "3fd80f7641a26effb81d49ce3b7a701c57ed5d80",
+      "reasons": [],
+      "task": {
+        "base": "1d5e6b75e66b32b0ee353d3fab596404a8467fbd",
+        "id": "T009",
+        "status": "done",
+        "task_file": ".project/tasks/T009-whole-table-proof.md"
+      }
+    },
+    {
+      "classification": "proven-landed",
+      "command": "reconcile",
+      "history": {
+        "branch": "gsd-path/M004",
+        "candidates": [
+          {
+            "base": "94cf203759b3c81ea1435c93328ca4aa526b7dce",
+            "commit": "04c3d36dbc7a36d9e5428d8275ecc9e27a96817a",
+            "valid": true
+          }
+        ],
+        "head": "5ff4e2ed837c4054ceaaf3eff08dba27e2966ee4",
+        "subject": "T010: Make ADR 0076 and the API and MCP documentation match every opened Review route and tool"
+      },
+      "landed_commit": "04c3d36dbc7a36d9e5428d8275ecc9e27a96817a",
+      "reasons": [],
+      "task": {
+        "base": "94cf203759b3c81ea1435c93328ca4aa526b7dce",
+        "id": "T010",
+        "status": "done",
+        "task_file": ".project/tasks/T010-close-the-program-documentation.md"
+      }
+    },
+    {
+      "classification": "proven-landed",
+      "command": "reconcile",
+      "history": {
+        "branch": "gsd-path/M004",
+        "candidates": [
+          {
+            "base": "65c3e88f4a0b254bc09cee0aceead4d45b29625f",
+            "commit": "3be94ba8b4d75eb1be5fb3e68fb33bcdac987991",
+            "valid": true
+          }
+        ],
+        "head": "5ff4e2ed837c4054ceaaf3eff08dba27e2966ee4",
+        "subject": "T011: Name the proposing token on a person's approval, decline and supersession rows in Activity"
+      },
+      "landed_commit": "3be94ba8b4d75eb1be5fb3e68fb33bcdac987991",
+      "reasons": [],
+      "task": {
+        "base": "65c3e88f4a0b254bc09cee0aceead4d45b29625f",
+        "id": "T011",
+        "status": "done",
+        "task_file": ".project/tasks/T011-activity-names-the-proposing-token-on-a-persons-answer.md"
+      }
+    }
+  ]
+}

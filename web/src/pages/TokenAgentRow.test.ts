@@ -11,6 +11,7 @@ import {
   batchLabel,
   declaredClientLabel,
   isOpenProposal,
+  tokenActionLabel,
   tokenOperationLabel,
   tokenProposalLabel,
   tokenReasonLabel,
@@ -64,6 +65,31 @@ const renderAnswerable = (a: TokenAgentAction) =>
     createElement(TokenAgentRow, { a, onApprove: noop, onDecline: noop, onPick: noop }),
   );
 
+/** Review 其余各档里只能提议的十二种操作（0076）：令牌的调用什么都不改，只留一条提议 */
+const PROPOSE_ONLY = [
+  "fact.confirm",
+  "fact.reject",
+  "fact.close",
+  "conflict.resolve",
+  "violation.decide",
+  "defect.decide",
+  "errata.decide",
+  "alignment.phrase",
+  "alignment.rule",
+  "ontology.proposal",
+  "pending.nod",
+  "governor.answer",
+];
+/** 直接落地的四种 */
+const FINALIZED = ["mapping.decide", "alignment.kind_word", "consistency.check", "inference.run"];
+/** 这些操作在 Activity 里留下的审计动作 */
+const TOKEN_AUDIT_ACTIONS = [
+  "mapping.decided",
+  "consistency.checked",
+  "inference.materialized",
+  "alignment.kind_word_decided",
+  "ontology_proposal.rejected",
+];
 /** 这一刀服务端会写出来的每一个 code：动作、理由、后来的状态、结果 */
 const OPERATIONS = [
   "review.keep",
@@ -74,8 +100,31 @@ const OPERATIONS = [
   "agent.proposal",
   "agent.proposal.declined",
   "agent.proposal.superseded",
+  ...PROPOSE_ONLY,
+  ...FINALIZED,
+  ...TOKEN_AUDIT_ACTIONS,
 ];
-const PROPOSABLE = ["review.merge", "merge.manual", "merge.revert"];
+const PROPOSABLE = ["review.merge", "merge.manual", "merge.revert", ...PROPOSE_ONLY];
+/** 每一种操作能带的动作（台账 payload 里的 `action`）。两种运行没有动作 */
+const ACTIONS: Record<string, string[]> = {
+  "fact.confirm": ["confirm"],
+  "fact.reject": ["reject"],
+  "fact.close": ["close"],
+  "conflict.resolve": ["close", "retime_new", "keep", "reject_new"],
+  "violation.decide": ["fact_retracted", "fact_closed", "axiom_relaxed", "accepted"],
+  "defect.decide": ["fixed", "accepted"],
+  "errata.decide": ["approve", "reject"],
+  "alignment.rule": ["approve", "reject"],
+  "alignment.phrase": ["bind", "none"],
+  "alignment.kind_word": ["bind", "none"],
+  "ontology.proposal": ["adopt", "reject"],
+  "pending.nod": ["confirm", "reject"],
+  "governor.answer": ["merge", "keep", "revert"],
+  "mapping.decide": ["confirmed", "rejected"],
+};
+const ACTION_PAIRS = Object.entries(ACTIONS).flatMap(([operation, actions]) =>
+  actions.map((action) => `${operation}:${action}`),
+);
 const REASONS = [
   "identity",
   "contradiction",
@@ -86,6 +135,7 @@ const REASONS = [
   "merge_by_person",
   "merge_by_governor",
   "breaker",
+  "propose_only",
 ];
 const STATES = ["approved", "declined", "superseded", "undone"];
 const OUTCOMES = ["applied", "held", "proposed"];
@@ -240,6 +290,132 @@ describe("an open proposal in Agent History", () => {
   });
 });
 
+/** 令牌想裁一处本体缺陷：目标不是一对，服务端给的是一句话和一个动作 */
+const proposedDefect: TokenAgentAction = {
+  ...keep,
+  id: "019a0000-0000-7000-8000-000000000031",
+  operation: "defect.decide",
+  target_kind: "ontology_defect",
+  outcome: "proposed",
+  reason: "propose_only",
+  left: null,
+  right: null,
+  rationale: null,
+  target_label: "symmetric_and_asymmetric: seed manages",
+  action: "fixed",
+};
+
+describe("a row whose target is not a pair", () => {
+  it("names its target in words and prints no placeholder for a missing side", () => {
+    const html = renderAnswerable(proposedDefect);
+    expect(html).toContain("Mira Okafor via graph-curator");
+    expect(html).toContain("symmetric_and_asymmetric: seed manages");
+    expect(html).toContain(S.review.tokenProposes["defect.decide"]);
+    expect(html).toContain(S.review.tokenActions["defect.decide:fixed"]);
+    expect(html).toContain(S.review.tokenReasons.propose_only);
+    expect(html).not.toContain("?");
+    expect(html).not.toContain("≟");
+    expect(html).not.toContain("→");
+    expect(html).not.toContain("defect.decide");
+    expect(html).not.toContain("propose_only");
+    expect(html).not.toContain(">fixed<");
+    // 开着的提议：答得了
+    expect(html).toContain(`>${S.review.tokenApprove}<`);
+    expect(html).toContain(`>${S.review.tokenDecline}<`);
+  });
+
+  it("does so for every operation of the ledger and every action it can carry", () => {
+    for (const operation of [...PROPOSE_ONLY, ...FINALIZED]) {
+      const proposed = PROPOSE_ONLY.includes(operation);
+      for (const action of ACTIONS[operation] ?? [undefined]) {
+        const a: TokenAgentAction = {
+          ...proposedDefect,
+          operation,
+          outcome: proposed ? "proposed" : "applied",
+          reason: proposed ? "propose_only" : undefined,
+          target_label: "Seed Ada Quill works at Seed Acme",
+          action,
+        };
+        const html = render(a);
+        expect(html, operation).toContain("Mira Okafor via graph-curator");
+        expect(html, operation).toContain("Seed Ada Quill works at Seed Acme");
+        expect(html, operation).toContain(
+          proposed ? S.review.tokenProposes[operation] : S.review.tokenOperations[operation],
+        );
+        if (action) {
+          expect(html, `${operation}:${action}`).toContain(
+            S.review.tokenActions[`${operation}:${action}`],
+          );
+          expect(html).not.toContain(`: ${action}<`);
+        }
+        expect(html, operation).not.toContain("?");
+        expect(html, operation).not.toContain(operation);
+        expect(html, operation).not.toContain("propose_only");
+      }
+    }
+  });
+
+  it("prints nothing where the target would be when the row has no label and no sides", () => {
+    const bare: TokenAgentAction = { ...proposedDefect };
+    delete bare.target_label;
+    const html = render(bare);
+    expect(html).not.toContain("?");
+    expect(html).not.toContain("≟");
+    // 一对的行少了一侧，照旧写问号：那是「这一侧的名字读不到了」
+    expect(render({ ...keep, right: null })).toContain("Ada Lovelace ≟ ?");
+  });
+
+  it("keeps a pair row as it was: both names, no target label", () => {
+    expect(render(keep)).toContain("Ada Lovelace ≟ Ada King");
+    expect(renderAnswerable(heldMerge)).toContain("Ada Lovelace ≟ Ada King");
+  });
+});
+
+describe("an approved alignment change that is only queued", () => {
+  for (const [lang, strings] of [
+    ["en", en],
+    ["zh", zh],
+  ] as const) {
+    it(`${lang}: has a queued wording that is not the approved or the applied wording`, () => {
+      const r = strings.review;
+      expect(r.tokenQueued).toBeTruthy();
+      expect(r.tokenQueued).not.toBe(r.tokenStates.approved);
+      expect(r.tokenQueued).not.toBe(r.tokenOutcome.applied);
+      expect(r.tokenQueued).not.toContain(r.tokenOutcome.applied);
+    });
+  }
+
+  it("reads the queued wording on an approved phrase or rule row, not the approved one", () => {
+    for (const [operation, action] of [
+      ["alignment.phrase", "bind"],
+      ["alignment.rule", "approve"],
+    ]) {
+      const approved: TokenAgentAction = {
+        ...proposedDefect,
+        operation,
+        action,
+        target_label: "moved to (Seed person → Seed organization)",
+        state: "approved",
+        state_at: "2026-11-19T10:00:00Z",
+        queued: true,
+      };
+      const html = renderAnswerable(approved);
+      expect(html).toContain(`>${S.review.tokenQueued}<`);
+      expect(html).not.toContain(`>${S.review.tokenStates.approved}<`);
+      expect(html).not.toContain(`>${S.review.tokenOutcome.applied}<`);
+      expect(html).not.toMatch(/<(?:button|input|select|textarea)/);
+      // 没有 `queued` 的批准（别的操作）照旧写「已批准」
+      const plain = renderAnswerable({ ...approved, queued: undefined });
+      expect(plain).toContain(`>${S.review.tokenStates.approved}<`);
+      expect(plain).not.toContain(S.review.tokenQueued);
+      // 还开着、或者被拒绝的行不会写成排着
+      expect(renderAnswerable({ ...approved, state: "declined" })).not.toContain(
+        S.review.tokenQueued,
+      );
+    }
+  });
+});
+
 describe("every code the token ledger writes has a label in both languages", () => {
   for (const [lang, strings] of [
     ["en", en],
@@ -259,6 +435,20 @@ describe("every code the token ledger writes has a label in both languages", () 
           expect(table[code]).not.toBe(code);
         }
       }
+      // 操作与动作的每一对：有说法，说法不是那个 code 本身
+      expect(Object.keys(r.tokenActions).sort()).toEqual([...ACTION_PAIRS].sort());
+      for (const pair of ACTION_PAIRS) {
+        const action = pair.split(":")[1];
+        expect(r.tokenActions[pair], `${lang}: ${pair}`).toBeTruthy();
+        expect(r.tokenActions[pair]).not.toBe(pair);
+        expect(r.tokenActions[pair]).not.toBe(action);
+      }
+      // 只能提议的操作：哪一张表里的说法都不把它写成令牌自己做了的事
+      for (const code of PROPOSE_ONLY) {
+        expect(r.tokenProposes[code], `${lang}: ${code}`).toBeTruthy();
+      }
+      expect(r.tokenWithAction("what", "action")).toContain("what");
+      expect(r.tokenWithAction("what", "action")).toContain("action");
       expect(r.tokenBatch("a1b2c3d4")).toContain("a1b2c3d4");
       expect(r.tokenBatch("a1b2c3d4")).not.toBe("a1b2c3d4");
       for (const text of [
@@ -283,6 +473,18 @@ describe("every code the token ledger writes has a label in both languages", () 
     for (const code of OUTCOMES) expect(S.review.tokenOutcome[code]).toBeTruthy();
     expect(tokenReasonLabel("something_new")).toBe("something_new");
     expect(tokenStateLabel("something_new")).toBe("something_new");
+    for (const pair of ACTION_PAIRS) {
+      const [operation, action] = pair.split(":");
+      expect(tokenActionLabel(operation, action)).toBe(S.review.tokenActions[pair]);
+      expect(tokenActionLabel(operation, action)).not.toBe(action);
+    }
+    expect(tokenActionLabel("fact.confirm", "something_new")).toBe("something_new");
+  });
+
+  it("covers the sixteen operations this milestone writes and their five audit actions", () => {
+    expect(new Set([...PROPOSE_ONLY, ...FINALIZED]).size).toBe(16);
+    expect(TOKEN_AUDIT_ACTIONS.length).toBe(5);
+    expect(REASONS).toContain("propose_only");
   });
 });
 
@@ -309,6 +511,20 @@ describe("the labels token rows share", () => {
     }
     for (const code of ["review.keep", "review.merge", "merge.revert", "kb.updated"]) {
       expect(activityTokenLabel(code, false)).toBeNull();
+    }
+    // 人批准令牌的提议、拒绝一条本体提案：这个动作只有那时才写，也在这张表里
+    expect(activityTokenLabel("ontology_proposal.rejected", false)).toBe(
+      S.review.tokenOperations["ontology_proposal.rejected"],
+    );
+    // 人自己做的那几种（映射、检查、推理、类别词）没有新标签：照旧走 Activity 自己的表
+    for (const code of [
+      "mapping.decided",
+      "consistency.checked",
+      "inference.materialized",
+      "alignment.kind_word_decided",
+    ]) {
+      expect(activityTokenLabel(code, false)).toBeNull();
+      expect(activityTokenLabel(code, true)).toBe(S.review.tokenOperations[code]);
     }
   });
 
