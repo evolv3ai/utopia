@@ -3,10 +3,16 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { TokenAgentAction } from "../api";
 import { S } from "../i18n";
+import { en } from "../i18n/en";
+import { zh } from "../i18n/zh";
 import {
   TokenAgentRow,
   declaredClientLabel,
+  isOpenProposal,
   tokenOperationLabel,
+  tokenProposalLabel,
+  tokenReasonLabel,
+  tokenStateLabel,
   viaToken,
 } from "./TokenAgentRow";
 
@@ -27,7 +33,51 @@ const keep: TokenAgentAction = {
   created_at: "2026-11-18T09:30:00Z",
 };
 
+/** 闸门留下的一次队列合并：一条开着的提议 */
+const heldMerge: TokenAgentAction = {
+  ...keep,
+  id: "019a0000-0000-7000-8000-000000000011",
+  operation: "review.merge",
+  outcome: "held",
+  reason: "kept_by_person",
+  rationale: "same person",
+};
+
+/** 令牌想撤一次人做的合并：一条开着的提议，有方向（源并进目标） */
+const proposedRevert: TokenAgentAction = {
+  ...keep,
+  id: "019a0000-0000-7000-8000-000000000012",
+  operation: "merge.revert",
+  target_kind: "merge",
+  outcome: "proposed",
+  reason: "merge_by_person",
+  merge_id: "019a0000-0000-7000-8000-000000000013",
+  rationale: null,
+};
+
 const render = (a: TokenAgentAction) => renderToStaticMarkup(createElement(TokenAgentRow, { a }));
+const noop = () => {};
+const renderAnswerable = (a: TokenAgentAction) =>
+  renderToStaticMarkup(
+    createElement(TokenAgentRow, { a, onApprove: noop, onDecline: noop, onPick: noop }),
+  );
+
+/** 这一刀服务端会写出来的每一个 code：动作、理由、后来的状态、结果 */
+const OPERATIONS = ["review.keep", "review.merge", "merge.manual", "merge.revert"];
+const PROPOSABLE = ["review.merge", "merge.manual", "merge.revert"];
+const REASONS = [
+  "identity",
+  "contradiction",
+  "derived",
+  "answered",
+  "kept_by_person",
+  "reverted_merge",
+  "merge_by_person",
+  "merge_by_governor",
+  "breaker",
+];
+const STATES = ["approved", "declined", "superseded", "undone"];
+const OUTCOMES = ["applied", "held", "proposed"];
 
 describe("a token agent's row in Agent History", () => {
   it("reads owner via token name, the action in words, and both names", () => {
@@ -49,6 +99,18 @@ describe("a token agent's row in Agent History", () => {
     for (const label of [S.review.merge, S.review.keep, S.review.revert]) {
       expect(html).not.toContain(`>${label}<`);
     }
+    // 开着的提议不给处理函数（Viewer 看到的）：同样一个控件都没有
+    const open = render(heldMerge);
+    expect(open).not.toMatch(/<(?:button|input|select|textarea)/);
+    for (const label of [
+      S.review.merge,
+      S.review.keep,
+      S.review.revert,
+      S.review.tokenApprove,
+      S.review.tokenDecline,
+    ]) {
+      expect(open).not.toContain(">" + label + "<");
+    }
   });
 
   it("leaves the rationale out when there is none", () => {
@@ -60,6 +122,117 @@ describe("a token agent's row in Agent History", () => {
   it("uses the removed-user wording when the owner's name is gone", () => {
     const html = render({ ...keep, owner_name: null });
     expect(html).toContain(`${S.kbset.deletedUser} via graph-curator`);
+  });
+});
+
+describe("an open proposal in Agent History", () => {
+  it("renders Approve and Decline when the handlers are given", () => {
+    for (const a of [heldMerge, proposedRevert]) {
+      const html = renderAnswerable(a);
+      expect(html).toContain(`>${S.review.tokenApprove}<`);
+      expect(html).toContain(`>${S.review.tokenDecline}<`);
+      // 写成正则的分组：风格守卫不许源码里出现原生控件的字面量
+      expect(html).toMatch(/<(?:button)/);
+      // 可以勾进批量回答
+      expect(html).toContain(S.review.tokenPickProposal);
+    }
+  });
+
+  it("says what the agent wants, why it was held, and shows no code raw", () => {
+    const html = renderAnswerable(heldMerge);
+    expect(html).toContain("Mira Okafor via graph-curator");
+    expect(html).toContain(S.review.tokenProposes["review.merge"]);
+    expect(html).toContain(S.review.tokenReasons.kept_by_person);
+    expect(html).toContain(S.review.tokenOutcome.held);
+    expect(html).not.toContain("review.merge");
+    expect(html).not.toContain("kept_by_person");
+    expect(html).not.toContain(">held<");
+
+    const revert = renderAnswerable(proposedRevert);
+    expect(revert).toContain(S.review.tokenProposes["merge.revert"]);
+    expect(revert).toContain(S.review.tokenReasons.merge_by_person);
+    expect(revert).not.toContain("merge.revert");
+    expect(revert).not.toContain("merge_by_person");
+  });
+
+  it("writes the direction of a manual merge and of a revert, source to target", () => {
+    expect(renderAnswerable(proposedRevert)).toContain("Ada Lovelace → Ada King");
+    expect(
+      renderAnswerable({ ...heldMerge, operation: "merge.manual", target_kind: "entity" }),
+    ).toContain("Ada Lovelace → Ada King");
+    // 队列里的一对没有方向
+    expect(renderAnswerable(heldMerge)).toContain("Ada Lovelace ≟ Ada King");
+  });
+
+  it("loses its controls once it is answered and shows the state in words", () => {
+    for (const state of ["approved", "declined", "superseded"]) {
+      const html = renderAnswerable({ ...heldMerge, state, state_at: "2026-11-19T10:00:00Z" });
+      expect(html).not.toMatch(/<(?:button|input|select|textarea)/);
+      expect(html).not.toContain(`>${S.review.tokenApprove}<`);
+      expect(html).toContain(S.review.tokenStates[state]);
+      expect(html).not.toContain(`>${state}<`);
+    }
+  });
+
+  it("shows an applied merge that a person reverted as undone, with no control", () => {
+    const html = renderAnswerable({
+      ...keep,
+      operation: "merge.manual",
+      merge_id: "019a0000-0000-7000-8000-000000000013",
+      state: "undone",
+      state_at: "2026-11-19T10:00:00Z",
+    });
+    expect(html).toContain(S.review.tokenOperations["merge.manual"]);
+    expect(html).toContain(S.review.tokenStates.undone);
+    expect(html).not.toMatch(/<(?:button|input|select|textarea)/);
+  });
+
+  it("is open only while it is held or proposed and has no state", () => {
+    expect(isOpenProposal(heldMerge)).toBe(true);
+    expect(isOpenProposal(proposedRevert)).toBe(true);
+    expect(isOpenProposal(keep)).toBe(false);
+    expect(isOpenProposal({ ...heldMerge, state: "declined" })).toBe(false);
+  });
+});
+
+describe("every code the token ledger writes has a label in both languages", () => {
+  for (const [lang, strings] of [
+    ["en", en],
+    ["zh", zh],
+  ] as const) {
+    it(`${lang}: operations, proposals, reasons, states and outcomes`, () => {
+      const r = strings.review;
+      for (const [table, codes] of [
+        [r.tokenOperations, OPERATIONS],
+        [r.tokenProposes, PROPOSABLE],
+        [r.tokenReasons, REASONS],
+        [r.tokenStates, STATES],
+        [r.tokenOutcome, OUTCOMES],
+      ] as const) {
+        for (const code of codes) {
+          expect(table[code], `${lang}: ${code}`).toBeTruthy();
+          expect(table[code]).not.toBe(code);
+        }
+      }
+      for (const text of [
+        r.tokenApprove,
+        r.tokenDecline,
+        r.tokenApproveSelected,
+        r.tokenDeclineSelected,
+        r.tokenSelectOpen,
+        r.tokenPickProposal,
+      ]) {
+        expect(text).toBeTruthy();
+      }
+    });
+  }
+
+  it("falls back to the code itself only for one it does not know", () => {
+    for (const code of REASONS) expect(tokenReasonLabel(code)).not.toBe(code);
+    for (const code of STATES) expect(tokenStateLabel(code)).not.toBe(code);
+    for (const code of PROPOSABLE) expect(tokenProposalLabel(code)).not.toBe(code);
+    expect(tokenReasonLabel("something_new")).toBe("something_new");
+    expect(tokenStateLabel("something_new")).toBe("something_new");
   });
 });
 

@@ -1030,6 +1030,232 @@ async fn record_revert(
     Ok(Some(action))
 }
 
+// ───────────────────────── 人答提议（0076） ─────────────────────────
+//
+// 提议只有登录的人能答，答的路由在服务端只收会话。这里只有三样：按 id 读一条提议、
+// 带守卫地把它关上、以及列表要挂在卡片上的那几样查询。**批准时做的合并或撤回不在这里**：
+// 那是人自己的路径（`resolution::decide_review` / `merge_entities` / `revert_merge`），
+// 不过闸门，由路由层照会话处理函数的样子去调
+
+/// 一条提议（`held` / `proposed` 的台账行），答没答过都读得到；落地的行、别的库的行、
+/// 认不出的 id 都是 `None`
+pub async fn proposal(pool: &PgPool, kb_id: Uuid, id: Uuid) -> AppResult<Option<TokenAgentAction>> {
+    Ok(sqlx::query_as(&format!(
+        "SELECT {COLS} FROM token_agent_actions t {JOINS}
+          WHERE t.id = $1 AND t.kb_id = $2 AND t.outcome IN ('held', 'proposed')"
+    ))
+    .bind(id)
+    .bind(kb_id)
+    .fetch_optional(pool)
+    .await?)
+}
+
+/// 把一条开着的提议关上：`approved` / `declined` / `superseded`，记下谁答的、什么时候。
+/// **只动 `state` 还空着的行**，回这一次是不是关上了——`false` 就是别人先答了，
+/// 调用方答 `already_decided`。`merge_id` 给了才写：批准合并时是做出的那次合并，
+/// 撤回的提议本来就指着它要撤的合并
+pub async fn answer(
+    pool: &PgPool,
+    kb_id: Uuid,
+    id: Uuid,
+    state: &str,
+    user_id: Uuid,
+    merge_id: Option<Uuid>,
+) -> AppResult<bool> {
+    if !matches!(state, "approved" | "declined" | "superseded") {
+        return Err(AppError::Other(anyhow::anyhow!(
+            "a proposal is closed as approved, declined or superseded, not {state}"
+        )));
+    }
+    let closed = sqlx::query(
+        "UPDATE token_agent_actions
+            SET state = $3, state_at = now(), state_by = $4, merge_id = coalesce($5, merge_id)
+          WHERE id = $1 AND kb_id = $2 AND outcome IN ('held', 'proposed') AND state IS NULL",
+    )
+    .bind(id)
+    .bind(kb_id)
+    .bind(state)
+    .bind(user_id)
+    .bind(merge_id)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(closed == 1)
+}
+
+/// 人的路径说「这个目标已经没法裁了」的那几种错误：审核行不在等了、一侧已经并走了、
+/// 合并已经撤回了。批准提议时撞上它们，提议关成 `superseded`，而不是把错误报出去。
+/// 那几个函数不归这里改，所以按它们的原话认
+pub fn target_gone(e: &AppError) -> bool {
+    match e {
+        AppError::NotFound => true,
+        AppError::Conflict(said) => {
+            said == crate::resolution::ALREADY_MERGED || said == ALREADY_REVERTED
+        }
+        _ => false,
+    }
+}
+
+/// 这两个实体之间最新的一次还没撤回的合并，方向不论。批准队列合并的提议之后用它找出
+/// 刚做出的那次合并（`decide_review` 不回合并的 id）
+pub async fn merge_between(
+    pool: &PgPool,
+    kb_id: Uuid,
+    a: Uuid,
+    b: Uuid,
+) -> AppResult<Option<Uuid>> {
+    Ok(sqlx::query_scalar(
+        "SELECT id FROM entity_merges
+          WHERE kb_id = $1 AND reverted_at IS NULL
+            AND ((source_id = $2 AND target_id = $3) OR (source_id = $3 AND target_id = $2))
+          ORDER BY created_at DESC, id DESC LIMIT 1",
+    )
+    .bind(kb_id)
+    .bind(a)
+    .bind(b)
+    .fetch_optional(pool)
+    .await?)
+}
+
+type ProposalRow = (
+    Uuid,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    String,
+    DateTime<Utc>,
+);
+
+/// 这些钥匙上开着的提议：`(operation, target_key)` 对到卡片上要挂的那一项
+async fn open_proposals(
+    pool: &PgPool,
+    kb_id: Uuid,
+    operations: &[&str],
+    keys: &[String],
+) -> AppResult<std::collections::HashMap<(String, String), utopia_core::models::AgentProposalView>>
+{
+    if keys.is_empty() {
+        return Ok(Default::default());
+    }
+    let operations: Vec<String> = operations.iter().map(|o| o.to_string()).collect();
+    let rows: Vec<ProposalRow> = sqlx::query_as(
+        "SELECT t.id, t.operation, t.target_key, t.gate_reason, u.display_name, t.token_name,
+                t.created_at
+           FROM token_agent_actions t LEFT JOIN users u ON u.id = t.owner_id
+          WHERE t.kb_id = $1 AND t.operation = ANY($2) AND t.target_key = ANY($3)
+            AND t.outcome IN ('held', 'proposed') AND t.state IS NULL",
+    )
+    .bind(kb_id)
+    .bind(&operations)
+    .bind(keys)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(id, operation, key, reason, owner_name, token_name, created_at)| {
+                (
+                    (operation.clone(), key),
+                    utopia_core::models::AgentProposalView {
+                        id,
+                        operation,
+                        reason,
+                        owner_name,
+                        token_name,
+                        created_at,
+                    },
+                )
+            },
+        )
+        .collect())
+}
+
+/// 手动合并提议的钥匙：两个实体的 id 按升序用 `|` 连起来（与写入时同一个算法）
+fn pair_key(a: Uuid, b: Uuid) -> String {
+    format!("{}|{}", a.min(b), a.max(b))
+}
+
+/// 一页重复项上开着的提议，按审核行的 id 挂：队列合并的提议指着审核行，手动合并的提议
+/// 指着这两个实体（方向不论）。两种都有时挂队列合并的那一条——它说的正是这张卡片。
+/// `pairs` 是（审核行，左实体，右实体）
+pub async fn open_proposals_on_pairs(
+    pool: &PgPool,
+    kb_id: Uuid,
+    pairs: &[(Uuid, Uuid, Uuid)],
+) -> AppResult<std::collections::HashMap<Uuid, utopia_core::models::AgentProposalView>> {
+    let keys: Vec<String> = pairs
+        .iter()
+        .flat_map(|(review, left, right)| [review.to_string(), pair_key(*left, *right)])
+        .collect();
+    let mut open = open_proposals(pool, kb_id, &["review.merge", "merge.manual"], &keys).await?;
+    let mut out = std::collections::HashMap::new();
+    for (review, left, right) in pairs {
+        let found = open
+            .remove(&("review.merge".to_string(), review.to_string()))
+            .or_else(|| {
+                open.get(&("merge.manual".to_string(), pair_key(*left, *right)))
+                    .cloned()
+            });
+        if let Some(found) = found {
+            out.insert(*review, found);
+        }
+    }
+    Ok(out)
+}
+
+/// 这些合并上开着的撤回提议，按合并的 id 挂
+pub async fn open_revert_proposals(
+    pool: &PgPool,
+    kb_id: Uuid,
+    merge_ids: &[Uuid],
+) -> AppResult<std::collections::HashMap<Uuid, utopia_core::models::AgentProposalView>> {
+    let keys: Vec<String> = merge_ids.iter().map(Uuid::to_string).collect();
+    let mut open = open_proposals(pool, kb_id, &["merge.revert"], &keys).await?;
+    Ok(merge_ids
+        .iter()
+        .filter_map(|id| {
+            open.remove(&("merge.revert".to_string(), id.to_string()))
+                .map(|found| (*id, found))
+        })
+        .collect())
+}
+
+/// 这些合并里哪些是令牌 agent 做的：台账上一行落地的 `review.merge` / `merge.manual`
+/// 指着它。人批准提议做出的合并不在里面——那一行是 `held` / `proposed`，合并是人的
+pub async fn merge_agents(
+    pool: &PgPool,
+    kb_id: Uuid,
+    merge_ids: &[Uuid],
+) -> AppResult<std::collections::HashMap<Uuid, utopia_core::models::MergeAgentView>> {
+    if merge_ids.is_empty() {
+        return Ok(Default::default());
+    }
+    let rows: Vec<(Uuid, Uuid, Option<String>, String)> = sqlx::query_as(
+        "SELECT t.merge_id, t.id, u.display_name, t.token_name
+           FROM token_agent_actions t LEFT JOIN users u ON u.id = t.owner_id
+          WHERE t.kb_id = $1 AND t.merge_id = ANY($2) AND t.outcome = 'applied'
+            AND t.operation IN ('review.merge', 'merge.manual')",
+    )
+    .bind(kb_id)
+    .bind(merge_ids)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(merge_id, action_id, owner_name, token_name)| {
+            (
+                merge_id,
+                utopia_core::models::MergeAgentView {
+                    action_id,
+                    owner_name,
+                    token_name,
+                },
+            )
+        })
+        .collect())
+}
+
 /// 一个库的令牌 agent 台账，最新的在前
 pub async fn list(
     pool: &PgPool,

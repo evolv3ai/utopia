@@ -3,9 +3,9 @@ id: T004
 title: A signed-in editor answers agent proposals in Agent History, sees them on the Duplicates and Merges cards, and reverts an agent merge that the Merges section shows as owner via token name
 wave: 3
 deps: [T003]
-status: pending
-agent: null
-base: null
+status: done
+agent: build_T004
+base: 0b50fb1e61339ddf5e2bcca595688a85715192d2
 worktree: null
 task_branch: null
 files:
@@ -91,3 +91,93 @@ Heavy: yes
 - 2026-11-19 — created by planner
 - 2026-11-19 — build_T004 preflight at `faf41df`, no product path changed. NEEDS-ORCHESTRATOR: the Approach says "add the optional `agent_proposal` to `ReviewItem`" (`crates/utopia-core/src/models.rs:1065`), but two test helpers outside `files` build that struct with a full literal and stop compiling when it gains a field — `crates/utopia-server/src/adjudication.rs:615` (`mod tests`, `fn item`, line 605; breaks the whole `utopia-server` test binary, so this task's Verify and T003's) and `crates/utopia-store/tests/store/a_decision_records_why.rs:102` (`fn item`, line 92; breaks the `utopia-store` integration test binary, so T001's Verify and the whole-store run). Rust has no way to add a field without touching those literals. May T004 edit these two files (one added line each, `agent_proposal: None`), or must `ReviewItem` stay as it is? — readings: (a) add both paths to T004 `files`; the change is the one line per literal and no assertion changes; (b) leave `ReviewItem` unchanged and attach `agent_proposal` to the serialized Duplicates items in `review_routes::queue_page` (in `files`; session, token and MCP list reads pass through it) — then the single-card read `review_item` / `resolution::pending_review` (called from `review_ops.rs`, not in `files`) carries no `agent_proposal`, and the Approach sentence "filled in `assemble_reviews`" is not met; a wrapper return type for `list_reviews` is not an option either, its callers in `extraction.rs`, `review_totals_tests.rs` and three store tests read `ReviewItem` fields. Other preflight results, for the redispatch: every path in Context, Approach and Verify exists or is declared; SC3, SC4, SC6, SC7 exist in INTENT.md; the two T004 Interface paragraphs appear verbatim in T007 (the only sibling that carries them); `MergeLogView` has no literal outside `resolution.rs`, so `agent` and `agent_proposal` fit there with `#[sqlx(skip)]`; the `undone` read is already computed in `token_agent_actions::COLS` and `history_row` by T001, so nothing is to add for it; the UI must use the `../ui` `Button` and `Checkbox` (the style guard that `pnpm build` runs rejects native controls). Verify not run. Guard refusals: none.
 - 2026-11-19 — orchestrator: coder returned `blocked` at preflight (see NEEDS-ORCHESTRATOR above). Ruling Delegated (driver D119): option (a); the two paths are added to `files` and the Approach says what may change in them. Task returned to `pending` and dispatched again.
+- 2026-11-19 — build_T004 at base `0b50fb1`: implemented; returning `ready`. **What landed.** Routes `POST /kbs/{kb_id}/review/agent-proposals/{proposal_id}` and `POST /kbs/{kb_id}/review/agent-proposals` (`AuthUser`, Editor) in `review_routes.rs` + `api/mod.rs`; store reads/guarded close in `token_agent_actions.rs` (`proposal`, `answer`, `target_gone`, `merge_between`, `open_proposals_on_pairs`, `open_revert_proposals`, `merge_agents`); `ReviewItem.agent_proposal`, `MergeLogView.agent` / `.agent_proposal` (serialized only when present) filled in `resolution::assemble_reviews` and `list_merges`; `adjudication.rs` and `a_decision_records_why.rs` got the one `agent_proposal: None` line each and nothing else. Web: `api.ts` (`answerAgentProposal`, `answerAgentProposals`, types), `TokenAgentRow.tsx` (Approve / Decline and a pick box only on an open proposal with handlers), new `AgentProposal.tsx` (`AgentProposalChip`, `MergeActor`), `Review.tsx` (Agent History single and bulk answer, chip on Duplicates and Merges cards, "owner via token name" in Merges), labels in `en.ts` / `zh.ts`. **Hard lines.** The session handlers `decide`, `batch`, `manual_merge`, `revert_merge` have no hunk; `resolution::revert_merge`, `merge_entities`, `decide_review` have no hunk; no T001 signature changed. Approval calls the person's ungated store functions from separate private functions (`approve_queue_merge`, `approve_manual_merge`, `approve_revert`) that mirror the session handlers' statements, with the person as actor, `agent_proposal` in the audit detail and no `token_id` key. **Verify.** Run in full on a fresh `m003_t004`: exit 0; the ten named tests each `... ok` (10 passed, 0 failed); the second filter ran 8 tests, 8 passed (7 `review_totals_tests`, 1 `review_session_unchanged_tests`); web install, test (56 files, 381 tests passed) and build passed. Note: the filter `review_attribution_tests::` matches no test name — that file is mounted as `api::review_routes::attribution_tests` (`review_routes.rs:25`); its tests ran and passed in the whole-crate run. **Whole crates on final files.** `utopia-server` on fresh `m003_t004_server`, `--no-fail-fast`: 903 passed, 0 failed, 2 ignored. `utopia-store` on fresh `m003_t004_store`, `--no-fail-fast`: 527 passed, 0 failed, 4 ignored. `cargo fmt --all --check` clean; `cargo clippy --workspace --all-targets` no warning. **Existing test edit.** `TokenAgentRow.test.ts` "has no Merge, Keep or Revert button, and no button at all": its original assertions on the applied keep are untouched; assertions for an open proposal rendered without handlers were appended; no other existing assertion changed, no test renamed or removed. **Reviewer observations.** (1) Direction: the Agent History row writes `source → target` for `merge.manual` and `merge.revert` (a queue pair keeps `≟`); approval merges in the stored direction (asserted). The chip on a Duplicates card does not show direction — the card has no source/target order. (2) Labels are keyed on `operation`, `reason`, `outcome`, `state` codes only, never on `explanation`; four operations, nine reasons, four states, three outcomes have labels in both languages and a vitest test fails when one is missing. (3) Simultaneous person revert + token revert of one merge: not asserted, the case stands as observed; tests pin only the sequential E16 case. (4) A `breaker` revert meeting an open proposal returns that proposal's earlier reason: unchanged by this task, not asserted; `breaker` has a label. **Design notes for review.** Answers are serialised by an in-process mutex and closed by a guarded `UPDATE ... WHERE state IS NULL`; across processes the loser gets `already_decided`, but its approved merge/revert has by then run through the unchanged store function, which itself refuses a second merge or revert of the same target (then the proposal reads `superseded`). Approving a `merge.manual` proposal does not close the pair's own pending review row and runs no governance follow-up — the session manual merge does neither. A queue proposal whose review row was re-pointed to other entities since the proposal closes `superseded`. Decline and supersede audit rows have `target_kind` `agent_action`. Bulk outcomes for an unknown id carry `code` `not_found`; an unknown `action` is 422 `unknown_action` (neither code is named by the contract). The Review tab controls are covered by static render only; no click test and no browser walkthrough was done by the coder. **Guard refusals.** One: a Bash call that ran an inline Python heredoc to patch `Review.tsx` and also contained `git -C` was refused ("could not validate the tool request"); the edits were made with the Edit tool instead, no workaround. Databases created: `m003_t004`, `m003_t004_dev`, `m003_t004_server`, `m003_t004_store`; none dropped afterwards.
+- 2026-11-20 — orchestrator Verify (sidecar gsd-path-verify/task-t004-verify): pass, exit 0; output tail:
+  ```
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:19308) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:31296) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:35260) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:3440) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:29036) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:38324) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:18140) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  [33m
+  (!) Some chunks are larger than 500 kB after minification. Consider:
+  - Using dynamic import() to code-split the application
+  - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+  - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+  ```
+- 2026-11-20 — orchestrator regression Verify of T001 (sidecar gsd-path-verify/task-t004-verify): pass, exit 0; output tail:
+  ```
+  test a_token_keep_changes_no_precedent_no_settlement_and_queues_no_govern_round ... ok
+  test a_pair_the_governor_is_deciding_is_refused_to_a_token_as_to_a_person ... ok
+  test replaying_migration_0128_changes_nothing ... ok
+  
+  test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.54s
+  
+     Compiling utopia-store v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t004-verify\crates\utopia-store)
+      Finished `test` profile [unoptimized + debuginfo] target(s) in 18.50s
+       Running tests\store\main.rs (C:/Users/Owner/.gsd-path/cargo-target/finish-m003-T004\debug\deps\store-97773e81a9073f97.exe)
+  
+  running 6 tests
+  test a_name_is_a_fact::merging_moves_names_and_reverting_brings_them_back ... ok
+  test merge_direction_counts_live_facts_in_each_base::merge_direction_counts_live_facts_in_each_base ... ok
+  test a_timeline_holds_whatever_the_order::a_revert_restores_both_timelines_a_merge_rewrote ... ok
+  test history_shows_the_merge_itself::history_carries_the_merge_and_its_direction ... ok
+  test an_automatic_merge_is_gated_by_what_it_can_undo::a_merge_that_would_leave_the_graph_is_held ... ok
+  test a_signature_holds_on_every_path::a_merge_that_breaks_the_signature_is_recorded ... ok
+  
+  test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 355 filtered out; finished in 0.85s
+  ```
+- 2026-11-20 — orchestrator regression Verify of T002 (sidecar gsd-path-verify/task-t004-verify): pass, exit 0; output tail:
+  ```
+  test api::review_mcp_tests::a_refused_keep_carries_the_same_code_over_the_api_and_over_mcp ... ok
+  test api::review_token_api_tests::an_empty_duplicates_section_reads_the_same_for_a_token_and_a_session ... ok
+  test api::review_mcp_reads_tests::review_item_defaults_to_duplicates_and_finds_a_kind_word_by_its_exact_word_and_an_agent_row_by_its_row_id ... ok
+  test api::review_token_api_tests::a_token_keep_over_the_api_starts_no_govern_round ... ok
+  test api::review_token_api_tests::a_keep_over_the_api_is_refused_with_its_code ... ok
+  test api::review_token_api_tests::a_write_token_of_an_editor_keeps_a_pair_over_the_api ... ok
+  test api::review_mcp_reads_tests::review_item_refuses_mappings_and_an_unknown_section_with_unknown_queue ... ok
+  test api::review_token_api_tests::a_token_whose_kb_ids_exclude_the_base_gets_404_on_review_reads ... ok
+  test api::review_token_api_tests::a_token_refused_on_merge_manual_merge_revert_or_batch_leaves_the_graph_equal ... ok
+  test api::review_session_unchanged_tests::a_session_editor_gets_todays_duplicates_overview_keep_merge_and_batch_responses ... ok
+  test api::review_mcp_tests::two_keeps_of_one_pair_at_once_apply_exactly_one ... ok
+  test api::review_token_api_tests::a_read_token_of_a_viewer_lists_duplicates_and_overview_as_a_session_editor_sees_them ... ok
+  test api::review_token_api_tests::a_token_receives_duplicates_in_the_session_order ... ok
+  test api::review_mcp_reads_tests::review_list_returns_what_the_token_api_returns_for_each_of_the_thirteen_sections ... ok
+  test api::review_mcp_reads_tests::review_item_returns_the_listed_items_own_fields_for_one_item_of_each_section ... ok
+  test api::review_mcp_reads_tests::review_list_pages_decisions_by_page_and_per_and_the_queue_sections_by_limit_and_offset ... ok
+  test api::review_mcp_reads_tests::review_item_answers_one_not_found_for_an_unknown_id_another_bases_id_and_an_item_no_longer_waiting ... ok
+  
+  test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 875 filtered out; finished in 6.12s
+  ```
+- 2026-11-20 — orchestrator regression Verify of T003 (sidecar gsd-path-verify/task-t004-verify): pass, exit 0; output tail:
+  ```
+  test api::review_token_reads_tests::a_token_asking_for_mappings_or_an_unknown_section_is_refused_with_unknown_queue ... ok
+  test api::review_token_reads_tests::agent_history_read_by_a_token_names_the_owner_and_the_token_of_a_keep_beside_governor_rows ... ok
+  test api::review_token_reads_tests::a_token_cannot_nod_and_every_review_write_outside_the_ruled_table_answers_401 ... ok
+  test api::review_token_api_tests::a_token_receives_duplicates_in_the_session_order ... ok
+  test api::review_token_reads_tests::a_token_paging_alignment_with_equal_timestamps_visits_each_waiting_item_exactly_once ... ok
+  test api::review_token_reads_tests::a_read_token_of_a_viewer_lists_each_of_the_thirteen_sections_as_a_session_editor_sees_them ... ok
+  test api::review_mcp_reads_tests::review_item_refuses_mappings_and_an_unknown_section_with_unknown_queue ... ok
+  test api::review_token_reads_tests::agent_history_without_a_token_action_reads_governor_rows_only_and_a_ledger_row_keeps_its_stored_token_name ... ok
+  test api::review_token_reads_tests::an_empty_section_reads_as_an_empty_list_with_total_0_for_a_token_as_for_a_session ... ok
+  test api::review_token_reads_tests::a_token_receives_each_sections_items_in_the_session_order ... ok
+  test api::review_mcp_reads_tests::review_list_returns_what_the_token_api_returns_for_each_of_the_thirteen_sections ... ok
+  test api::review_mcp_reads_tests::review_item_returns_the_listed_items_own_fields_for_one_item_of_each_section ... ok
+  test api::review_token_reads_tests::a_tokens_total_counts_the_listed_rows_and_counts_keep_their_values ... ok
+  test api::review_mcp_reads_tests::review_list_pages_decisions_by_page_and_per_and_the_queue_sections_by_limit_and_offset ... ok
+  test api::review_token_reads_tests::a_token_whose_kb_ids_exclude_the_base_gets_404_on_every_review_read ... ok
+  test api::review_mcp_reads_tests::review_item_answers_one_not_found_for_an_unknown_id_another_bases_id_and_an_item_no_longer_waiting ... ok
+  test api::review_token_reads_tests::a_token_page_size_is_clamped_and_an_offset_at_or_past_the_total_returns_no_items ... ok
+  
+  test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 874 filtered out; finished in 16.22s
+  ```

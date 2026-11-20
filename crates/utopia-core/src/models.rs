@@ -1073,6 +1073,33 @@ pub struct ReviewItem {
     pub right: ReviewSide,
     /// agent 的建议，没有就是 None
     pub proposal: Option<ReviewProposal>,
+    /// 令牌 agent 在这一对上留下的、还开着的提议（0076）：队列合并的提议指着这条审核行，
+    /// 手动合并的提议指着这两个实体。**没有就不出这个键**——别的行与从前一个字节不差
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_proposal: Option<AgentProposalView>,
+}
+
+/// 令牌 agent 的一条开着的提议，挂在它指着的那张卡片上（0076）。`reason` 是稳定的 code
+/// （闸门的理由，或只能提议的理由），措辞归界面；`token_name` 是提议那一刻存下的名字，
+/// `owner_name` 为空 = 账号已移除
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentProposalView {
+    pub id: Uuid,
+    /// review.merge | merge.manual | merge.revert
+    pub operation: String,
+    pub reason: Option<String>,
+    pub owner_name: Option<String>,
+    pub token_name: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// 一次合并是哪枚令牌做的（0076）：台账上那一行落地的合并。合并日志的 `merged_by_name`
+/// 仍是令牌的主人——有了这一项，界面才写得出「主人 via 令牌名」，而不是把它当成主人亲手合的
+#[derive(Debug, Clone, Serialize)]
+pub struct MergeAgentView {
+    pub action_id: Uuid,
+    pub owner_name: Option<String>,
+    pub token_name: String,
 }
 
 /// 合并日志行（审核页历史区）。
@@ -1086,6 +1113,14 @@ pub struct MergeLogView {
     pub reason: Option<String>,
     pub created_at: DateTime<Utc>,
     pub reverted_at: Option<DateTime<Utc>>,
+    /// 令牌 agent 做的合并才有（0076）；别的行不出这个键
+    #[sqlx(skip)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<MergeAgentView>,
+    /// 令牌想撤这次合并、还等着人答的提议（0076）；没有就不出这个键
+    #[sqlx(skip)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_proposal: Option<AgentProposalView>,
 }
 
 /// 低置信事实审核行。

@@ -1,6 +1,6 @@
 import type { TokenAgentAction } from "../api";
 import { S } from "../i18n";
-import { Status, localDate, type ChipTone } from "../ui";
+import { Button, CARD_ACTIONS, Checkbox, Status, cn, localDate, type ChipTone } from "../ui";
 
 /* ---------- 令牌 agent 的一笔（0076） ----------
    某个人的一枚令牌对 Review 做的动作。它不是治理 agent 的行，也不是人亲手做的：
@@ -18,9 +18,29 @@ export function tokenOperationLabel(operation: string): string {
   return S.review.tokenOperations[operation] ?? operation;
 }
 
+/** 同一个动作没落地、留成提议时的说法：它想做，还没做 */
+export function tokenProposalLabel(operation: string): string {
+  return S.review.tokenProposes[operation] ?? tokenOperationLabel(operation);
+}
+
+/** 为什么没有直接落地。**认的是服务端的 code**，不是它那句英文说明 */
+export function tokenReasonLabel(reason: string): string {
+  return S.review.tokenReasons[reason] ?? reason;
+}
+
+/** 后来怎样了：approved / declined / superseded / undone */
+export function tokenStateLabel(state: string): string {
+  return S.review.tokenStates[state] ?? state;
+}
+
 /** 调用方自己报的 User-Agent。它由调用方完全控制，所以每次展示都写明是「declared」 */
 export function declaredClientLabel(client: string): string {
   return S.kbset.auditDeclaredClient(client);
+}
+
+/** 还开着的提议：没落地（held / proposed），也还没人答 */
+export function isOpenProposal(a: TokenAgentAction): boolean {
+  return (a.outcome === "held" || a.outcome === "proposed") && !a.state;
 }
 
 const OUTCOME_TONE: Record<string, ChipTone> = {
@@ -29,26 +49,87 @@ const OUTCOME_TONE: Record<string, ChipTone> = {
   proposed: "warn",
 };
 
-/** Agent 一档里令牌的一行。**没有按钮**：回答路由是给治理 agent 的决定用的 */
-export function TokenAgentRow({ a }: { a: TokenAgentAction }) {
+const STATE_TONE: Record<string, ChipTone> = {
+  approved: "success",
+  declined: "neutral",
+  superseded: "neutral",
+  undone: "warn",
+};
+
+/** 手动合并与撤回是有方向的（源并进目标）：写成箭头。队列里的一对没有方向，方向到合并时才定 */
+const DIRECTED = new Set(["merge.manual", "merge.revert"]);
+
+/** Agent 一档里令牌的一行。
+ *
+ *  **按钮只在开着的提议上、并且调用方给了处理函数时才有**：落地的行没有可答的东西，
+ *  Viewer 没有处理函数。答的是人——批准跑的是人自己的合并或撤回，记在这个人名下。
+ *  `onPick` 给了，开着的提议左边多一个勾，跟着上面的「批准所选 / 拒绝所选」走 */
+export function TokenAgentRow({
+  a,
+  busy,
+  picked,
+  onPick,
+  onApprove,
+  onDecline,
+}: {
+  a: TokenAgentAction;
+  busy?: boolean;
+  picked?: boolean;
+  onPick?: (picked: boolean) => void;
+  onApprove?: () => void;
+  onDecline?: () => void;
+}) {
+  const proposal = a.outcome === "held" || a.outcome === "proposed";
+  const open = isOpenProposal(a);
   return (
-    <div className="glass rounded-panel px-4 py-3">
+    <div className={cn("glass rounded-panel px-4 py-3", picked && "u-picked")}>
       <div className="flex items-center gap-3">
+        {open && onPick && (
+          <Checkbox
+            className="shrink-0"
+            checked={!!picked}
+            disabled={busy}
+            onChange={onPick}
+            label={<span className="sr-only">{S.review.tokenPickProposal}</span>}
+          />
+        )}
         <span className="text-body text-ink shrink-0">
           {viaToken(a.owner_name, a.token_name)}
         </span>
-        <span className="text-body text-ink-2 shrink-0">{tokenOperationLabel(a.operation)}</span>
-        <span className="text-body text-ink-2 truncate min-w-0">
-          {a.left ?? "?"} ≟ {a.right ?? "?"}
+        <span className="text-body text-ink-2 shrink-0">
+          {proposal ? tokenProposalLabel(a.operation) : tokenOperationLabel(a.operation)}
         </span>
-        <Status tone={OUTCOME_TONE[a.outcome] ?? "neutral"} className="ml-auto shrink-0">
-          {S.review.tokenOutcome[a.outcome] ?? a.outcome}
-        </Status>
+        <span className="text-body text-ink-2 truncate min-w-0">
+          {a.left ?? "?"} {DIRECTED.has(a.operation) ? "→" : "≟"} {a.right ?? "?"}
+        </span>
+        <span className="ml-auto flex shrink-0 items-center gap-2">
+          <Status tone={OUTCOME_TONE[a.outcome] ?? "neutral"}>
+            {S.review.tokenOutcome[a.outcome] ?? a.outcome}
+          </Status>
+          {a.state && (
+            <Status tone={STATE_TONE[a.state] ?? "neutral"}>{tokenStateLabel(a.state)}</Status>
+          )}
+        </span>
       </div>
       <div className="mt-1 flex items-center gap-3 text-small text-ink-2">
         <span className="u-num text-fine shrink-0">{localDate(a.created_at)}</span>
+        {a.reason && <span className="shrink-0">{tokenReasonLabel(a.reason)}</span>}
         {a.rationale && <span className="truncate min-w-0">“{a.rationale}”</span>}
       </div>
+      {open && (onApprove || onDecline) && (
+        <div className={CARD_ACTIONS}>
+          {onApprove && (
+            <Button variant="primary" size="sm" disabled={busy} onClick={onApprove}>
+              {S.review.tokenApprove}
+            </Button>
+          )}
+          {onDecline && (
+            <Button variant="secondary" size="sm" disabled={busy} onClick={onDecline}>
+              {S.review.tokenDecline}
+            </Button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -539,6 +539,15 @@ pub fn router(state: AppState, cfg: &AppConfig) -> Router {
             "/kbs/{id}/review/agent/{decision_id}",
             post(review_routes::agent_answer),
         )
+        // 人答令牌 agent 的提议（0076）：单条与批量，只收会话
+        .route(
+            "/kbs/{id}/review/agent-proposals",
+            post(review_routes::agent_proposal_answers),
+        )
+        .route(
+            "/kbs/{id}/review/agent-proposals/{proposal_id}",
+            post(review_routes::agent_proposal_answer),
+        )
         // 记忆抽出、等人点头的事实（0015）：按句取、逐条裁
         .route(
             "/kbs/{id}/review/pending",
@@ -714,3 +723,6 @@ mod review_token_merge_tests;
 
 #[cfg(test)]
 mod review_token_revert_tests;
+
+#[cfg(test)]
+mod review_proposal_answer_tests;

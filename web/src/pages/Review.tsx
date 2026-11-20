@@ -5,6 +5,7 @@ import { LayoutDashboard } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
+  ApiError,
   api,
   type AgentDecision,
   type AgentPrecedent,
@@ -30,7 +31,8 @@ import {
 import { fmtTime, parseDateInput } from "../time";
 import { PendingFactRow, useCanDecide } from "./PendingFacts";
 import { ReviewOverview } from "./ReviewOverview";
-import { TokenAgentRow } from "./TokenAgentRow";
+import { TokenAgentRow, isOpenProposal } from "./TokenAgentRow";
+import { AgentProposalChip, MergeActor } from "./AgentProposal";
 import { S } from "../i18n";
 import { useKb, useKbId } from "../kb";
 import { toast } from "../toast";
@@ -194,6 +196,9 @@ function DuplicateCard({
             )}
           </Chip>
         )}
+        {/* 令牌 agent 的提议（0076）：它想合这一对，被闸门留下了。答在 Agent 一档；
+            在这张卡上直接点 Merge 是人自己的决定，提议随之过时 */}
+        {item.agent_proposal && <AgentProposalChip proposal={item.agent_proposal} />}
         {reasonCode !== "namesake" && (
           <span className="text-small text-ink-2">
             {S.review.similarity(Math.round(item.score * 100))}
@@ -499,14 +504,17 @@ function MergeRow({
           <span className="text-ink">{merge.target_name}</span>
         </div>
         <div className="text-small text-ink-2 truncate">
-          {merge.merged_by_name
-            ? S.review.mergedBy(merge.merged_by_name)
-            : S.review.mergedByAi}
+          {/* 令牌 agent 的合并写「主人 via 令牌名」，不写成主人自己合的（0076） */}
+          <MergeActor merge={merge} />
           {" · "}
           {localDate(merge.created_at)}
           {merge.reason ? ` · ${escalationText(merge.reason)}` : ""}
         </div>
       </div>
+      {/* 令牌想撤这次合并、等人答的提议：答在 Agent 一档 */}
+      {merge.agent_proposal && !merge.reverted_at && (
+        <AgentProposalChip proposal={merge.agent_proposal} />
+      )}
       {merge.reverted_at ? (
         <Status className="shrink-0">{S.review.reverted}</Status>
       ) : (
@@ -1396,6 +1404,9 @@ export function Review() {
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
   const [batchWhy, setBatchWhy] = useState("");
   useEffect(() => setPicked(new Set()), [page, sel, types]);
+  // Agent 一档里勾着的提议（0076）：同样按页清
+  const [pickedProposals, setPickedProposals] = useState<Set<string>>(() => new Set());
+  useEffect(() => setPickedProposals(new Set()), [page, sel]);
 
   // 队列变化经 SSE 事件流推送（useKbEvents 挂在 Shell），无需轮询。
   //
@@ -1468,6 +1479,38 @@ export function Review() {
     }) => api.agentAnswer(kb!.id, id, action, rationale),
     onError: (e) => toast.error((e as Error).message),
     onSettled: invalidate,
+  });
+  // 答令牌 agent 的一条提议（0076）：批准跑的是人自己的合并或撤回，记在这个人名下。
+  // 回来之后整档重取——那一行带着它的新状态回来，按钮随之消失
+  const proposalAnswer = useMutation({
+    mutationFn: ({ id, action }: { id: string; action: "approve" | "decline" }) =>
+      api.answerAgentProposal(kb!.id, id, action),
+    onSuccess: (r) => {
+      // 目标已经裁过了：什么都没做，这一行会显示「已过时」
+      if (r.state === "superseded") toast.error(S.review.tokenAnswerSuperseded);
+    },
+    onError: (e) =>
+      toast.error(
+        e instanceof ApiError && e.code === "already_decided"
+          ? S.review.tokenAlreadyAnswered
+          : (e as Error).message,
+      ),
+    onSettled: invalidate,
+  });
+  // 一次答多条：一个请求，回来逐条一个结果
+  const proposalAnswers = useMutation({
+    mutationFn: ({ ids, action }: { ids: string[]; action: "approve" | "decline" }) =>
+      api.answerAgentProposals(kb!.id, ids, action),
+    onSuccess: (r) => {
+      const failed = r.outcomes.length - r.answered;
+      if (failed > 0) toast.error(S.review.tokenAnswered(r.answered, failed));
+      else toast.success(S.review.tokenAnswered(r.answered, 0));
+    },
+    onError: (e) => toast.error((e as Error).message),
+    onSettled: () => {
+      setPickedProposals(new Set());
+      invalidate();
+    },
   });
   // 批量裁决：一批一个动作，回来逐条说成没成；没成的留在列表里，成了的消失
   const batch = useMutation({
@@ -1675,6 +1718,9 @@ export function Review() {
   const asMerges = () => rows as MergeLog[];
   // 这一档是两种行：治理 agent 的一笔，和令牌 agent 台账的行（0076），靠 source 分
   const asAgent = () => rows as AgentQueueRow[];
+  // 这一页上还开着的令牌提议：能勾、能答的就是它们
+  const openProposals = () =>
+    asAgent().flatMap((d) => (d.source === "token" && isOpenProposal(d) ? [d] : []));
   // agent 正在裁的一对（0025）：任务在跑、这一对标着 adjudicating。批量选页时跳过它们
   const lockedByAgent = (item: ReviewItem) =>
     !!c?.agent_running && item.stage === "adjudicating";
@@ -2269,9 +2315,89 @@ export function Review() {
                   </div>
                 ) : (
                   <div className="space-y-2">
+                    {/* 令牌提议的批量回答（0076）：勾这一页上开着的，一个请求答完。
+                        只有答得了的人（Editor 以上）、并且这一页上有开着的提议时才出现 */}
+                    {canDecidePending && openProposals().length > 0 && (
+                      <div className="flex flex-wrap items-center gap-3">
+                        <Checkbox
+                          className="ml-auto"
+                          checked={openProposals().every((d) => pickedProposals.has(d.id))}
+                          disabled={proposalAnswers.isPending}
+                          onChange={(v) =>
+                            setPickedProposals(
+                              v ? new Set(openProposals().map((d) => d.id)) : new Set(),
+                            )
+                          }
+                          label={S.review.tokenSelectOpen}
+                        />
+                        {pickedProposals.size > 0 && (
+                          <>
+                            <span className="u-num text-small text-ink-2">
+                              {S.review.tokenProposalsSelected(pickedProposals.size)}
+                            </span>
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              disabled={proposalAnswers.isPending}
+                              onClick={() =>
+                                proposalAnswers.mutate({
+                                  ids: [...pickedProposals],
+                                  action: "decline",
+                                })
+                              }
+                            >
+                              {S.review.tokenDeclineSelected}
+                            </Button>
+                            <Button
+                              variant="primary"
+                              size="sm"
+                              disabled={proposalAnswers.isPending}
+                              onClick={() =>
+                                proposalAnswers.mutate({
+                                  ids: [...pickedProposals],
+                                  action: "approve",
+                                })
+                              }
+                            >
+                              {S.review.tokenApproveSelected}
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                    )}
                     {asAgent().map((d) =>
                       d.source === "token" ? (
-                        <TokenAgentRow key={d.id} a={d} />
+                        <TokenAgentRow
+                          key={d.id}
+                          a={d}
+                          busy={
+                            (proposalAnswer.isPending &&
+                              proposalAnswer.variables?.id === d.id) ||
+                            (proposalAnswers.isPending && pickedProposals.has(d.id))
+                          }
+                          picked={pickedProposals.has(d.id)}
+                          onPick={
+                            canDecidePending
+                              ? (on) =>
+                                  setPickedProposals((prev) => {
+                                    const next = new Set(prev);
+                                    if (on) next.add(d.id);
+                                    else next.delete(d.id);
+                                    return next;
+                                  })
+                              : undefined
+                          }
+                          onApprove={
+                            canDecidePending
+                              ? () => proposalAnswer.mutate({ id: d.id, action: "approve" })
+                              : undefined
+                          }
+                          onDecline={
+                            canDecidePending
+                              ? () => proposalAnswer.mutate({ id: d.id, action: "decline" })
+                              : undefined
+                          }
+                        />
                       ) : (
                         <AgentRow
                           key={d.id}

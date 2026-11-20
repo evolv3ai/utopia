@@ -1823,9 +1823,15 @@ pub(crate) async fn assemble_reviews(
             )
         })
         .collect();
+    // 令牌 agent 在这一页上开着的提议（0076）：同样一趟查完。没有提议的卡片不多一个键
+    let pairs: Vec<(Uuid, Uuid, Uuid)> =
+        rows.iter().map(|r| (r.id, r.left_id, r.right_id)).collect();
+    let mut agent_proposals =
+        crate::token_agent_actions::open_proposals_on_pairs(pool, kb_id, &pairs).await?;
     let mut items = Vec::with_capacity(rows.len());
     for r in rows {
         let proposal = proposals.get(&r.id).cloned();
+        let agent_proposal = agent_proposals.remove(&r.id);
         items.push(ReviewItem {
             id: r.id,
             score: r.score,
@@ -1835,6 +1841,7 @@ pub(crate) async fn assemble_reviews(
             left: sides.get(&r.left_id).cloned().ok_or(AppError::NotFound)?,
             right: sides.get(&r.right_id).cloned().ok_or(AppError::NotFound)?,
             proposal,
+            agent_proposal,
         });
     }
     Ok(items)
@@ -2782,7 +2789,7 @@ pub async fn list_merges(
     limit: i64,
     offset: i64,
 ) -> AppResult<Vec<MergeLogView>> {
-    let rows: Vec<MergeLogView> = sqlx::query_as(
+    let mut rows: Vec<MergeLogView> = sqlx::query_as(
         "SELECT m.id, s.canonical_name AS source_name, t.canonical_name AS target_name,
                 u.display_name AS merged_by_name, m.reason, m.created_at, m.reverted_at
          FROM entity_merges m
@@ -2797,6 +2804,16 @@ pub async fn list_merges(
     .bind(offset)
     .fetch_all(pool)
     .await?;
+    // 令牌 agent 的那两样（0076），从台账读：哪些合并是令牌做的，哪些合并上有一条等人答的
+    // 撤回提议。别的行两个键都不出，与从前一个字节不差
+    let ids: Vec<Uuid> = rows.iter().map(|m| m.id).collect();
+    let mut agents = crate::token_agent_actions::merge_agents(pool, kb_id, &ids).await?;
+    let mut proposals =
+        crate::token_agent_actions::open_revert_proposals(pool, kb_id, &ids).await?;
+    for m in &mut rows {
+        m.agent = agents.remove(&m.id);
+        m.agent_proposal = proposals.remove(&m.id);
+    }
     Ok(rows)
 }
 

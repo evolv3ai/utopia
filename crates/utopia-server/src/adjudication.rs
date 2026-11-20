@@ -621,6 +621,7 @@ mod tests {
             left: side("张伟"),
             right: side("财务部总监张伟"),
             proposal: None,
+            agent_proposal: None,
         }
     }
 
