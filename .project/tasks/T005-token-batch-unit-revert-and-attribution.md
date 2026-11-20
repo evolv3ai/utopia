@@ -17,6 +17,7 @@ files:
   - crates/utopia-store/src/audit.rs
   - crates/utopia-core/src/models.rs
   - crates/utopia-server/src/api/review_token_batch_tests.rs
+  - crates/utopia-server/src/api/review_token_revert_tests.rs
   - crates/utopia-server/src/api/review_token_api_tests.rs
   - crates/utopia-server/src/api/review_token_reads_tests.rs
   - crates/utopia-server/src/api/review_mcp_reads_tests.rs
@@ -47,6 +48,7 @@ The spec's case is a base where one name is eight entities: the agent needs to c
 - N9 (judgment prohibition, SC8). Must not: give a batch member anything the single-item token path would refuse or hold. Detail: the reviewer checks that each member runs through the single-item token path, so gate, limit and breaker apply per member. Here: `review_ops::batch` contains no merge, keep or gate logic of its own; it only calls `review_ops::merge_pair` and `review_ops::keep`.
 - N11 is a criterion prohibition of SC10: a token-agent action is never shown as the person's own decision or as a governor row.
 - Conventions (bind this task): Chinese explanatory comments; sentence-named tests; English user-facing strings, each refusal with a stable code; one behaviour-sentence commit subject; DCO sign-off is deferred to the upstream submission; nothing is sent to `deeplethe/utopia` or a deployed instance. Tests seed through store functions or direct inserts, never through model jobs.
+- File-scope repair (Delegated, driver D120): `crates/utopia-server/src/api/review_token_revert_tests.rs` is in `files` for one purpose only. Its test `review_revert_is_listed_only_to_a_write_token_of_an_editor_and_says_what_a_revert_does_not_recall` pins the `review_revert` input schema as `required: ["merge_id"]` with exactly the properties `merge_id` and `rationale` (lines 1118 to 1123 at `f17d3ca`); this task adds `batch_id` and makes "exactly one of `merge_id` and `batch_id`" the rule, so only that schema assertion changes to the new shape. The test keeps its name (T003's Verify names it) and every other assertion in the file is unchanged.
 
 ## Interface contract
 
@@ -87,3 +89,126 @@ Heavy: yes
 
 - 2026-11-19 — created by planner
 - 2026-11-19 — orchestrator: the Verify filter `review_attribution_tests::` matched no test (the file is mounted as `api::review_routes::attribution_tests`, `crates/utopia-server/src/api/review_routes.rs:26`); replaced with `review_routes::attribution_tests::` (wave 3 review, deviation 1).
+- 2026-11-19 — coder build_T005: ready. Preflight clean (paths, SC8 and SC10 in INTENT, Interface bullet verbatim in T006 and T007; no full `AuditEventView` literal and no exact tool list outside `files`).
+  - Server: `review_routes::batch` takes `SessionOrToken`; a token leaves for `review_ops::batch` (authorize once, 422 `batch_size` outside 1 to `TOKEN_BATCH_MAX` 50, the session batch's own 422 "action must be merge or keep" for another action, one `Uuid::now_v7` batch id, each id through `review_ops::merge_pair` or `review_ops::keep`, seven keys per outcome plus `follow_up_error` only when the single path reports one); the session statements are unchanged in order. New handler `review_routes::agent_batch_revert` at `POST /kbs/{id}/review/agent-batches/{batch_id}/revert` (route in `api/mod.rs`): token through `review_ops::revert_batch` (each merge through `review_ops::revert_merge` with the batch id), signed-in Editor through `revert_as_person` (the statements of the session revert per merge; its audit detail carries `agent_batch`, no `token_id`). `review_ops::keep` gained `batch_id`. Per-item `code` and `error` come from the REST rendering (`review_ops::refused`, now also used by `review_tools::refusal`), so a later error variant such as T006's 429 needs no change here.
+  - Store: `keep_duplicate_pair` keeps its signature and delegates to the new `keep_duplicate_pair_in_batch` (external store tests call the old one); new `batch_merges` (None when no ledger row of the base carries the id, so a keep-only batch answers 200 with no outcomes) and `merge_already_reverted`. `AuditEventView.batch_id` is read from `detail->>'batch_id'` in `audit::list_for_kb` only and serialized when present.
+  - MCP: `review_batch` added to `serves`, `definitions`, `annotations`, the write filter and `call`; `review_revert` has no `required` list and `call` enforces exactly one of `merge_id` and `batch_id`. `ids` has no `minItems`/`maxItems` so 0 and 51 ids are refused by the operation with `batch_size`.
+  - Web: `batchLabel` (last eight hex digits) on `TokenAgentRow` and the Activity row; `tokenOperations` gained `agent.proposal`, `agent.proposal.declined`, `agent.proposal.superseded` in `en.ts` and `zh.ts`, plus `tokenBatch`; `activityTokenLabel` also labels a person's declined or superseded event, which Activity showed raw. `AuditEvent.batch_id` in `api.ts`. No Review tab button and no API client function for the unit revert.
+  - Existing tests changed, names kept: `a_token_refused_on_merge_manual_merge_revert_or_batch_leaves_the_graph_equal` (batch 401 replaced by `token_read_only`, `token_owner_below_editor`, 422 `batch_size` for 51 ids); `a_token_cannot_nod_and_every_review_write_outside_the_ruled_table_answers_401` (only the `/review/batch` entry removed); `the_mcp_endpoint_offers_exactly_the_review_tools_the_ruled_table_opens` (`review_batch` added to the list and to the write-tool check); `review_revert_is_listed_only_to_a_write_token_of_an_editor_and_says_what_a_revert_does_not_recall` (schema assertion only). New: the six tests of `review_token_batch_tests.rs`; web tests in `TokenAgentRow.test.ts` (`OPERATIONS` extended, batch label, `activityTokenLabel`) and `KbActivity.test.ts` (every token action in words, batch label, a person's answer to a proposal).
+  - Reviewer observations: schema relaxed and enforced in `call` (done); no new operation, reason, outcome or state code is written by the ledger, the three audit actions above got labels and list entries (done); MCP refusals carry the REST code, and the unknown-action refusal has none on REST either, so its tool error has only `message`; two unit reverts at once: a process-wide mutex (`review_ops::unit_revert_turn`) queues unit reverts of both callers, so the second sees `already_decided` per merge. It does not cover two server processes or a single-merge revert racing a unit revert; that stands, as `resolution::revert_merge` is unchanged.
+  - Noted, not changed: the MCP endpoint writes one `mcp.tool_called` audit row per tool call, refused ones included (`mcp.rs`, outside `files`); the "refused batch writes nothing" test excludes that action. A person's `review.keep` and similar rows still show the raw action in Activity as before (pinned by the existing test `leaves events without a token name exactly as they were`).
+  - Verify (full command, database `m003_t005`): exit 0; 9 of 9 named tests ok; module run 36 passed, 0 failed; web 56 files, 388 tests passed; `pnpm build` ok. Whole `utopia-server` on fresh `m003_t005_server`: 909 passed, 0 failed, 2 ignored. Whole `utopia-store` on fresh `m003_t005_store`: 527 passed, 0 failed, 4 ignored. T002, T003 and T004 modules (`review_token_merge_tests`, `review_token_revert_tests`, `review_proposal_answer_tests`, `review_mcp_tests`) pass. `cargo fmt --all --check` clean; `cargo clippy` on core, store and server with all targets: 0 warnings.
+  - Guard: one inline script was refused by the shell wrapper (quoting); the edits were made with the edit tool instead. An earlier inline script edited `token_agent_actions.rs`, `audit.rs` and `models.rs` before that; its result was reviewed in the diff.
+- 2026-11-20 — orchestrator Verify (sidecar gsd-path-verify/task-t005-verify): pass, exit 0; output tail:
+  ```
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:2700) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:39404) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:39040) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:38972) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:37172) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:34424) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:6644) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  [33m
+  (!) Some chunks are larger than 500 kB after minification. Consider:
+  - Using dynamic import() to code-split the application
+  - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+  - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+  ```
+- 2026-11-20 — orchestrator regression Verify of T001 (sidecar gsd-path-verify/task-t005-verify): pass, exit 0; output tail:
+  ```
+  test a_token_keep_writes_the_review_row_the_ledger_row_and_the_audit_row_together ... ok
+  test a_second_keep_of_a_decided_pair_answers_already_decided ... ok
+  test a_token_keep_with_no_token_to_name_changes_nothing ... ok
+  
+  test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.54s
+  
+     Compiling utopia-store v0.1.0 (C:\Users\Owner\.gsd-path\projects\bb0ebb333ad529af\e1cb4cacbe546d13\verify\task-t005-verify\crates\utopia-store)
+      Finished `test` profile [unoptimized + debuginfo] target(s) in 18.77s
+       Running tests\store\main.rs (C:/Users/Owner/.gsd-path/cargo-target/finish-m003-T005\debug\deps\store-97773e81a9073f97.exe)
+  
+  running 6 tests
+  test a_name_is_a_fact::merging_moves_names_and_reverting_brings_them_back ... ok
+  test merge_direction_counts_live_facts_in_each_base::merge_direction_counts_live_facts_in_each_base ... ok
+  test a_timeline_holds_whatever_the_order::a_revert_restores_both_timelines_a_merge_rewrote ... ok
+  test an_automatic_merge_is_gated_by_what_it_can_undo::a_merge_that_would_leave_the_graph_is_held ... ok
+  test history_shows_the_merge_itself::history_carries_the_merge_and_its_direction ... ok
+  test a_signature_holds_on_every_path::a_merge_that_breaks_the_signature_is_recorded ... ok
+  
+  test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 355 filtered out; finished in 0.91s
+  ```
+- 2026-11-20 — orchestrator regression Verify of T002 (sidecar gsd-path-verify/task-t005-verify): pass, exit 0; output tail:
+  ```
+  test api::review_mcp_tests::a_refused_keep_carries_the_same_code_over_the_api_and_over_mcp ... ok
+  test api::review_token_api_tests::an_empty_duplicates_section_reads_the_same_for_a_token_and_a_session ... ok
+  test api::review_mcp_reads_tests::review_item_defaults_to_duplicates_and_finds_a_kind_word_by_its_exact_word_and_an_agent_row_by_its_row_id ... ok
+  test api::review_token_api_tests::a_keep_over_the_api_is_refused_with_its_code ... ok
+  test api::review_token_api_tests::a_token_keep_over_the_api_starts_no_govern_round ... ok
+  test api::review_token_api_tests::a_write_token_of_an_editor_keeps_a_pair_over_the_api ... ok
+  test api::review_mcp_reads_tests::review_item_refuses_mappings_and_an_unknown_section_with_unknown_queue ... ok
+  test api::review_token_api_tests::a_token_whose_kb_ids_exclude_the_base_gets_404_on_review_reads ... ok
+  test api::review_mcp_tests::two_keeps_of_one_pair_at_once_apply_exactly_one ... ok
+  test api::review_session_unchanged_tests::a_session_editor_gets_todays_duplicates_overview_keep_merge_and_batch_responses ... ok
+  test api::review_token_api_tests::a_token_refused_on_merge_manual_merge_revert_or_batch_leaves_the_graph_equal ... ok
+  test api::review_token_api_tests::a_read_token_of_a_viewer_lists_duplicates_and_overview_as_a_session_editor_sees_them ... ok
+  test api::review_token_api_tests::a_token_receives_duplicates_in_the_session_order ... ok
+  test api::review_mcp_reads_tests::review_list_returns_what_the_token_api_returns_for_each_of_the_thirteen_sections ... ok
+  test api::review_mcp_reads_tests::review_item_returns_the_listed_items_own_fields_for_one_item_of_each_section ... ok
+  test api::review_mcp_reads_tests::review_list_pages_decisions_by_page_and_per_and_the_queue_sections_by_limit_and_offset ... ok
+  test api::review_mcp_reads_tests::review_item_answers_one_not_found_for_an_unknown_id_another_bases_id_and_an_item_no_longer_waiting ... ok
+  
+  test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 881 filtered out; finished in 5.92s
+  ```
+- 2026-11-20 — orchestrator regression Verify of T003 (sidecar gsd-path-verify/task-t005-verify): pass, exit 0; output tail:
+  ```
+  test api::review_token_reads_tests::a_token_asking_for_mappings_or_an_unknown_section_is_refused_with_unknown_queue ... ok
+  test api::review_token_reads_tests::a_token_cannot_nod_and_every_review_write_outside_the_ruled_table_answers_401 ... ok
+  test api::review_token_api_tests::a_token_receives_duplicates_in_the_session_order ... ok
+  test api::review_token_reads_tests::agent_history_read_by_a_token_names_the_owner_and_the_token_of_a_keep_beside_governor_rows ... ok
+  test api::review_token_reads_tests::a_token_paging_alignment_with_equal_timestamps_visits_each_waiting_item_exactly_once ... ok
+  test api::review_mcp_reads_tests::review_item_refuses_mappings_and_an_unknown_section_with_unknown_queue ... ok
+  test api::review_token_reads_tests::a_read_token_of_a_viewer_lists_each_of_the_thirteen_sections_as_a_session_editor_sees_them ... ok
+  test api::review_token_reads_tests::an_empty_section_reads_as_an_empty_list_with_total_0_for_a_token_as_for_a_session ... ok
+  test api::review_token_reads_tests::agent_history_without_a_token_action_reads_governor_rows_only_and_a_ledger_row_keeps_its_stored_token_name ... ok
+  test api::review_token_reads_tests::a_token_receives_each_sections_items_in_the_session_order ... ok
+  test api::review_mcp_reads_tests::review_list_returns_what_the_token_api_returns_for_each_of_the_thirteen_sections ... ok
+  test api::review_mcp_reads_tests::review_item_returns_the_listed_items_own_fields_for_one_item_of_each_section ... ok
+  test api::review_token_reads_tests::a_tokens_total_counts_the_listed_rows_and_counts_keep_their_values ... ok
+  test api::review_mcp_reads_tests::review_list_pages_decisions_by_page_and_per_and_the_queue_sections_by_limit_and_offset ... ok
+  test api::review_token_reads_tests::a_token_whose_kb_ids_exclude_the_base_gets_404_on_every_review_read ... ok
+  test api::review_mcp_reads_tests::review_item_answers_one_not_found_for_an_unknown_id_another_bases_id_and_an_item_no_longer_waiting ... ok
+  test api::review_token_reads_tests::a_token_page_size_is_clamped_and_an_offset_at_or_past_the_total_returns_no_items ... ok
+  
+  test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 880 filtered out; finished in 16.12s
+  ```
+- 2026-11-20 — orchestrator regression Verify of T004 (sidecar gsd-path-verify/task-t005-verify): pass, exit 0; output tail:
+  ```
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:17876) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:792) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:6640) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:34828) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:10636) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:38744) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:30956) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  [33m
+  (!) Some chunks are larger than 500 kB after minification. Consider:
+  - Using dynamic import() to code-split the application
+  - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+  - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+  ```
+- 2026-11-19 — orchestrator: landing refused (the landing allow-list is read from the committed brief, and the file-scope repair D120 was made after activation). The repaired brief is checkpointed here with the task returned to pending; the coder work is held in a Git stash and restored on re-activation, then landed without a new coder run.
