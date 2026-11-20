@@ -115,8 +115,35 @@ it("uses the removed-user wording before via when the owner's name is gone", () 
 // 令牌成批调用的一笔（0076）：另带服务端发的那一批的号
 const batchId = "019a0000-0000-7000-8000-0000a1b2c3d4";
 
-/** 这一刀让令牌写进 Activity 的每一种事件：落地的四种动作，和留成提议的那一种 */
-const TOKEN_ACTIONS = ["review.keep", "review.merge", "merge.manual", "merge.revert", "agent.proposal"];
+/** 令牌写进 Activity 的每一种事件：落地的四种动作、留成提议的那一种，以及 Review 其余
+ *  各档直接落地的操作留下的四种审计动作（0076） */
+const TOKEN_ACTIONS = [
+  "review.keep",
+  "review.merge",
+  "merge.manual",
+  "merge.revert",
+  "agent.proposal",
+  "mapping.decided",
+  "consistency.checked",
+  "inference.materialized",
+  "alignment.kind_word_decided",
+];
+
+/** 只能提议的十二种操作：每一种的提议在 Activity 里都是一行 `agent.proposal` */
+const PROPOSE_ONLY = [
+  "fact.confirm",
+  "fact.reject",
+  "fact.close",
+  "conflict.resolve",
+  "violation.decide",
+  "defect.decide",
+  "errata.decide",
+  "alignment.phrase",
+  "alignment.rule",
+  "ontology.proposal",
+  "pending.nod",
+  "governor.answer",
+];
 
 it("shows every token action as owner via token name in words, never as a raw code", () => {
   for (const action of TOKEN_ACTIONS) {
@@ -129,6 +156,50 @@ it("shows every token action as owner via token name in words, never as a raw co
     expect(rows).not.toContain(S.kbset.adjudicator);
     expect(rows).not.toContain(S.kbset.engine);
   }
+});
+
+it("shows a proposal of every operation as owner via the token name stored with the action", () => {
+  for (const operation of PROPOSE_ONLY) {
+    const proposal: AuditEvent = {
+      ...tokenKeep,
+      action: "agent.proposal",
+      target_kind: "agent_action",
+      // 审计行里存的是动作那一刻的令牌名：令牌后来改了名字，这一行不变
+      detail: {
+        operation,
+        outcome: "proposed",
+        reason: "propose_only",
+        token_id: tokenKeep.token_id,
+        token_name: "graph-curator",
+        action_id: "019a0000-0000-7000-8000-000000000041",
+      },
+    };
+    const rows = rowsOf(renderEvents([proposal]));
+    expect(rows, operation).toContain("Mira Okafor via graph-curator");
+    expect(rows, operation).toContain(S.review.tokenOperations["agent.proposal"]);
+    // 哪一个 code 都不原样写出来
+    expect(rows, operation).not.toContain("agent.proposal");
+    expect(rows, operation).not.toContain(operation);
+    expect(rows, operation).not.toContain("propose_only");
+  }
+});
+
+it("shows a person's rejection of an ontology proposal, made by approving an agent's proposal, in words", () => {
+  const rejected: AuditEvent = {
+    ...tokenKeep,
+    action: "ontology_proposal.rejected",
+    target_kind: "ontology_proposal",
+    detail: { section: "entity_types", agent_proposal: "019a0000-0000-7000-8000-000000000041" },
+  };
+  delete rejected.token_id;
+  delete rejected.token_name;
+  delete rejected.declared_client;
+  const rows = rowsOf(renderEvents([rejected]));
+  expect(rows).toContain("Mira Okafor");
+  // 批准之后做决定的是这个人：不写成令牌做的
+  expect(rows).not.toContain(" via ");
+  expect(rows).toContain(S.review.tokenOperations["ontology_proposal.rejected"]);
+  expect(rows).not.toContain("ontology_proposal.rejected");
 });
 
 it("shows the batch label on a batch member and none on a single call", () => {

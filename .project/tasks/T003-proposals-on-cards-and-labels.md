@@ -3,9 +3,9 @@ id: T003
 title: Show every open token proposal on its item's card and name every operation in words
 wave: 1
 deps: [T002]
-status: pending
-agent: null
-base: null
+status: done
+agent: build_T003
+base: 858df56f5c21285e58513389767b9e52e4735bcd
 worktree: null
 task_branch: null
 files:
@@ -78,3 +78,60 @@ Heavy: yes
 ## Log
 
 - 2026-11-20 — created by planner
+- 2026-11-20 — coder build_T003: preflight clean (every path named in Context, Approach and the Interface contract exists at base `858df56` or is declared in `files`; SC2 and SC7 exist in INTENT.md; the two T003 contract paragraphs are present in the sibling task files that exchange with them; every Verify path exists or is declared; T001 and T002 signatures used as landed).
+- 2026-11-20 — coder build_T003: implemented.
+  - `crates/utopia-server/src/api/review_ops.rs`: `attach_agent_proposals` (the contract signature; reads each item's `id`, sets `agent_proposals` only on an item with an open proposal), a private `attach_to_some`, and `attach_section_proposals` (which section maps to which target kind: `pending` → `pending_fact`, `conflicts` → `conflict`, `unconfirmed` and `lowconf` → `fact`, `violations` → `axiom_violation`, `defects` → `ontology_defect`, `errata` → `errata_action`, Alignment phrase items → `phrase_binding` and rule items → `implication_rule`, governor rows of Agent History → `agent_decision`).
+  - `crates/utopia-server/src/api/review_routes.rs`: `queue_page` calls `attach_section_proposals` on its items. No item struct gained a field.
+  - `crates/utopia-server/src/api/mod.rs`: `#[cfg(test)] mod review_item_proposals_tests;`.
+  - New `crates/utopia-server/src/api/review_item_proposals_tests.rs`: the three tests the Verify names. Proposals are seeded with the store function `propose` (and `record_applied` for the four finalized operations), never through a model job.
+  - `web/src/api.ts`: optional `action` on `AgentProposal`; optional `agent_proposals` on `PendingFactItem`, `ConflictItem`, `FactReviewItem`, `AxiomViolation`, `OntologyDefect`, `ErrataItem`, the phrase and rule variants of `AlignmentItem`, and `AgentDecision`; optional `target_label`, `action`, `queued` on `TokenAgentAction`; optional `agent_token_proposals` on `ReviewCounts`.
+  - `web/src/pages/AgentProposal.tsx`: `AgentProposalChips` (renders nothing without a proposal); `AgentProposalChip` adds the action's label when the proposal has one and is unchanged for a merge or revert proposal.
+  - `web/src/pages/Review.tsx`: chips on `FactRow`, `ConflictRow`, `UnconfirmedRow`, `AgentRow`, `ErrataRow`, `AlignmentRuleRow`, `AlignmentPhraseRow`, `DefectRow`, `ViolationRow`, `ContradictionRow`; exported `agentRailCount` (the Agent rail badge is `counts.agent` plus `counts.agent_token_proposals`). `web/src/pages/PendingFacts.tsx`: chips on `PendingFactRow`; the line naming who remembered the sentence is untouched; `NodCard` is untouched.
+  - `web/src/pages/TokenAgentRow.tsx`: a row with `target_label` prints it; a row with neither `left` nor `right` prints no target and no placeholder; the action's label follows the operation's label; an approved row with `queued` reads `tokenQueued`; `tokenActionLabel`; `activityTokenLabel` also labels `ontology_proposal.rejected` on a person's row.
+  - `web/src/i18n/en.ts` and `zh.ts`: `tokenOperations` (sixteen ledger operations and the five token audit actions), `tokenProposes` (twelve propose-only operations), `tokenReasons.propose_only`, new `tokenActions` (thirty operation and action pairs), `tokenQueued`, and one helper `tokenWithAction`.
+  - Tests: `web/src/pages/AgentProposal.test.ts`, `TokenAgentRow.test.ts` (closed lists `OPERATIONS`, `PROPOSABLE`, `REASONS` extended; `STATES` and `OUTCOMES` gained no entry because this milestone writes no new state or outcome code), `KbActivity.test.ts`.
+  - `web/src/pages/KbSettings.tsx` is in `files` and was not changed: the Activity lookup at lines 668 to 671 already reads `activityTokenLabel`, so the new labels reach Activity through the i18n table and `TokenAgentRow.tsx`.
+  - No migration, no dependency, no `AgentOperation` or `AppError` variant, no item struct field; `CURRENT_SCHEMA_VERSION` untouched.
+- 2026-11-20 — coder build_T003: readings taken where the contract leaves a detail open (none changes a contract shape).
+  1. The brief says to call `attach_agent_proposals` "from the session list, the token list and the item read". All three (and MCP `review_list` / `review_item`) read `queue_page`, so there is one call site, in `queue_page`; the test checks the key through each of the four readers.
+  2. The brief and AC4 say "fifteen new operation strings"; the interface contract lists sixteen (`fact.confirm`, `fact.reject`, `fact.close`, `conflict.resolve`, `violation.decide`, `defect.decide`, `errata.decide`, `alignment.phrase`, `alignment.rule`, `pending.nod`, `governor.answer`, `mapping.decide`, `ontology.proposal`, `alignment.kind_word`, `consistency.check`, `inference.run`). All sixteen are labelled and tested.
+  3. In `tokenOperations` a propose-only operation is worded as a proposal ("proposed confirming a fact"), not as a completed act, so no fallback path can read as the token having done it. `tokenProposes` words the same twelve as "wants a ... decided".
+  4. The chip and the Agent History row join the operation's label and the action's label with a new i18n helper `tokenWithAction` (not named in the contract).
+  5. `ontology_proposal.rejected` is written only when a person approves a token's proposal (T006), so its Activity row has no token name; `activityTokenLabel` labels it for a person's row. A person's own `mapping.decided`, `consistency.checked`, `inference.materialized` and `alignment.kind_word_decided` rows get no new label (scope out) and read as before.
+  6. An Activity `agent.proposal` row keeps today's label for every operation ("proposed a change that waits for a person"); it does not name the operation.
+  7. The nine card components and `AgentRow` are now exported from `Review.tsx` so the static-render test can reach them.
+  8. A pair row that has one side only still prints `?` for the missing side, as before; only a row with neither side prints nothing.
+  9. The per-section key lists "at `d5d2356`" in the Rust test were read from the running lists at this base; `git diff d5d2356 --stat` over the list stores (`pending.rs`, `temporal.rs`, `graph.rs`, `reasoning.rs`, `errata.rs`, `alignment_queue.rs`, `governance.rs`) shows no change since that commit.
+- 2026-11-20 — coder build_T003: commands, primary worktree, `CARGO_TARGET_DIR=C:/Users/Owner/.gsd-path/cargo-target/coder-m004`, own database `m004_t003_dev` (created and migrated, "数据库迁移完成"), `UTOPIA_TEST_REQUIRE_DB=1`:
+  - `cargo test -p utopia-server -- review_item_proposals_tests::` → first run 2 passed, 1 failed (my hardcoded key list for a pending item lacked `quote_start`, `quote_end`, `valid_from_precision`, `valid_to_precision`; corrected in the test); final run `ok. 3 passed; 0 failed`.
+  - The three tests the Verify names, with the Verify's filters → its `grep -c` counts 3 `... ok`.
+  - The Verify's module-filter run (21 filters) → `test result: ok. 110 passed; 0 failed; 822 filtered out`. Each of the 21 filters matches at least one test in `cargo test -p utopia-server -- --list`; the three name filters match the mounted path `api::review_item_proposals_tests::`.
+  - `cargo test -p utopia-server` (whole crate) → `test result: ok. 930 passed; 0 failed; 2 ignored`. No test outside this task's files failed.
+  - `cargo fmt --all --check` → exit 0 (after one `cargo fmt --all`, which changed only the new test file).
+  - `cargo clippy --workspace --all-targets -- -D warnings` → exit 0.
+  - `cd web && pnpm install --frozen-lockfile` → done, lockfile unchanged; `pnpm test` → `Test Files 56 passed (56)`, `Tests 417 passed (417)`; `pnpm build` (style guard, `tsc --noEmit`, vite build) → exit 0, "style guard: 158 个文件合规".
+  - The full Verify command itself was not run (it names the orchestrator's database); each of its steps was run as above against the coder's database.
+- 2026-11-20 — coder build_T003: what is covered by static render only. Every web check renders a component to static markup and clicks nothing: the chips on each card, the nod card's two lines, the Agent History row for a non-pair target and for a queued approval, the labels in both languages, and the Activity rows. The rail badge is checked through the pure function `agentRailCount`, not through a rendered rail. Not exercised: the Review page fetching a live list and placing the chips, the layout of a card with chips in a browser, Approve and Decline clicks, and the Chinese locale rendered in a page (the Chinese tables are checked as data). The browser walkthrough is left to final review.
+- 2026-11-20 — orchestrator Verify (sidecar gsd-path-verify/task-t003-verify): pass, exit 0; output tail:
+  ```
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:24732) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:6760) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:18032) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:37056) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:6200) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:39516) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  (node:15324) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+  (Use `node --trace-warnings ...` to show where the warning was created)
+  [33m
+  (!) Some chunks are larger than 500 kB after minification. Consider:
+  - Using dynamic import() to code-split the application
+  - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+  - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+  ```

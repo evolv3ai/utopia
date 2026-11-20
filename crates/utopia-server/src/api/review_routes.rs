@@ -134,7 +134,7 @@ pub(super) async fn queue_page(
     let limit = limit.unwrap_or(REVIEW_PAGE).clamp(1, 200);
     let offset = offset.unwrap_or(0).max(0);
 
-    let (items, total) = match queue {
+    let (mut items, total) = match queue {
         // 记忆抽出、等人点头的事实（0015）。排第一：它是人自己说的话
         "pending" => (
             json!(utopia_store::pending::list(pool, kb_id, limit, offset).await?),
@@ -212,6 +212,9 @@ pub(super) async fn queue_page(
             ))
         }
     };
+    // 令牌 agent 开着的提议挂在它指着的那一条上（0076）：键只在有提议时出现，没有提议的
+    // 条目与从前逐字相等。会话、令牌、MCP 拿的都是这一页，所以只挂这一处
+    review_ops::attach_section_proposals(state, kb_id, queue, &mut items).await?;
 
     Ok(json!({
         "counts": counts,

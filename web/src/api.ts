@@ -616,6 +616,8 @@ export interface ReviewCounts {
   agent_running: boolean;
   /** 还没轮到 agent 看的对 */
   agent_queue: number;
+  /** 令牌 agent 开着、等人答的提议（0076）。**有才出现**：左栏 Agent 的徽标把它加在 `agent` 上 */
+  agent_token_proposals?: number;
 }
 
 /** 类型消解的一条建议：一个待精化的实体、送去检索的画像、以及候选类。
@@ -703,12 +705,15 @@ export interface ReviewItem {
  *  措辞在 i18n；`token_name` 是提议那一刻的名字，`owner_name` 为 null = 账号已移除 */
 export interface AgentProposal {
   id: string;
-  /** review.merge | merge.manual | merge.revert */
+  /** review.merge | merge.manual | merge.revert，以及 Review 其余各档的操作
+   *  （fact.confirm、conflict.resolve、defect.decide……） */
   operation: string;
   reason: string | null;
   owner_name: string | null;
   token_name: string;
   created_at: string;
+  /** 提议要做的那个动作（confirm、keep、fixed……）；合并与撤回的提议没有这个键 */
+  action?: string;
 }
 
 /** 一次合并是哪枚令牌做的（0076）。有它，合并历史写「主人 via 令牌名」 */
@@ -747,6 +752,8 @@ export interface AgentDecision {
   decided_by_name: string | null;
   left: string | null;
   right: string | null;
+  /** 令牌 agent 在这一条上开着的提议（0076），最早提的在前；没有就没有这个键 */
+  agent_proposals?: AgentProposal[];
 }
 
 /** 令牌 agent 台账的一行（0076）：某个人的一枚令牌对 Review 做的一个动作。
@@ -776,6 +783,12 @@ export interface TokenAgentAction {
    *  `held` / `proposed` 的行没有它 = 提议还开着 */
   state?: string;
   state_at?: string;
+  /** 目标不是一对的行（Review 其余各档）：用话说出的目标，提议那一刻存下的 */
+  target_label?: string;
+  /** 要做的那个动作（confirm、keep、fixed……），是 code，措辞在 i18n */
+  action?: string;
+  /** 批准了的短语 / 规则判定：投递任务排下了，改动还没有落到图上 */
+  queued?: boolean;
 }
 
 /** Agent 一档的一行：治理 agent 的一笔，或令牌 agent 台账的一行，靠 `source` 分 */
@@ -868,6 +881,8 @@ export interface AxiomViolation {
   /** 环上的每一条事实（按顺序），或互斥组里的每一条（按 id）；自环与签名为空。
    *  撤事实要指名撤哪条（#202） */
   path: { id: string; text: string }[];
+  /** 令牌 agent 在这一条上开着的提议（0076），最早提的在前；没有就没有这个键 */
+  agent_proposals?: AgentProposal[];
 }
 /** 本体自己的一处自相矛盾。**与 AxiomViolation 不是一回事**：那个说
  *  「事实与定义抵触」，这个说「定义自己站不住」，后者更根本 */
@@ -894,6 +909,8 @@ export type AlignmentItem =
        *  两票不一致的条目两个都是 null */
       bound_to: string | null;
       direction: "forward" | "reverse" | null;
+      /** 令牌 agent 在这一条上开着的提议（0076）；没有就没有这个键 */
+      agent_proposals?: AgentProposal[];
     }
   | {
       kind: "kind_word";
@@ -921,6 +938,8 @@ export type AlignmentItem =
       examples: string[];
       votes: { agent?: { property: string; reading: string | null } | null } | null;
       decided_at: string;
+      /** 令牌 agent 在这一条上开着的提议（0076）；没有就没有这个键 */
+      agent_proposals?: AgentProposal[];
     };
 /** 勘误 agent 被闸门拦下的一笔（0044 决定 7）：它想撤、改或加什么，凭哪句原话，为什么留给人 */
 export interface ErrataItem {
@@ -938,6 +957,8 @@ export interface ErrataItem {
   /** 闸门的理由：`derived 2` / `answered 1` / `contradiction CEO of`（0027 的写法） */
   detail: string | null;
   created_at: string;
+  /** 令牌 agent 在这一条上开着的提议（0076），最早提的在前；没有就没有这个键 */
+  agent_proposals?: AgentProposal[];
 }
 export interface AlignmentVote {
   property: string;
@@ -967,6 +988,8 @@ export interface OntologyDefect {
   path_labels: string[];
   detected_at: string;
   detail: DefectDetail;
+  /** 令牌 agent 在这一条上开着的提议（0076），最早提的在前；没有就没有这个键 */
+  agent_proposals?: AgentProposal[];
 }
 /** rules_disagree 独有：哪两条规则、撞在哪条公理上、几对、几个例子 */
 export interface DefectDetail {
@@ -991,6 +1014,8 @@ export interface FactReviewItem {
   confidence: number;
   evidence_count: number;
   quote: string | null;
+  /** 令牌 agent 在这一条上开着的提议（0076），最早提的在前；没有就没有这个键 */
+  agent_proposals?: AgentProposal[];
 }
 
 /** 一句记忆抽出、等人点头的事实（0015）。`quote` 是那句记忆的全文——
@@ -1022,6 +1047,8 @@ export interface PendingFactItem {
   /** 经 MCP 记进来时，那个 agent 的令牌名；网页端对话里为空 */
   proposed_token_name: string | null;
   created_at: string;
+  /** 令牌 agent 在这一条上开着的提议（0076），最早提的在前；没有就没有这个键 */
+  agent_proposals?: AgentProposal[];
 }
 
 /** 时态冲突（自动闭合拿不准的那些）：旧事实 vs 新事实。 */
@@ -1041,6 +1068,8 @@ export interface ConflictItem {
   new_valid_from: string | null;
   new_valid_from_precision: string | null;
   new_confidence: number;
+  /** 令牌 agent 在这一条上开着的提议（0076），最早提的在前；没有就没有这个键 */
+  agent_proposals?: AgentProposal[];
 }
 
 /** 决策台账事件（audit_events 的 review 域切片）：detail 是决策时的自包含快照。 */

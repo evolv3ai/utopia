@@ -763,3 +763,7 @@ mod review_token_alignment_tests;
 
 #[cfg(test)]
 mod review_token_mapping_tests;
+
+// 开着的提议挂在各档的条目上、左栏的数、Agent History 说出目标（0076）
+#[cfg(test)]
+mod review_item_proposals_tests;

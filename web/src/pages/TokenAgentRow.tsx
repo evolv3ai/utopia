@@ -23,6 +23,11 @@ export function tokenProposalLabel(operation: string): string {
   return S.review.tokenProposes[operation] ?? tokenOperationLabel(operation);
 }
 
+/** 一种操作要做的那个动作（0076）：键是「操作:动作」。不认得的原样写出来 */
+export function tokenActionLabel(operation: string, action: string): string {
+  return S.review.tokenActions[`${operation}:${action}`] ?? action;
+}
+
 /** 为什么没有直接落地。**认的是服务端的 code**，不是它那句英文说明 */
 export function tokenReasonLabel(reason: string): string {
   return S.review.tokenReasons[reason] ?? reason;
@@ -42,10 +47,14 @@ export function batchLabel(batchId: string): string {
 
 /** Activity 里一条事件的动作，在令牌这张表里有没有说法：令牌的行（带 `token_name`）都走
  *  这张表；人拒绝、或关掉一条过时提议的那两种事件是人的行，但动作是这一刀新写的，
- *  同样在这张表里。别的事件回 null，照旧走 Activity 自己的那张表 */
+ *  同样在这张表里。人批准令牌的提议、拒绝一条本体提案时写下的 `ontology_proposal.rejected`
+ *  也是：这个动作只有答提议时才写（人自己在本体页拒绝不留审计行）。
+ *  别的事件回 null，照旧走 Activity 自己的那张表 */
 export function activityTokenLabel(action: string, byToken: boolean): string | null {
   if (byToken) return tokenOperationLabel(action);
-  return action.startsWith("agent.proposal") ? tokenOperationLabel(action) : null;
+  return action.startsWith("agent.proposal") || action === "ontology_proposal.rejected"
+    ? tokenOperationLabel(action)
+    : null;
 }
 
 /** 调用方自己报的 User-Agent。它由调用方完全控制，所以每次展示都写明是「declared」 */
@@ -96,6 +105,16 @@ export function TokenAgentRow({
 }) {
   const proposal = a.outcome === "held" || a.outcome === "proposed";
   const open = isOpenProposal(a);
+  const what = proposal ? tokenProposalLabel(a.operation) : tokenOperationLabel(a.operation);
+  // 目标：不是一对的行（Review 其余各档）写服务端存下的那句话；一对的行照旧写两边的名字。
+  // 两边都没有的行什么都不写——不拿问号去占一个本来就没有的位置
+  const target = a.target_label
+    ? a.target_label
+    : a.left || a.right
+      ? `${a.left ?? "?"} ${DIRECTED.has(a.operation) ? "→" : "≟"} ${a.right ?? "?"}`
+      : null;
+  // 批准了的短语 / 规则判定只是排下了投递任务：写「排着」，不写成已经落到图上
+  const queued = a.state === "approved" && !!a.queued;
   return (
     <div className={cn("glass rounded-panel px-4 py-3", picked && "u-picked")}>
       <div className="flex items-center gap-3">
@@ -112,17 +131,19 @@ export function TokenAgentRow({
           {viaToken(a.owner_name, a.token_name)}
         </span>
         <span className="text-body text-ink-2 shrink-0">
-          {proposal ? tokenProposalLabel(a.operation) : tokenOperationLabel(a.operation)}
+          {a.action
+            ? S.review.tokenWithAction(what, tokenActionLabel(a.operation, a.action))
+            : what}
         </span>
-        <span className="text-body text-ink-2 truncate min-w-0">
-          {a.left ?? "?"} {DIRECTED.has(a.operation) ? "→" : "≟"} {a.right ?? "?"}
-        </span>
+        {target && <span className="text-body text-ink-2 truncate min-w-0">{target}</span>}
         <span className="ml-auto flex shrink-0 items-center gap-2">
           <Status tone={OUTCOME_TONE[a.outcome] ?? "neutral"}>
             {S.review.tokenOutcome[a.outcome] ?? a.outcome}
           </Status>
           {a.state && (
-            <Status tone={STATE_TONE[a.state] ?? "neutral"}>{tokenStateLabel(a.state)}</Status>
+            <Status tone={queued ? "warn" : (STATE_TONE[a.state] ?? "neutral")}>
+              {queued ? S.review.tokenQueued : tokenStateLabel(a.state)}
+            </Status>
           )}
         </span>
       </div>

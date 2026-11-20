@@ -662,6 +662,113 @@ pub(crate) async fn propose_defect(
     .await
 }
 
+// ───────────────────── 开着的提议挂在它指着的那一条上（0076） ─────────────────────
+
+/// 把开着的令牌提议挂到这些条目上：键是 `agent_proposals`，一列，最早提的在前；每一项是
+/// `{id, operation, reason, owner_name, token_name, created_at}`，提议有动作时再带 `action`。
+///
+/// - **只在有开着的提议时才出这个键**：没有提议的条目一个键也不多，与从前逐字相等
+/// - 挂在 JSON 上，不往哪个条目的结构体里加字段；认的是条目的 `id`，没有 `id`（或不是
+///   uuid）的条目原样不动
+/// - `target_kind` 是台账的目标种类（`fact`、`conflict`、`ontology_defect`……）：同一个 id
+///   只在它自己的种类里找
+///
+/// 重复项与合并历史不走这里：它们带的是 M003 的 `agent_proposal`（一条，不是一列），不动
+pub(crate) async fn attach_agent_proposals(
+    state: &AppState,
+    kb_id: Uuid,
+    target_kind: &str,
+    items: &mut [serde_json::Value],
+) -> Result<(), AppError> {
+    let id_of = |item: &serde_json::Value| item["id"].as_str().and_then(|s| s.parse::<Uuid>().ok());
+    let ids: Vec<Uuid> = items.iter().filter_map(id_of).collect();
+    let open = utopia_store::token_agent_actions::open_proposals_for(
+        &state.pool,
+        kb_id,
+        target_kind,
+        &ids,
+    )
+    .await?;
+    if open.is_empty() {
+        return Ok(());
+    }
+    for item in items.iter_mut() {
+        let Some(found) = id_of(item).and_then(|id| open.get(&id)) else {
+            continue;
+        };
+        if let Some(fields) = item.as_object_mut() {
+            fields.insert("agent_proposals".into(), json!(found));
+        }
+    }
+    Ok(())
+}
+
+/// 一页里只有一部分条目归这个目标种类时（对齐一档的短语与规则、Agent 一档的治理行）：
+/// 挑出来挂，再原位放回去，次序不变
+async fn attach_to_some(
+    state: &AppState,
+    kb_id: Uuid,
+    target_kind: &str,
+    items: &mut [serde_json::Value],
+    belongs: impl Fn(&serde_json::Value) -> bool,
+) -> Result<(), AppError> {
+    let at: Vec<usize> = (0..items.len()).filter(|&i| belongs(&items[i])).collect();
+    let mut picked: Vec<serde_json::Value> = at.iter().map(|&i| items[i].take()).collect();
+    let attached = attach_agent_proposals(state, kb_id, target_kind, &mut picked).await;
+    // 先放回去再报错：出错也不留下被掏空的条目
+    for (i, item) in at.into_iter().zip(picked) {
+        items[i] = item;
+    }
+    attached
+}
+
+/// 一档的一页上，哪些条目带开着的提议、按哪个目标种类找（0076）。**只写这一处**：会话的
+/// 列表、令牌的列表、MCP 的 `review_list` 与单条读（[`item`]）拿的都是 `queue_page` 的
+/// 那一页，`queue_page` 调的是这里，所以四个入口看到的是同一个键。
+///
+/// - 等你点头、矛盾、未确认、低置信、公理、本体缺陷、勘误：整页一个种类
+/// - 对齐：短语与规则各一个种类；**类别词不带**（它没有 `id`，决定直接落地）
+/// - Agent：治理 agent 的行（没有 `source` 键）带人对它的回答的提议；令牌台账的行不带——
+///   它自己就是提议
+/// - 重复项与合并历史带的是 M003 的 `agent_proposal`，在 store 里挂，这里不碰；`mappings`
+///   的决定直接落地，没有提议
+pub(crate) async fn attach_section_proposals(
+    state: &AppState,
+    kb_id: Uuid,
+    section: &str,
+    items: &mut serde_json::Value,
+) -> Result<(), AppError> {
+    let Some(items) = items.as_array_mut() else {
+        return Ok(());
+    };
+    let whole = match section {
+        "pending" => "pending_fact",
+        "conflicts" => "conflict",
+        "unconfirmed" | "lowconf" => "fact",
+        "violations" => "axiom_violation",
+        "defects" => "ontology_defect",
+        "errata" => "errata_action",
+        "alignment" => {
+            attach_to_some(state, kb_id, "phrase_binding", items, |item| {
+                item["kind"] == "phrase"
+            })
+            .await?;
+            return attach_to_some(state, kb_id, "implication_rule", items, |item| {
+                item["kind"] == "rule"
+            })
+            .await;
+        }
+        "agent" => {
+            return attach_to_some(state, kb_id, "agent_decision", items, |item| {
+                item.get("source").is_none()
+            })
+            .await;
+        }
+        _ => return Ok(()),
+    };
+    attach_agent_proposals(state, kb_id, whole, items).await
+}
+
 /// 一次拒绝在 REST 上的样子：code 与那一句话，**取自 `ApiErr` 渲染出来的响应本身**。
 /// 成批调用里每一条的 `code` / `error`、MCP 工具错误里的 `code` / `message` 都从这里来，
 /// 所以三处说的是同一个 code——不在这里另写一张错误对照表，那张表迟早先变（以后多一种
