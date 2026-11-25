@@ -439,6 +439,11 @@ pub fn router(state: AppState, cfg: &AppConfig) -> Router {
             get(graph_routes::neighborhood),
         )
         .route("/kbs/{id}/entities", get(graph_routes::search_entities))
+        // 成批清空类型（#9）：明确名单、默认试跑、核对当前类型
+        .route(
+            "/kbs/{id}/entities/clear-type",
+            post(graph_routes::clear_entity_types),
+        )
         .route(
             "/kbs/{id}/entities/{entity_id}",
             get(graph_routes::entity_detail).patch(graph_routes::update_entity),

@@ -16,6 +16,10 @@ use crate::state::AppState;
 #[path = "graph_routes_time_tests.rs"]
 mod time_tests;
 
+#[cfg(test)]
+#[path = "graph_routes_clear_type_tests.rs"]
+mod clear_type_tests;
+
 pub(super) async fn require_kb(
     state: &AppState,
     user: &utopia_core::models::User,
@@ -288,6 +292,53 @@ pub async fn update_entity(
     let peers = utopia_store::graph::same_name_peers(&state.pool, kb_id, entity_id, None).await?;
     state.emit_review(kb_id);
     Ok(Json(json!({ "entity": after, "same_name": peers })))
+}
+
+#[derive(Deserialize)]
+pub struct ClearTypesRequest {
+    pub entity_ids: Vec<Uuid>,
+    /// 调用方以为这些实体此刻的类型。有一条对不上，整批不动
+    pub expect_type_id: Uuid,
+    /// 缺省就是试跑：清理是成批的，先看清单再动手应当是默认，而不是要记得去开
+    #[serde(default = "default_true")]
+    pub dry_run: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// 成批清空实体类型（#9 的清理）：一张明确的实体名单，最多 200 个，默认试跑。
+///
+/// 每个实体此刻都得是 `expect_type_id` 那个类，且不是人亲手定的；有一条不满足，
+/// 正式跑整批拒绝（409），试跑把每一条的现状和问题都列回来。
+pub async fn clear_entity_types(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(kb_id): Path<Uuid>,
+    Json(req): Json<ClearTypesRequest>,
+) -> ApiResult<Json<serde_json::Value>> {
+    require_kb(&state, &user, kb_id, Role::Editor).await?;
+    let rows = utopia_store::graph::clear_entity_types(
+        &state.pool,
+        kb_id,
+        user.id,
+        &req.entity_ids,
+        req.expect_type_id,
+        !req.dry_run,
+    )
+    .await?;
+    let blocked = rows.iter().filter(|r| r.problem.is_some()).count();
+    if !req.dry_run {
+        state.emit_review(kb_id);
+    }
+    Ok(Json(json!({
+        "dry_run": req.dry_run,
+        "cleared": if req.dry_run { 0 } else { rows.len() },
+        "would_clear": rows.len() - blocked,
+        "blocked": blocked,
+        "entities": rows,
+    })))
 }
 
 /// 一条事实的新有效区间。**整体替换，不是部分更新**：区间的两端互相定义，

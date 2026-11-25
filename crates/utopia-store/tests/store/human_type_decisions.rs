@@ -368,3 +368,98 @@ async fn a_person_can_say_an_entity_has_no_class() -> anyhow::Result<()> {
         .await?;
     run
 }
+
+/// 成批清空类型（#9 的清理）：试跑只报不写；有一条对不上就整批不动；
+/// 全对上才清，清成人判定的「没有类」，每个实体一条台账。
+#[tokio::test]
+async fn a_batch_clears_only_what_still_matches() -> anyhow::Result<()> {
+    let Some(url) = utopia_store::test_db::url() else {
+        return Ok(());
+    };
+    let pool = PgPool::connect(&url).await?;
+    let f = seed(&pool).await?;
+    let actor = Uuid::now_v7();
+
+    let run = async {
+        let a = entity(&pool, &f, "Alpha", Some(f.org_type), "extracted").await?;
+        let b = entity(&pool, &f, "Beta", Some(f.org_type), "aligned").await?;
+        let moved = entity(&pool, &f, "Gamma", Some(f.sub_type), "extracted").await?;
+        let held = entity(&pool, &f, "Delta", Some(f.org_type), "human").await?;
+        let ghost = Uuid::now_v7();
+        let clear = utopia_store::graph::clear_entity_types;
+
+        // 试跑：逐条报现状与问题，什么都不写
+        let rows = clear(
+            &pool,
+            f.kb,
+            actor,
+            &[a, b, moved, held, ghost, a],
+            f.org_type,
+            false,
+        )
+        .await?;
+        let problems: Vec<_> = rows.iter().map(|r| (r.id, r.problem)).collect();
+        assert_eq!(
+            problems,
+            vec![
+                (a, None),
+                (b, None),
+                (moved, Some("type_changed")),
+                (held, Some("human_typed")),
+                (ghost, Some("not_found")),
+            ],
+            "duplicates collapse; each row says why it can't be cleared"
+        );
+        assert_eq!(
+            source_of(&pool, a).await?,
+            "extracted",
+            "a dry run writes nothing"
+        );
+
+        // 正式跑：有一条对不上，整批不动
+        let refused = clear(&pool, f.kb, actor, &[a, b, moved], f.org_type, true).await;
+        assert!(refused.is_err(), "a stale list is refused whole");
+        assert_eq!(source_of(&pool, a).await?, "extracted");
+
+        // 全对上：清空，记成人的决定，每个一条台账
+        let rows = clear(&pool, f.kb, actor, &[a, b], f.org_type, true).await?;
+        assert!(rows.iter().all(|r| r.problem.is_none()));
+        for e in [a, b] {
+            let (type_id, source): (Option<Uuid>, String) =
+                sqlx::query_as("SELECT type_id, type_source FROM entities WHERE id = $1")
+                    .bind(e)
+                    .fetch_one(&pool)
+                    .await?;
+            assert_eq!((type_id, source.as_str()), (None, "human"));
+        }
+        let audits: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM audit_events
+             WHERE kb_id = $1 AND action = 'entity.retyped' AND detail->>'batch' = 'true'",
+        )
+        .bind(f.kb)
+        .fetch_one(&pool)
+        .await?;
+        assert_eq!(audits, 2, "one audit row per cleared entity");
+
+        // 清过的再清一次：类型已不是那个类，被拒
+        let again = clear(&pool, f.kb, actor, &[a], f.org_type, false).await?;
+        assert_eq!(again[0].problem, Some("type_changed"));
+
+        // 名单有界
+        let too_many: Vec<Uuid> = (0..201).map(|_| Uuid::now_v7()).collect();
+        assert!(clear(&pool, f.kb, actor, &too_many, f.org_type, false)
+            .await
+            .is_err());
+        assert!(clear(&pool, f.kb, actor, &[], f.org_type, false)
+            .await
+            .is_err());
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+
+    sqlx::query("DELETE FROM knowledge_bases WHERE id = $1")
+        .bind(f.kb)
+        .execute(&pool)
+        .await?;
+    run
+}
