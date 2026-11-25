@@ -552,11 +552,27 @@ async fn settle_defects(
     Ok(())
 }
 
+/// 同一个库的违规对账一次只跑一个（#18）。
+///
+/// `run` 和 `reconcile_ontology` 都是「检出 → 删掉这一轮没检出的 open 行」。
+/// READ COMMITTED 下两步各看各的提交：另一条对账在中间提交的新行检出时没看见、
+/// 清陈时却看见了，会被当成陈行无声删掉。所以检出前先拿这把事务级锁，
+/// 提交或回滚时自动放开。同一事务里重复拿是可重入的：改判据的事务在
+/// `detection_keys` 记基线时就拿住，一直持有到 `reconcile_ontology` 落库之后
+pub async fn lock_violations(conn: &mut PgConnection, kb_id: Uuid) -> AppResult<()> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('axiom_violations'), hashtext($1))")
+        .bind(kb_id.to_string())
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
 /// 跑一遍检查，把结果落库。
 pub async fn run(pool: &PgPool, kb_id: Uuid) -> AppResult<Report> {
     // 检测与落库进同一条事务：读侧看见的是这条事务启动后每条语句前的最新提交，
     // 与原先池上各取一条连接等价；写侧则没有「插新的」与「清陈旧的」之间的窗口
     let mut tx = pool.begin().await?;
+    lock_violations(&mut tx, kb_id).await?;
     let det = detect(&mut tx, kb_id).await?;
     let mut report = Report {
         edges: det.edges,
@@ -620,6 +636,8 @@ pub async fn detection_keys(
     conn: &mut PgConnection,
     kb_id: Uuid,
 ) -> AppResult<HashSet<ViolationKey>> {
+    // 基线也在锁里记：别的对账此刻正写的行，要么已经提交进基线，要么等这条事务提交后再写
+    lock_violations(&mut *conn, kb_id).await?;
     let det = detect(conn, kb_id).await?;
     Ok(det
         .violations
@@ -645,6 +663,7 @@ pub async fn reconcile_ontology(
     kb_id: Uuid,
     was_detected: &HashSet<ViolationKey>,
 ) -> AppResult<usize> {
+    lock_violations(tx, kb_id).await?;
     let det = detect(tx, kb_id).await?;
     let (fresh, _, _) = settle_violations(tx, kb_id, &det).await?;
     let stale: Vec<(Uuid, String, Uuid, Uuid, Vec<Uuid>)> = sqlx::query_as(

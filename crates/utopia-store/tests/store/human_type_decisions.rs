@@ -314,3 +314,57 @@ async fn an_engine_retype_does_not_lock_the_entity_out_of_the_next_round() -> an
         .await?;
     run
 }
+
+/// 人能把类型清空（#9）：显式「没有类」记成人的决定，只改名不动类型。
+#[tokio::test]
+async fn a_person_can_say_an_entity_has_no_class() -> anyhow::Result<()> {
+    let Some(url) = utopia_store::test_db::url() else {
+        return Ok(());
+    };
+    let pool = PgPool::connect(&url).await?;
+    let f = seed(&pool).await?;
+
+    let run = async {
+        let e = entity(&pool, &f, "Widget", Some(f.org_type), "extracted").await?;
+
+        // 只改名：类型与来源都不动
+        let (_, after) =
+            utopia_store::graph::update_entity(&pool, f.kb, e, None, Some("Widget Co")).await?;
+        assert_eq!(after.type_key.as_deref(), Some("organization"));
+        assert_eq!(source_of(&pool, e).await?, "extracted");
+
+        // 显式置空：没有类，来源成 human
+        let (before, after) =
+            utopia_store::graph::update_entity(&pool, f.kb, e, Some(None), None).await?;
+        assert_eq!(before.type_key.as_deref(), Some("organization"));
+        assert_eq!(after.type_key, None, "explicit null clears the class");
+        assert_eq!(after.name, "Widget Co", "clearing the class keeps the name");
+        assert_eq!(source_of(&pool, e).await?, "human");
+
+        // 人判的「没有类」不被类型消解捞回去
+        let picked =
+            utopia_store::resolution::entities_for_type_resolution(&pool, f.kb, 100, false)
+                .await?
+                .into_iter()
+                .map(|c| c.id)
+                .collect::<std::collections::HashSet<_>>();
+        assert!(
+            !picked.contains(&e),
+            "a person's 'no class' is not re-judged"
+        );
+
+        // 再定回一个类也照常
+        let (_, after) =
+            utopia_store::graph::update_entity(&pool, f.kb, e, Some(Some(f.sub_type)), None)
+                .await?;
+        assert_eq!(after.type_key.as_deref(), Some("startup"));
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+
+    sqlx::query("DELETE FROM knowledge_bases WHERE id = $1")
+        .bind(f.kb)
+        .execute(&pool)
+        .await?;
+    run
+}
