@@ -1473,6 +1473,9 @@ export const zh: Strings = {
     description: "描述",
     descriptionHint:
       "指导抽取器：什么属于这里，配上几个例子。它会被原样送进抽取提示词。",
+    curated: "只由人归类",
+    curatedHint:
+      "类别词自动对齐从不把实体归进这个类。只有人改实体的类、人判的类别词或导入才会。",
     attributes: "属性",
     attributesHint:
       "这个类的字面值字段（一个人的薪资、一份合同的金额）。和任何事实一样带证据与历史。",

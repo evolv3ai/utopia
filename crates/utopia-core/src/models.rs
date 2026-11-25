@@ -616,6 +616,8 @@ pub struct EntityType {
     pub iri: Option<String>,
     /// 语义指引：注入抽取 prompt（什么算这个类，举例）
     pub description: String,
+    /// 人管的类（#8）：类别词对齐不把它当候选，代理的绑定不给实体落这个类
+    pub curated: bool,
 }
 
 /// 本体编辑器：某个类下的实体实例行（详情区实例列表用）。
@@ -643,6 +645,8 @@ pub struct EntityTypeView {
     /// 不可满足的类——一个类继承了两个互斥的祖先，就永远不可能有实例（0002）
     pub disjoint: Vec<Uuid>,
     pub description: String,
+    /// 人管的类（#8），见 [`EntityType::curated`]
+    pub curated: bool,
     pub usage: i64,
 }
 

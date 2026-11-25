@@ -145,6 +145,9 @@ pub struct EntityTypeReq {
     /// 不该因为一次建类就把已有的声明清空
     #[serde(default)]
     pub disjoint: Option<Vec<Uuid>>,
+    /// 人管的类（#8）。**缺省 = 不动**，同 `disjoint`
+    #[serde(default)]
+    pub curated: Option<bool>,
     /// 语义指引，注入抽取 prompt
     #[serde(default)]
     pub description: Option<String>,
@@ -219,6 +222,9 @@ pub async fn create_entity_type(
     if let Some(d) = req.disjoint.as_deref() {
         utopia_store::ontology::set_disjoint_for(&state.pool, kb_id, id, d).await?;
     }
+    if let Some(curated) = req.curated {
+        utopia_store::ontology::set_entity_type_curated(&state.pool, kb_id, id, curated).await?;
+    }
     // 审计只记不阻断
     let _ = utopia_store::audit::record(
         &state.pool,
@@ -227,7 +233,7 @@ pub async fn create_entity_type(
         "entity_type.created",
         "entity_type",
         Some(id),
-        json!({ "key": key, "label": req.label.trim() }),
+        json!({ "key": key, "label": req.label.trim(), "curated": req.curated }),
     )
     .await;
     // 本体多了一个类：类别词的绑定里那些「没有」和「没定」的要重判（0044 对齐第一片）。
@@ -260,6 +266,9 @@ pub async fn update_entity_type(
     if let Some(d) = req.disjoint.as_deref() {
         utopia_store::ontology::set_disjoint_for(&state.pool, kb_id, id, d).await?;
     }
+    if let Some(curated) = req.curated {
+        utopia_store::ontology::set_entity_type_curated(&state.pool, kb_id, id, curated).await?;
+    }
     let _ = utopia_store::audit::record(
         &state.pool,
         Some(kb_id),
@@ -268,7 +277,7 @@ pub async fn update_entity_type(
         "entity_type",
         Some(id),
         json!({ "label": req.label.trim(), "color": req.color, "shape": req.shape,
-                "description": req.description }),
+                "description": req.description, "curated": req.curated }),
     )
     .await;
     // 类的定义改了：绑到它的类别词过期，重判。标签或描述改了向量也陈了，先重嵌

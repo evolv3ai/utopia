@@ -1403,6 +1403,8 @@ export interface EntityTypeView {
   /** 左栏画树时挂在哪一支下。不参与语义，只管展示 */
   primary_parent: string | null;
   description: string;
+  /** 人管的类（#8）：类别词对齐不把词绑到它，只有人改类、人判、导入才落进来 */
+  curated: boolean;
   usage: number;
 }
 

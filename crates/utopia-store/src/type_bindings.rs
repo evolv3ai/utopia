@@ -597,6 +597,12 @@ pub async fn unapply<'e>(
     Ok(res.rows_affected())
 }
 
+/// 代理绑到人管的类（#8）的类别词不给实体落类。别名 `b` 是绑定行。人判的照常：
+/// 那是人说的。代理不会再绑到它（候选里没有它），这条挡的是标成人管之前绑下、
+/// 还没重判的那些
+const AGENT_SKIPS_CURATED: &str = "NOT (b.decided_by = 'agent' AND EXISTS (
+        SELECT 1 FROM entity_types ct WHERE ct.id = b.type_id AND ct.curated))";
+
 /// 把库里每条绑上的类补到它的类别词下还不在那个类上的实体上。返回改动数。
 ///
 /// [`apply`] 只在判定落下那一刻投影一次，之后建的实体它看不见。抽取开抽时读一次
@@ -617,10 +623,12 @@ pub async fn apply_bound<'e>(
            FROM type_bindings b
           WHERE e.kb_id = $1 AND b.kb_id = e.kb_id
             AND b.status = 'bound' AND b.type_id IS NOT NULL
+            AND {not_curated}
             AND e.merged_into IS NULL AND e.type_source <> 'human'
             AND e.specific_type IS NOT NULL AND {kind} = b.kind_word
             AND e.type_id IS DISTINCT FROM b.type_id",
-        kind = kind_word_sql("e.specific_type")
+        kind = kind_word_sql("e.specific_type"),
+        not_curated = AGENT_SKIPS_CURATED,
     );
     let res = sqlx::query(&sql).bind(kb_id).execute(pool).await?;
     Ok(res.rows_affected())
@@ -628,13 +636,12 @@ pub async fn apply_bound<'e>(
 
 /// 抽取时用的绑定表：归一过的类别词 → 类 id，只有绑上的。
 pub async fn bound_map(pool: &PgPool, kb_id: Uuid) -> AppResult<HashMap<String, Uuid>> {
-    let rows: Vec<(String, Uuid)> = sqlx::query_as(
-        "SELECT kind_word, type_id FROM type_bindings
-         WHERE kb_id = $1 AND status = 'bound' AND type_id IS NOT NULL",
-    )
-    .bind(kb_id)
-    .fetch_all(pool)
-    .await?;
+    let sql = format!(
+        "SELECT b.kind_word, b.type_id FROM type_bindings b
+         WHERE b.kb_id = $1 AND b.status = 'bound' AND b.type_id IS NOT NULL
+           AND {AGENT_SKIPS_CURATED}"
+    );
+    let rows: Vec<(String, Uuid)> = sqlx::query_as(&sql).bind(kb_id).fetch_all(pool).await?;
     Ok(rows.into_iter().collect())
 }
 
