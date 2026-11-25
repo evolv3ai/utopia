@@ -1066,3 +1066,112 @@ async fn an_empty_balance_fails_the_run_instead_of_queueing_another() -> anyhow:
     f.cleanup().await?;
     run
 }
+
+/// 人管的类（#8）：不进候选；代理以前绑到它的不再给实体落类，重判时只在别的类里挑；
+/// 人判到它的照常落类。（模型答了候选外的键，解析那一层已经按坏项丢掉）
+#[tokio::test]
+async fn a_curated_class_is_never_bound_by_the_agent() -> anyhow::Result<()> {
+    let key = "curated_marker_class";
+    let Some(f) = Fx::new(vec![vote(Some("organization")), vote(Some("organization"))]).await?
+    else {
+        return Ok(());
+    };
+    let curated = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO entity_types(id,kb_id,key,label,description)
+         VALUES($1,$2,$3,'Curated marker','people only')",
+    )
+    .bind(curated)
+    .bind(f.kb)
+    .bind(key)
+    .execute(&f.pool)
+    .await?;
+    // 标成人管之前，代理已经把 company 绑到它、落到了实体上
+    type_bindings::decide(
+        &f.pool,
+        f.kb,
+        "company",
+        &[],
+        Some(curated),
+        "bound",
+        &json!({}),
+        "agent",
+    )
+    .await?;
+    type_bindings::apply(&f.pool, f.kb, "company", curated).await?;
+    // 人判到它的词照常落类
+    let firm = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO entities(id,kb_id,canonical_name,specific_type) VALUES($1,$2,'Firmly','firm')",
+    )
+    .bind(firm)
+    .bind(f.kb)
+    .execute(&f.pool)
+    .await?;
+    type_bindings::decide(
+        &f.pool,
+        f.kb,
+        "firm",
+        &[],
+        Some(curated),
+        "bound",
+        &json!({}),
+        "person",
+    )
+    .await?;
+    utopia_store::ontology::set_entity_type_curated(&f.pool, f.kb, curated, true).await?;
+
+    let bound = type_bindings::bound_map(&f.pool, f.kb).await?;
+    let caught_up = type_bindings::apply_bound(&f.pool, f.kb).await?;
+    f.run().await?;
+    let binding = type_bindings::bindings(&f.pool, f.kb)
+        .await?
+        .into_iter()
+        .find(|b| b.kind_word == "company")
+        .context("company binding")?;
+    let projected: Option<Uuid> = sqlx::query_scalar("SELECT type_id FROM entities WHERE id=$1")
+        .bind(f.entity)
+        .fetch_one(&f.pool)
+        .await?;
+    let firm_type: Option<Uuid> = sqlx::query_scalar("SELECT type_id FROM entities WHERE id=$1")
+        .bind(firm)
+        .fetch_one(&f.pool)
+        .await?;
+    let requests = f.requests();
+    let open = f.class;
+    f.cleanup().await?;
+
+    assert!(
+        !bound.contains_key("company"),
+        "extraction must not take a class from an agent binding to a curated class"
+    );
+    assert_eq!(
+        bound.get("firm"),
+        Some(&curated),
+        "a person's binding still counts"
+    );
+    assert_eq!(caught_up, 1, "only the person-bound entity is caught up");
+    assert_eq!(firm_type, Some(curated));
+    assert!(
+        !requests.is_empty(),
+        "the stale agent binding is asked about again"
+    );
+    for r in &requests {
+        assert!(
+            !r.to_string().contains(key),
+            "a curated class is never offered as a candidate"
+        );
+    }
+    assert_eq!(binding.decided_by, "agent");
+    assert_eq!(
+        binding.type_id,
+        Some(open),
+        "re-judged against the open classes only"
+    );
+    assert_eq!(
+        projected,
+        Some(open),
+        "the agent's old class comes off the entity"
+    );
+    Ok(())
+}

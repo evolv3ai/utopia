@@ -103,6 +103,7 @@ export function ClassDialog({
     existing?.parents ?? (parentId ? [parentId] : []),
   );
   const [description, setDescription] = useState(existing?.description ?? "");
+  const [curated, setCurated] = useState(existing?.curated ?? false);
   // 互斥：声明「不可能同时是」。一致性检查据此报不可满足的类（0002）——
   // 一个类继承了两个互斥的祖先，就永远不可能有实例，而它不报错，只是永远空着
   const [disjoint, setDisjoint] = useState<string[]>(existing?.disjoint ?? []);
@@ -121,6 +122,7 @@ export function ClassDialog({
             parents,
             disjoint,
             description,
+            curated,
           })
         : api.createEntityType(kbId, {
             key,
@@ -130,6 +132,7 @@ export function ClassDialog({
             parents,
             disjoint,
             description,
+            curated,
           }),
     onSuccess: (res) => {
       toast.success(existing ? S.toast.saved : S.toast.created);
@@ -281,6 +284,15 @@ export function ClassDialog({
           onChange={(e) => setDescription(e.target.value)}
         />
       </Field>
+      {/* 人管的类（#8）：描述挡不住泛词，这一项是规则 */}
+      <div className="mt-4">
+        <Checkbox
+          checked={curated}
+          onChange={(v) => setCurated(v)}
+          label={S.ontology.curated}
+          hint={S.ontology.curatedHint}
+        />
+      </div>
     </FormDialog>
   );
 }

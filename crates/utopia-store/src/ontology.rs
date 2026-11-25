@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 pub async fn entity_type_views(pool: &PgPool, kb_id: Uuid) -> AppResult<Vec<EntityTypeView>> {
     Ok(sqlx::query_as(
-        "SELECT t.id, t.key, t.label, t.color, t.shape, t.builtin, t.description,
+        "SELECT t.id, t.key, t.label, t.color, t.shape, t.builtin, t.description, t.curated,
                 ARRAY(SELECT p.parent_id FROM entity_type_parents p
                       WHERE p.child_id = t.id) AS parents,
                 (SELECT p.parent_id FROM entity_type_parents p
@@ -389,6 +389,38 @@ pub async fn update_entity_type(
         crate::reasoning::reconcile_ontology(&mut tx, kb_id, &was).await?;
     }
     tx.commit().await?;
+    Ok(())
+}
+
+/// 标一个类是不是人管的（#8）。动 `updated_at`：候选变了，绑到它的类别词的指纹
+/// 对不上，代理以前判的下一轮重判；正在判的那一轮收尾时也对不上，不落
+pub async fn set_entity_type_curated(
+    pool: &PgPool,
+    kb_id: Uuid,
+    id: Uuid,
+    curated: bool,
+) -> AppResult<()> {
+    let res = sqlx::query(
+        "UPDATE entity_types SET curated = $3, updated_at = now()
+         WHERE id = $2 AND kb_id = $1 AND curated IS DISTINCT FROM $3",
+    )
+    .bind(kb_id)
+    .bind(id)
+    .bind(curated)
+    .execute(pool)
+    .await?;
+    if res.rows_affected() == 0 {
+        let (exists,): (bool,) = sqlx::query_as(
+            "SELECT EXISTS (SELECT 1 FROM entity_types WHERE id = $2 AND kb_id = $1)",
+        )
+        .bind(kb_id)
+        .bind(id)
+        .fetch_one(pool)
+        .await?;
+        if !exists {
+            return Err(AppError::NotFound);
+        }
+    }
     Ok(())
 }
 

@@ -1662,6 +1662,9 @@ export const en = {
     description: "Description",
     descriptionHint:
       "Guides the extractor: what belongs here, with a couple of examples. Fed straight into the extraction prompt.",
+    curated: "People only",
+    curatedHint:
+      "Automatic kind-word alignment never puts entities in this class. Only a person's retype, a person's kind-word decision, or an import does.",
     attributes: "Attributes",
     attributesHint:
       "Literal-valued fields of this class (a person's salary, a contract's amount). Extracted with evidence and history, like any fact.",

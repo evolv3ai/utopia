@@ -71,16 +71,27 @@ async fn candidates_for(
             Vec::new()
         }
     };
+    // 人管的类（#8）不进候选：代理不会把词绑到它，指纹也就不含它
+    let open: Vec<Uuid> = classes
+        .iter()
+        .filter(|c| !c.curated)
+        .map(|c| c.id)
+        .collect();
     let mut out = Vec::with_capacity(sigs.len());
     for (i, _) in sigs.iter().enumerate() {
         let found: Vec<Uuid> = nearest
             .get(i)
-            .map(|v| v.iter().map(|c| c.id).collect())
+            .map(|v| {
+                v.iter()
+                    .map(|c| c.id)
+                    .filter(|id| open.contains(id))
+                    .collect()
+            })
             .unwrap_or_default();
         if !found.is_empty() {
             out.push(found);
-        } else if classes.len() <= WHOLE_LIST_LIMIT {
-            out.push(classes.iter().map(|c| c.id).collect());
+        } else if open.len() <= WHOLE_LIST_LIMIT {
+            out.push(open.clone());
         } else {
             out.push(Vec::new());
         }
@@ -195,7 +206,12 @@ async fn align_types_locked(
         (classes, snapshot, sigs, existing)
     };
     let by_id: HashMap<Uuid, &EntityType> = classes.iter().map(|c| (c.id, c)).collect();
-    let by_key: HashMap<&str, &EntityType> = classes.iter().map(|c| (c.key.as_str(), c)).collect();
+    // 人管的类（#8）不收：模型答了候选外的人管类的键，按「没有」算，不绑上去
+    let by_key: HashMap<&str, &EntityType> = classes
+        .iter()
+        .filter(|c| !c.curated)
+        .map(|c| (c.key.as_str(), c))
+        .collect();
     // 每个活着的类别词此刻给模型看的候选与指纹。检索一轮只做一次：开跑时拿它决定判谁，
     // 收尾时拿同一份候选、按重新读的类再算指纹，看跑着的时候有没有东西过期
     let all: Vec<&KindWordSignature> = sigs.iter().collect();
