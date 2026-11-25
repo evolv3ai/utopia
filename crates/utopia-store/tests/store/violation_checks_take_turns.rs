@@ -44,7 +44,12 @@ async fn violation_checks_on_one_base_take_turns() -> anyhow::Result<()> {
     };
     let control = PgPool::connect(&url).await?;
     let pool = PgPool::connect(&url).await?;
-    let (org, ws, kb, other) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    let (org, ws, kb, other) = (
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+    );
     sqlx::query("INSERT INTO organizations (id, name) VALUES ($1, 'violation-lock')")
         .bind(org)
         .execute(&control)

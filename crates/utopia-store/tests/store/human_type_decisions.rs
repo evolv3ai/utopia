@@ -348,7 +348,10 @@ async fn a_person_can_say_an_entity_has_no_class() -> anyhow::Result<()> {
                 .into_iter()
                 .map(|c| c.id)
                 .collect::<std::collections::HashSet<_>>();
-        assert!(!picked.contains(&e), "a person's 'no class' is not re-judged");
+        assert!(
+            !picked.contains(&e),
+            "a person's 'no class' is not re-judged"
+        );
 
         // 再定回一个类也照常
         let (_, after) =

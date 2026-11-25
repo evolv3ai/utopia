@@ -663,7 +663,7 @@ pub async fn reconcile_ontology(
     kb_id: Uuid,
     was_detected: &HashSet<ViolationKey>,
 ) -> AppResult<usize> {
-    lock_violations(&mut **tx, kb_id).await?;
+    lock_violations(tx, kb_id).await?;
     let det = detect(tx, kb_id).await?;
     let (fresh, _, _) = settle_violations(tx, kb_id, &det).await?;
     let stale: Vec<(Uuid, String, Uuid, Uuid, Vec<Uuid>)> = sqlx::query_as(
