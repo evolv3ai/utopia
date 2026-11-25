@@ -214,10 +214,19 @@ pub async fn entity_detail(
 
 #[derive(Deserialize)]
 pub struct EntityPatch {
-    #[serde(default)]
-    pub type_id: Option<Uuid>,
+    /// 三态（#9）：缺字段 = 不动类型；`null` = 人判定「没有合适的类」；uuid = 改成那个类
+    #[serde(default, deserialize_with = "present")]
+    pub type_id: Option<Option<Uuid>>,
     #[serde(default)]
     pub canonical_name: Option<String>,
+}
+
+/// 字段在场就是 `Some`，哪怕值是 `null`；缺字段走 `default` 得 `None`
+fn present<'de, D>(d: D) -> Result<Option<Option<Uuid>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<Uuid>::deserialize(d).map(Some)
 }
 
 /// 人工修正实体的类型或名字。抽取给的是初判，此前判错只能整库重抽。

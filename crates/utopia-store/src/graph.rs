@@ -1942,7 +1942,8 @@ pub async fn update_entity(
     pool: &PgPool,
     kb_id: Uuid,
     entity_id: Uuid,
-    type_id: Option<Uuid>,
+    // None = 本次不动类型；Some(None) = 人判定没有类；Some(Some(t)) = 改成 t
+    type_id: Option<Option<Uuid>>,
     canonical_name: Option<&str>,
 ) -> AppResult<(GraphNode, GraphNode)> {
     let before: GraphNode = sqlx::query_as(&format!(
@@ -1976,7 +1977,7 @@ pub async fn update_entity(
         None => None,
     };
 
-    if let Some(t) = type_id {
+    if let Some(Some(t)) = type_id {
         let exists: Option<(Uuid,)> =
             sqlx::query_as("SELECT id FROM entity_types WHERE id = $1 AND kb_id = $2")
                 .bind(t)
@@ -1993,23 +1994,21 @@ pub async fn update_entity(
 
     sqlx::query(
         // 改了类型才标 human——这个端点也用来改名字，只改名不该顺手把类型
-        // 的来源盖成人工。`$3 IS NULL` 在这个接口里表示「本次没提供类型」，
-        // 不是「把类型清空」：路由层要求两个字段至少给一个，给不出三态。
-        //
-        // 于是有一件今天做不到的事：0009 之后「没有类型」可能是人的决定
-        //（看过了，本体里没有合适的类），而这个接口表达不了它。要补得让
-        // 请求体区分「未提供」与「显式置空」，那是另一件事
+        // 的来源盖成人工。`$5` 是「本次给了类型」：给了 null 就是人判定
+        // 没有合适的类（#9），记成 `type_id NULL, type_source 'human'`——
+        // 认领、对齐、抽取补类都跳过 human 行，不会再把它填回去
         "UPDATE entities
-         SET type_id = COALESCE($3, type_id),
+         SET type_id = CASE WHEN $5 THEN $3 ELSE type_id END,
              canonical_name = COALESCE($4, canonical_name),
-             type_source = CASE WHEN $3::uuid IS NULL THEN type_source ELSE 'human' END,
+             type_source = CASE WHEN $5 THEN 'human' ELSE type_source END,
              updated_at = now()
          WHERE id = $1 AND kb_id = $2 AND merged_into IS NULL",
     )
     .bind(entity_id)
     .bind(kb_id)
-    .bind(type_id)
+    .bind(type_id.flatten())
     .bind(new_name)
+    .bind(type_id.is_some())
     .execute(pool)
     .await?;
 
