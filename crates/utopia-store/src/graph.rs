@@ -2038,6 +2038,165 @@ pub async fn update_entity(
     Ok((before, after))
 }
 
+/// 一批最多清多少个实体的类型（#9）。清理是人拿着一张名单做的，名单该短到逐条看得过来
+pub const TYPE_CLEAR_LIMIT: usize = 200;
+
+/// 批量清空类型里的一行：实体此刻的样子，以及它为什么不能清（能清时为 `None`）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TypeClearRow {
+    pub id: Uuid,
+    pub name: Option<String>,
+    pub type_key: Option<String>,
+    pub type_label: Option<String>,
+    pub type_source: Option<String>,
+    /// `not_found`（不在这个库、或已被合并）、`type_changed`（当前类型不是调用方以为的那个）、
+    /// `human_typed`（人亲手定过这个类，批量不替人改主意——要清就单条 PATCH）
+    pub problem: Option<&'static str>,
+}
+
+/// 把一批实体的类型清空成人判定的「没有类」（#9 的清理入口）。
+///
+/// 前提逐条核对：每个实体此刻的类型都得是 `expect_type_id`，且来源不是 `human`。
+/// 有任何一条不满足，整批不动——清理名单是按某一时刻的快照列的，其间有人改过的那条
+/// 不该被这张旧名单盖掉。`apply = false` 是试跑：同样锁行、同样核对，只回报不写。
+/// 写入时每个实体一条 `entity.retyped` 台账，与改动在同一个事务里。
+pub async fn clear_entity_types(
+    pool: &PgPool,
+    kb_id: Uuid,
+    actor_id: Uuid,
+    entity_ids: &[Uuid],
+    expect_type_id: Uuid,
+    apply: bool,
+) -> AppResult<Vec<TypeClearRow>> {
+    let mut seen = HashSet::new();
+    let ids: Vec<Uuid> = entity_ids
+        .iter()
+        .copied()
+        .filter(|id| seen.insert(*id))
+        .collect();
+    if ids.is_empty() {
+        return Err(AppError::invalid(
+            "entity_ids_required",
+            "List at least one entity",
+        ));
+    }
+    if ids.len() > TYPE_CLEAR_LIMIT {
+        return Err(AppError::invalid(
+            "too_many_entities",
+            format!("At most {TYPE_CLEAR_LIMIT} entities per batch"),
+        ));
+    }
+
+    let mut tx = pool.begin().await?;
+    #[derive(sqlx::FromRow)]
+    struct Current {
+        id: Uuid,
+        name: String,
+        type_id: Option<Uuid>,
+        type_key: Option<String>,
+        type_label: Option<String>,
+        type_source: Option<String>,
+    }
+    let current: Vec<Current> = sqlx::query_as(
+        "SELECT e.id, e.canonical_name AS name, e.type_id, t.key AS type_key,
+                t.label AS type_label, e.type_source
+         FROM entities e LEFT JOIN entity_types t ON t.id = e.type_id
+         WHERE e.kb_id = $1 AND e.id = ANY($2) AND e.merged_into IS NULL
+         ORDER BY e.id
+         FOR UPDATE OF e",
+    )
+    .bind(kb_id)
+    .bind(&ids)
+    .fetch_all(&mut *tx)
+    .await?;
+    let mut by_id: HashMap<Uuid, Current> = current.into_iter().map(|c| (c.id, c)).collect();
+
+    let rows: Vec<TypeClearRow> = ids
+        .iter()
+        .map(|id| match by_id.remove(id) {
+            None => TypeClearRow {
+                id: *id,
+                name: None,
+                type_key: None,
+                type_label: None,
+                type_source: None,
+                problem: Some("not_found"),
+            },
+            Some(c) => {
+                let problem = if c.type_id != Some(expect_type_id) {
+                    Some("type_changed")
+                } else if c.type_source.as_deref() == Some("human") {
+                    Some("human_typed")
+                } else {
+                    None
+                };
+                TypeClearRow {
+                    id: c.id,
+                    name: Some(c.name),
+                    type_key: c.type_key,
+                    type_label: c.type_label,
+                    type_source: c.type_source,
+                    problem,
+                }
+            }
+        })
+        .collect();
+
+    let blocked = rows.iter().filter(|r| r.problem.is_some()).count();
+    if !apply {
+        tx.rollback().await?;
+        return Ok(rows);
+    }
+    if blocked > 0 {
+        tx.rollback().await?;
+        return Err(AppError::CodedConflict {
+            code: "type_clear_preconditions_failed",
+            message: format!(
+                "{blocked} of {} entities no longer match; nothing was changed. Run a dry run to see which",
+                rows.len()
+            ),
+        });
+    }
+
+    sqlx::query(
+        "UPDATE entities SET type_id = NULL, type_source = 'human', updated_at = now()
+         WHERE kb_id = $1 AND id = ANY($2)",
+    )
+    .bind(kb_id)
+    .bind(&ids)
+    .execute(&mut *tx)
+    .await?;
+    for r in &rows {
+        crate::audit::record_on(
+            &mut tx,
+            Some(kb_id),
+            Some(actor_id),
+            "entity.retyped",
+            "entity",
+            Some(r.id),
+            serde_json::json!({
+                "name": r.name,
+                "from": { "key": r.type_key, "label": r.type_label, "source": r.type_source },
+                "to": { "key": null, "label": null },
+                "batch": true,
+            }),
+        )
+        .await?;
+    }
+    tx.commit().await?;
+
+    // 消歧后缀的兜底值是类型标签，类型没了就得重算；按名字分组，每组刷一次
+    let mut names = HashSet::new();
+    for r in &rows {
+        if let Some(n) = &r.name {
+            if names.insert(n.to_lowercase()) {
+                crate::resolution::refresh_disambiguators(pool, kb_id, n).await?;
+            }
+        }
+    }
+    Ok(rows)
+}
+
 /// 与给定实体同名（不区分大小写）的其他存活实体——用于改名后提示"是否合并"。
 /// 只报告，不阻断：判定它们是否真是同一个，是人的事。
 /// 同名的那一栏要跟着面板上的滑杆走（0019 / #307）。
